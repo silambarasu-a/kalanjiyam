@@ -143,6 +143,7 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         }
         if (s?.unlock && process.env.AUTH_SECRET && s.unlock === process.env.AUTH_SECRET) {
           token.reverifyRequiredAt = null;
+          token.sessionStartedAt = Date.now();
         }
       }
 

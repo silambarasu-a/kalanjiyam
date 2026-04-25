@@ -118,7 +118,7 @@ export function SessionLockDialog() {
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={submitting}
                   aria-invalid={!!error}
-                  className="h-11 rounded-lg pr-10 text-sm [&::-webkit-credentials-auto-fill-button]:mr-4"
+                  className="h-11 rounded-lg pr-10 text-sm [&::-webkit-credentials-auto-fill-button]:mr-5"
                 />
                 <button
                   type="button"
