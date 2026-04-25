@@ -14,7 +14,7 @@ export function StubPage({
         <p className="mt-1 text-sm text-muted-foreground">{description}</p>
       </div>
       <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center">
-        <div className="text-xs font-semibold uppercase tracking-widest text-[var(--brand-orange)]">
+        <div className="text-xs font-semibold uppercase tracking-widest text-primary">
           {milestone}
         </div>
         <p className="mt-2 text-sm text-muted-foreground">

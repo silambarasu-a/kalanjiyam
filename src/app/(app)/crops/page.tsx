@@ -49,7 +49,7 @@ export default function CropsPage() {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.crops ?? []).map((c) => (
           <div key={c.id} className="rounded-lg border bg-card p-5 flex items-start gap-3">
-            <Sprout className="h-5 w-5 mt-0.5 text-[var(--brand-orange)] shrink-0" />
+            <Sprout className="h-5 w-5 mt-0.5 text-primary shrink-0" />
             <Link href={`/crops/${c.id}`} className="min-w-0 flex-1">
               <h3 className="font-semibold truncate">{c.name}</h3>
               <div className="mt-0.5 text-xs text-muted-foreground truncate">

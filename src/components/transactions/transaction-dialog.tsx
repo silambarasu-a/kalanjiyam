@@ -41,6 +41,12 @@ type CropBatch = {
   status: string;
   crop: { id: string; name: string };
 };
+type LivestockBatch = {
+  id: string;
+  name: string;
+  currentCount: number;
+  livestock: { id: string; name: string };
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
@@ -74,7 +80,7 @@ export function TransactionDialog() {
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(o) => !o && closeDialog()}>
-        <SheetContent side="bottom" className="max-h-[92vh] overflow-y-auto p-0">
+        <SheetContent side="bottom" className="max-h-[92vh] overflow-y-auto p-0 rounded-t-2xl shadow-[var(--shadow-popover)]">
           <SheetHeader className="px-5 pt-4 pb-2">
             <SheetTitle>New transaction</SheetTitle>
           </SheetHeader>
@@ -86,7 +92,7 @@ export function TransactionDialog() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && closeDialog()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg rounded-2xl shadow-[var(--shadow-popover)] sm:p-6">
         <DialogHeader>
           <DialogTitle>New transaction</DialogTitle>
         </DialogHeader>
@@ -111,8 +117,12 @@ function DialogBody({
     fetcher
   );
   const { data: familyData } = useSWR<{ members: FamilyMember[] }>("/api/family", fetcher);
-  const { data: batchesData } = useSWR<{ batches: CropBatch[] }>(
+  const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
     "/api/crop-batches?active=true",
+    fetcher
+  );
+  const { data: livestockBatchesData } = useSWR<{ batches: LivestockBatch[] }>(
+    "/api/livestock-batches?active=true",
     fetcher
   );
 
@@ -120,7 +130,8 @@ function DialogBody({
   const cards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT" && c.accountId);
   const categories = categoriesData?.categories ?? [];
   const family = familyData?.members ?? [];
-  const cropBatches = batchesData?.batches ?? [];
+  const cropBatches = cropBatchesData?.batches ?? [];
+  const livestockBatches = livestockBatchesData?.batches ?? [];
 
   return (
     <div>
@@ -158,6 +169,7 @@ function DialogBody({
           categories={categories}
           family={family}
           cropBatches={cropBatches}
+          livestockBatches={livestockBatches}
           onClose={onClose}
         />
       )}
@@ -172,6 +184,7 @@ function IncomeExpenseForm({
   categories,
   family,
   cropBatches,
+  livestockBatches,
   onClose,
 }: {
   type: "INCOME" | "EXPENSE";
@@ -180,6 +193,7 @@ function IncomeExpenseForm({
   categories: Category[];
   family: FamilyMember[];
   cropBatches: CropBatch[];
+  livestockBatches: LivestockBatch[];
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -190,7 +204,7 @@ function IncomeExpenseForm({
   const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" or "card:<id>"
   const [beneficiaryMemberId, setBeneficiaryMemberId] = useState("");
   const [chargeFlag, setChargeFlag] = useState<ChargeFlag>("NONE");
-  const [cropBatchId, setCropBatchId] = useState("");
+  const [tagSource, setTagSource] = useState<string>(""); // "" | "crop:<id>" | "livestock:<id>"
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -243,7 +257,8 @@ function IncomeExpenseForm({
         payload.beneficiaryMemberId = beneficiaryMemberId;
         payload.memberChargeType = chargeFlag;
       }
-      if (cropBatchId) payload.cropBatchId = cropBatchId;
+      if (tagSource.startsWith("crop:")) payload.cropBatchId = tagSource.slice(5);
+      if (tagSource.startsWith("livestock:")) payload.livestockBatchId = tagSource.slice(10);
       const res = await fetch("/api/transactions", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -326,26 +341,39 @@ function IncomeExpenseForm({
         />
       </label>
 
-      {cropBatches.length > 0 && (
-        <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer select-none px-4 py-2 text-sm">
-            Tag to a crop batch?
-          </summary>
-          <div className="px-4 pb-4 pt-2">
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
-              value={cropBatchId}
-              onChange={(e) => setCropBatchId(e.target.value)}
-            >
-              <option value="">— none —</option>
-              {cropBatches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.crop.name} · {b.name} ({b.status})
-                </option>
-              ))}
-            </select>
-          </div>
-        </details>
+      {(cropBatches.length > 0 || livestockBatches.length > 0) && (
+        <label className="block">
+          <span className="text-xs font-medium">Tag to farm batch (optional)</span>
+          <select
+            className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+            value={tagSource}
+            onChange={(e) => setTagSource(e.target.value)}
+          >
+            <option value="">— none —</option>
+            {cropBatches.length > 0 && (
+              <optgroup label="Crops">
+                {cropBatches.map((b) => (
+                  <option key={b.id} value={`crop:${b.id}`}>
+                    {b.crop.name} · {b.name} ({b.status})
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {livestockBatches.length > 0 && (
+              <optgroup label="Livestock">
+                {livestockBatches.map((b) => (
+                  <option key={b.id} value={`livestock:${b.id}`}>
+                    {b.livestock.name} · {b.name} ({b.currentCount} head)
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Tags this transaction to a crop or livestock batch for per-batch P&amp;L. Leases land
+            in M11.
+          </p>
+        </label>
       )}
 
       {type === "EXPENSE" && (

@@ -41,7 +41,7 @@ export function BottomNav() {
                   href={item.href}
                   className={cn(
                     "h-full flex flex-col items-center justify-center gap-0.5 text-[10px]",
-                    active ? "text-[var(--brand-maroon)]" : "text-neutral-500"
+                    active ? "text-primary" : "text-muted-foreground"
                   )}
                 >
                   <NavIcon name={item.icon} className="h-5 w-5" />
@@ -55,7 +55,7 @@ export function BottomNav() {
               type="button"
               onClick={() => openDialog("EXPENSE")}
               aria-label="New transaction"
-              className="h-11 w-11 rounded-full bg-[var(--brand-orange)] text-white shadow-lg shadow-black/20 flex items-center justify-center -mt-5"
+              className="h-11 w-11 rounded-full bg-primary text-primary-foreground shadow-lg shadow-black/20 flex items-center justify-center -mt-5 hover:bg-[var(--brand-primary-soft)] transition-colors"
             >
               <Plus className="h-5 w-5" />
             </button>
@@ -69,7 +69,7 @@ export function BottomNav() {
                   href={item.href}
                   className={cn(
                     "h-full flex flex-col items-center justify-center gap-0.5 text-[10px]",
-                    active ? "text-[var(--brand-maroon)]" : "text-neutral-500"
+                    active ? "text-primary" : "text-muted-foreground"
                   )}
                 >
                   <NavIcon name={item.icon} className="h-5 w-5" />
@@ -80,7 +80,7 @@ export function BottomNav() {
           })}
           <li>
             <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
-              <SheetTrigger className="h-full w-full flex flex-col items-center justify-center gap-0.5 text-[10px] text-neutral-500">
+              <SheetTrigger className="h-full w-full flex flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground">
                 <Menu className="h-5 w-5" />
                 <span>More</span>
               </SheetTrigger>
@@ -115,8 +115,8 @@ export function BottomNav() {
                                   className={cn(
                                     "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm",
                                     active
-                                      ? "bg-accent text-[var(--brand-maroon)]"
-                                      : "text-foreground hover:bg-accent/60"
+                                      ? "bg-accent text-primary font-medium"
+                                      : "text-foreground hover:bg-accent"
                                   )}
                                 >
                                   <NavIcon name={item.icon} className="h-4 w-4" />

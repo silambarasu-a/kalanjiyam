@@ -66,7 +66,7 @@ function VerifyEmailContent() {
       )}
       <Link
         href="/login"
-        className="inline-block rounded-md bg-neutral-900 text-white px-4 py-2 text-sm font-medium"
+        className="inline-block rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium"
       >
         Go to login
       </Link>
