@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -16,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate } from "@/lib/utils";
+import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
 
 type Reminder = {
   id: string;
@@ -32,7 +33,13 @@ type Reminder = {
   status: "UPCOMING" | "CONFIRMED" | "SKIPPED" | "MISSED";
   investment: { id: string; name: string; kind: string; premiumAmount: number | null } | null;
 };
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -229,18 +236,18 @@ function ConfirmDialog({
               <span className="text-xs font-medium">
                 {reminder.kind === "FD_INTEREST" ? "Credit into" : "Pay from"}
               </span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-1">
+                <NativeSelect
+                  value={accountId}
+                  onChange={setAccountId}
+                  options={accounts.map((a) =>
+                    buildAccountOption(
+                      a,
+                      reminder.kind === "FD_INTEREST" ? 0 : Number(amount) || 0,
+                    ),
+                  )}
+                />
+              </div>
             </label>
             <label className="block">
               <span className="text-xs font-medium">Notes</span>

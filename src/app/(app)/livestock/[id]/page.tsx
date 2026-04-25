@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatDate } from "@/lib/utils";
+import { formatDate, buildAccountOption } from "@/lib/utils";
 
 type Batch = {
   id: string;
@@ -33,7 +34,13 @@ type Batch = {
   land: { id: string; name: string } | null;
 };
 
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -475,23 +482,32 @@ function BatchActionDialog({
             </>
           )}
 
-          {isFinancial && (
-            <label className="block">
-              <span className="text-xs font-medium">Pay from / receive into</span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          {isFinancial && (() => {
+            // Outflow events (debit) need a balance check; inflow (SALE) doesn't.
+            const isOutflow =
+              (tab === "event" && eventType === "PURCHASE") ||
+              tab === "feed" ||
+              tab === "vaccination";
+            const debitAmount = !isOutflow
+              ? 0
+              : tab === "feed"
+                ? Number(feedAmount) || 0
+                : tab === "vaccination"
+                  ? Number(vaccinationCost) || 0
+                  : (Number(count) || 0) * (Number(unitValue) || 0);
+            return (
+              <label className="block">
+                <span className="text-xs font-medium">Pay from / receive into</span>
+                <div className="mt-1">
+                  <NativeSelect
+                    value={accountId}
+                    onChange={setAccountId}
+                    options={accounts.map((a) => buildAccountOption(a, debitAmount))}
+                  />
+                </div>
+              </label>
+            );
+          })()}
 
           <label className="block">
             <span className="text-xs font-medium">Notes</span>

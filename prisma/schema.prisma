@@ -450,6 +450,9 @@ model Card {
   accountId       String?       @unique
   account         Account?      @relation("CardAccount", fields: [accountId], references: [id], onDelete: SetNull)
   limitMode       CardLimitMode @default(SOLO)
+  parentCardId    String?
+  parentCard      Card?         @relation("CardParentCard", fields: [parentCardId], references: [id], onDelete: SetNull)
+  childCards      Card[]        @relation("CardParentCard")
   active          Boolean       @default(true)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -460,6 +463,7 @@ model Card {
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
   @@index([parentAccountId])
+  @@index([parentCardId])
 }
 
 model CardStatement {

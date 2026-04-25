@@ -94,6 +94,7 @@ export default function CardsPage() {
               <div>
                 {(() => {
                   const avail = c.availableLimit ?? c.creditLimit;
+                  const outstanding = Math.max(0, c.creditLimit - avail);
                   const pct = c.creditLimit > 0 ? avail / c.creditLimit : 1;
                   const tone =
                     pct > 0.5 ? "gain" : pct > 0.2 ? "outstanding" : "loss";
@@ -120,8 +121,17 @@ export default function CardsPage() {
                           style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
                         />
                       </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        of {formatINR(c.creditLimit)} total
+                      <div className="mt-1 flex items-center justify-between text-xs">
+                        {outstanding > 0 ? (
+                          <span className="font-medium text-destructive tabular-nums">
+                            Outstanding {formatINR(outstanding)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">No dues</span>
+                        )}
+                        <span className="text-muted-foreground tabular-nums">
+                          of {formatINR(c.creditLimit)}
+                        </span>
                       </div>
                     </>
                   );

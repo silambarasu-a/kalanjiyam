@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -287,31 +288,29 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
               </Button>
             </div>
             {assetType === "CROP_BATCH" ? (
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-2"
-                value={cropBatchId}
-                onChange={(e) => setCropBatchId(e.target.value)}
-              >
-                <option value="">— pick crop batch —</option>
-                {cropBatches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.crop.name} · {b.name}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-2">
+                <NativeSelect
+                  value={cropBatchId}
+                  onChange={setCropBatchId}
+                  placeholder="— pick crop batch —"
+                  options={cropBatches.map((b) => ({
+                    value: b.id,
+                    label: `${b.crop.name} · ${b.name}`,
+                  }))}
+                />
+              </div>
             ) : (
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-2"
-                value={livestockBatchId}
-                onChange={(e) => setLivestockBatchId(e.target.value)}
-              >
-                <option value="">— pick livestock batch —</option>
-                {livestockBatches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.livestock.name} · {b.name}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-2">
+                <NativeSelect
+                  value={livestockBatchId}
+                  onChange={setLivestockBatchId}
+                  placeholder="— pick livestock batch —"
+                  options={livestockBatches.map((b) => ({
+                    value: b.id,
+                    label: `${b.livestock.name} · ${b.name}`,
+                  }))}
+                />
+              </div>
             )}
           </div>
 
@@ -338,18 +337,12 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
               </Button>
             </div>
             {counterpartyMode === "member" ? (
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
+              <NativeSelect
                 value={memberId}
-                onChange={(e) => setMemberId(e.target.value)}
-              >
-                <option value="">— pick member —</option>
-                {family.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setMemberId}
+                placeholder="— pick member —"
+                options={family.map((m) => ({ value: m.id, label: m.name }))}
+              />
             ) : (
               <Input
                 value={externalName}
@@ -368,15 +361,17 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
             </label>
             <label className="block">
               <span className="text-xs font-medium">Frequency</span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={frequency}
-                onChange={(e) => setFrequency(e.target.value as typeof frequency)}
-              >
-                <option value="ONE_TIME">One-time</option>
-                <option value="YEARLY">Yearly</option>
-                <option value="CUSTOM_MONTHS">Every N months</option>
-              </select>
+              <div className="mt-1">
+                <NativeSelect
+                  value={frequency}
+                  onChange={(next) => setFrequency(next as typeof frequency)}
+                  options={[
+                    { value: "ONE_TIME", label: "One-time" },
+                    { value: "YEARLY", label: "Yearly" },
+                    { value: "CUSTOM_MONTHS", label: "Every N months" },
+                  ]}
+                />
+              </div>
             </label>
           </div>
 

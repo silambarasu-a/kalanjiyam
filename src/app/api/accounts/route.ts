@@ -10,6 +10,7 @@ import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { accountCreateSchema } from "@/lib/validators-domain";
 import { computeAccountBalance } from "@/lib/account-balance";
+import { computeAccountAvailableLimit } from "@/lib/card-available-limit";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -35,7 +36,14 @@ export async function GET() {
       },
     });
 
-    const balances = await Promise.all(accounts.map((a) => computeAccountBalance(a.id)));
+    const [balances, availableLimits] = await Promise.all([
+      Promise.all(accounts.map((a) => computeAccountBalance(a.id))),
+      Promise.all(
+        accounts.map((a) =>
+          a.kind === "CARD" ? computeAccountAvailableLimit(a.id) : Promise.resolve(null),
+        ),
+      ),
+    ]);
 
     return NextResponse.json({
       accounts: accounts.map((a, i) => ({
@@ -51,6 +59,7 @@ export async function GET() {
         ownerMember: a.ownerMember,
         sharedWithUserIds: a.sharedWithUserIds,
         balance: balances[i].balance,
+        availableLimit: availableLimits[i],
       })),
     });
   } catch (err) {

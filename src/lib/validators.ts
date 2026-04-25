@@ -29,6 +29,15 @@ export const reverifySchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
+export const profileUpdateSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(120),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z.string().min(8, "New password must be at least 8 characters").max(200),
+});
+
 export const workspaceCreateSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(80),
 });
