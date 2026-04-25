@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -216,11 +217,7 @@ function SettleDialog({
         <div className="space-y-3">
           <label className="block">
             <span className="text-xs font-medium">Amount (₹)</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+            <AmountInput value={amount} onChange={setAmount}
               autoFocus
             />
           </label>

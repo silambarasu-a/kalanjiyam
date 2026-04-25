@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -6,6 +7,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -98,7 +100,7 @@ export default function AccountsPage() {
                       const res = await fetch(`/api/accounts/${a.id}`, { method: "DELETE" });
                       if (!res.ok) {
                         const body = await res.json();
-                        alert(body.error ?? "Failed");
+                        toast.error(body.error ?? "Failed");
                       }
                       globalMutate("/api/accounts");
                     }}
@@ -241,11 +243,7 @@ function AccountDialog({
               </div>
               <label className="block">
                 <span className="text-xs font-medium">Opening balance (₹)</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={opening}
-                  onChange={(e) => setOpening(e.target.value)}
+                <AmountInput value={opening} onChange={setOpening}
                 />
               </label>
               {error && <p className="text-sm text-destructive">{error}</p>}

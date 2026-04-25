@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import useSWR from "swr";
 import { ArrowRight, Plus, Trash2 } from "lucide-react";
@@ -61,7 +62,7 @@ export default function TransfersPage() {
                 const res = await fetch(`/api/transfers/${t.id}`, { method: "DELETE" });
                 if (!res.ok) {
                   const body = await res.json();
-                  alert(body.error ?? "Failed");
+                  toast.error(body.error ?? "Failed");
                 }
                 mutateBalances();
               }}

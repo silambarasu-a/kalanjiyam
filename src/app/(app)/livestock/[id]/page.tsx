@@ -7,6 +7,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -405,11 +406,7 @@ function BatchActionDialog({
               {(eventType === "SALE" || eventType === "PURCHASE") && (
                 <label className="block">
                   <span className="text-xs font-medium">Unit value (₹)</span>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    value={unitValue}
-                    onChange={(e) => setUnitValue(e.target.value)}
+                  <AmountInput value={unitValue} onChange={setUnitValue}
                     placeholder="Per animal"
                   />
                 </label>
@@ -424,11 +421,7 @@ function BatchActionDialog({
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Cost (₹)</span>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    value={feedAmount}
-                    onChange={(e) => setFeedAmount(e.target.value)}
+                  <AmountInput value={feedAmount} onChange={setFeedAmount}
                   />
                 </label>
                 <label className="block">
@@ -439,11 +432,7 @@ function BatchActionDialog({
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Quantity (optional)</span>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    value={feedQuantity}
-                    onChange={(e) => setFeedQuantity(e.target.value)}
+                  <AmountInput value={feedQuantity} onChange={setFeedQuantity}
                   />
                 </label>
                 <label className="block">
@@ -480,11 +469,7 @@ function BatchActionDialog({
               </div>
               <label className="block">
                 <span className="text-xs font-medium">Cost (₹, optional)</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={vaccinationCost}
-                  onChange={(e) => setVaccinationCost(e.target.value)}
+                <AmountInput value={vaccinationCost} onChange={setVaccinationCost}
                 />
               </label>
             </>

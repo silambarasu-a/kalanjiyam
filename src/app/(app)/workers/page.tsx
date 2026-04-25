@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -6,6 +7,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { HardHat, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -94,7 +96,7 @@ export default function WorkersPage() {
                 const res = await fetch(`/api/workers/${w.id}`, { method: "DELETE" });
                 if (!res.ok) {
                   const body = await res.json();
-                  alert(body.error ?? "Failed");
+                  toast.error(body.error ?? "Failed");
                 }
                 globalMutate("/api/workers");
               }}
@@ -196,11 +198,7 @@ function WorkerDialog({
             </label>
             <label className="block">
               <span className="text-xs font-medium">Daily rate (₹)</span>
-              <Input
-                type="number"
-                inputMode="decimal"
-                value={dailyRate}
-                onChange={(e) => setDailyRate(e.target.value)}
+              <AmountInput value={dailyRate} onChange={setDailyRate}
               />
             </label>
           </div>

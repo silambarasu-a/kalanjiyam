@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -70,7 +71,7 @@ export default function LivestockPage() {
                 const res = await fetch(`/api/livestock/${l.id}`, { method: "DELETE" });
                 if (!res.ok) {
                   const body = await res.json();
-                  alert(body.error ?? "Failed");
+                  toast.error(body.error ?? "Failed");
                 }
                 globalMutate("/api/livestock");
               }}

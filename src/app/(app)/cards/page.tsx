@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useState } from "react";
 import Link from "next/link";
@@ -78,7 +79,7 @@ export default function CardsPage() {
                     const res = await fetch(`/api/cards/${c.id}`, { method: "DELETE" });
                     if (!res.ok) {
                       const body = await res.json();
-                      alert(body.error ?? "Failed");
+                      toast.error(body.error ?? "Failed");
                     }
                     globalMutate("/api/cards");
                   }}

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { CalendarCheck, CalendarX, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -98,7 +99,7 @@ export default function LeaseDetailPage() {
               const res = await fetch(`/api/leases/${id}`, { method: "DELETE" });
               if (!res.ok) {
                 const body = await res.json();
-                alert(body.error ?? "Failed");
+                toast.error(body.error ?? "Failed");
               } else {
                 window.location.href = "/leases";
               }
@@ -303,11 +304,7 @@ function ConfirmPaymentDialog({
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Amount (₹)</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                <AmountInput value={amount} onChange={setAmount}
                 />
               </label>
               <label className="block">

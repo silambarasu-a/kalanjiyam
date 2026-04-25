@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -71,7 +72,7 @@ export default function CropsPage() {
                 const res = await fetch(`/api/crops/${c.id}`, { method: "DELETE" });
                 if (!res.ok) {
                   const body = await res.json();
-                  alert(body.error ?? "Failed");
+                  toast.error(body.error ?? "Failed");
                 }
                 globalMutate("/api/crops");
               }}

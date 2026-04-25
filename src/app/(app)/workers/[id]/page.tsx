@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Check, X, Trash2, CalendarDays, Wallet2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -418,11 +419,7 @@ function AttendanceDialog({
             </label>
           )}
           {useOverride && (
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={rateOverride}
-              onChange={(e) => setRateOverride(e.target.value)}
+            <AmountInput value={rateOverride} onChange={setRateOverride}
               placeholder="Today's rate (₹)"
             />
           )}
@@ -549,11 +546,7 @@ function PayDialog({
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Amount (₹)</span>
-              <Input
-                type="number"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+              <AmountInput value={amount} onChange={setAmount}
                 autoFocus
               />
             </label>

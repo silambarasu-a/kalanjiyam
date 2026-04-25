@@ -2,11 +2,13 @@ import { Sidebar } from "./sidebar";
 import { BottomNav } from "./bottom-nav";
 import { Header, MobileHeader } from "./header";
 import { SessionGuard } from "@/components/session-guard";
+import { SessionExpiryBanner } from "@/components/session-expiry-banner";
 import { TransactionDialog } from "@/components/transactions/transaction-dialog";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-muted">
+      <SessionExpiryBanner />
       <div className="flex min-h-screen md:gap-3 md:p-3">
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0 md:rounded-2xl md:bg-card md:shadow-[var(--shadow-soft)] md:border md:border-border md:overflow-hidden">
