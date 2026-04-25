@@ -4,20 +4,29 @@ import { useEffect, useRef, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { AlarmClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
-const WARN_MS = 2 * 60 * 1000; // Show the banner when < 2 min remain.
+const WARN_MS = 2 * 60 * 1000; // Open the popup when < 2 min remain.
 const TICK_MS = 1000;
 
 /**
- * Shows a sticky amber banner when the 15-minute session is < 2 min from
- * expiry. "Stay signed in" calls session.update({ extend: true }) which the
- * JWT callback interprets as "rewind sessionStartedAt by 5 min" → user gets
- * another 10 minutes. Hidden on the /locked reverify screen.
+ * Non-dismissible expiry popup. When less than 2 minutes remain on the
+ * logical 15-minute session, a modal blocks the page and offers
+ * "Stay signed in" (session.update({ extend: true })). Once the
+ * countdown hits zero we force signOut so the user lands back on /login
+ * instead of staring at stale data.
  */
 export function SessionExpiryBanner() {
   const { data: session, update } = useSession();
   const [now, setNow] = useState(() => Date.now());
   const [extending, setExtending] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -27,32 +36,26 @@ export function SessionExpiryBanner() {
     };
   }, []);
 
-  if (!session?.user || !session.expiresAt) return null;
-  if (session.reverifyRequiredAt) return null; // locked page takes over
-  if (typeof window !== "undefined" && window.location.pathname === "/locked") return null;
+  const expiresAt = session?.expiresAt ?? null;
+  const locked = !!session?.reverifyRequiredAt;
+  const remainingMs = expiresAt ? expiresAt - now : Infinity;
+  const expired = expiresAt != null && remainingMs <= 0;
 
-  const remainingMs = session.expiresAt - now;
-  if (remainingMs <= 0) {
-    // Session already expired — next request will 401 / log out.
-    return (
-      <div className="sticky top-0 z-30 w-full bg-destructive text-white text-sm px-4 py-2 flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 font-medium">
-          <AlarmClock className="h-4 w-4" /> Session expired. Please sign in again.
-        </span>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => signOut({ callbackUrl: "/login" })}
-        >
-          Sign in
-        </Button>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!expired || signingOut || locked) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- once-only signout latch */
+    setSigningOut(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    void signOut({ callbackUrl: "/login" });
+  }, [expired, signingOut, locked]);
+
+  if (!session?.user || !expiresAt) return null;
+  if (locked) return null;
+  if (typeof window !== "undefined" && window.location.pathname === "/locked") return null;
   if (remainingMs > WARN_MS) return null;
 
-  const mm = Math.floor(remainingMs / 60000);
-  const ss = Math.floor((remainingMs % 60000) / 1000)
+  const mm = Math.max(0, Math.floor(remainingMs / 60000));
+  const ss = Math.max(0, Math.floor((remainingMs % 60000) / 1000))
     .toString()
     .padStart(2, "0");
 
@@ -66,26 +69,51 @@ export function SessionExpiryBanner() {
   }
 
   return (
-    <div className="sticky top-0 z-30 w-full bg-amber-50 text-amber-900 border-b border-amber-200 text-sm px-4 py-2 flex items-center justify-between gap-3">
-      <span className="flex items-center gap-2">
-        <AlarmClock className="h-4 w-4" />
-        Your session expires in{" "}
-        <strong className="tabular-nums">
-          {mm}:{ss}
-        </strong>
-      </span>
-      <div className="flex gap-2">
-        <Button size="sm" onClick={extend} disabled={extending}>
-          {extending ? "Extending…" : "Stay signed in"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => signOut({ callbackUrl: "/login" })}
-        >
-          Sign out
-        </Button>
-      </div>
-    </div>
+    <Dialog open={true} modal={true} disablePointerDismissal>
+      <DialogContent
+        showCloseButton={false}
+        className="sm:max-w-md rounded-2xl"
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlarmClock
+              className={expired ? "h-5 w-5 text-destructive" : "h-5 w-5 text-amber-600"}
+            />
+            {expired ? "Session expired" : "Session about to expire"}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="text-sm text-muted-foreground">
+          {expired ? (
+            <p>Signing you out…</p>
+          ) : (
+            <p>
+              Your session will expire in{" "}
+              <strong className="tabular-nums text-foreground">
+                {mm}:{ss}
+              </strong>
+              . Click <strong className="text-foreground">Stay signed in</strong> to keep working,
+              or sign out now.
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSigningOut(true);
+              void signOut({ callbackUrl: "/login" });
+            }}
+            disabled={signingOut}
+          >
+            Sign out
+          </Button>
+          {!expired && (
+            <Button onClick={extend} disabled={extending || signingOut}>
+              {extending ? "Extending…" : "Stay signed in"}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

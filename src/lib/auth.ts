@@ -1,9 +1,14 @@
-import NextAuth from "next-auth";
+import NextAuth, { CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { mergeWithDefaults, type MemberPermissions } from "@/lib/permissions";
+import { getClientIp, rateLimit } from "@/lib/auth/rate-limit";
 import type { WorkspaceRole } from "@/generated/prisma/client";
+
+class TooManyAttemptsError extends CredentialsSignin {
+  code = "too_many_attempts";
+}
 
 async function loadWorkspaceContext(userId: string, workspaceIdHint?: string | null) {
   const memberships = await prisma.workspaceMember.findMany({
@@ -39,11 +44,16 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         if (!credentials?.email || !credentials?.password) return null;
-        const user = await prisma.user.findUnique({
-          where: { email: (credentials.email as string).toLowerCase() },
-        });
+
+        const email = (credentials.email as string).toLowerCase();
+        const ip = request instanceof Request ? getClientIp(request) : "unknown";
+        if (!rateLimit.loginByEmail(email).ok || !rateLimit.loginByIp(ip).ok) {
+          throw new TooManyAttemptsError();
+        }
+
+        const user = await prisma.user.findUnique({ where: { email } });
         if (!user) return null;
         const ok = await compare(credentials.password as string, user.passwordHash);
         if (!ok) return null;

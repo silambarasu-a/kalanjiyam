@@ -3,6 +3,7 @@ import { BottomNav } from "./bottom-nav";
 import { Header, MobileHeader } from "./header";
 import { SessionGuard } from "@/components/session-guard";
 import { SessionExpiryBanner } from "@/components/session-expiry-banner";
+import { SessionLockDialog } from "@/components/session-lock-dialog";
 import { TransactionDialog } from "@/components/transactions/transaction-dialog";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -21,6 +22,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <BottomNav />
       <SessionGuard />
+      <SessionLockDialog />
       <TransactionDialog />
     </div>
   );

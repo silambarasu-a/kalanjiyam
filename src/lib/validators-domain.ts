@@ -68,7 +68,7 @@ export const cardUpdateSchema = cardCreateSchema.partial().extend({
 
 export const transactionCreateSchema = z
   .object({
-    type: z.enum(["INCOME", "EXPENSE"]),
+    type: z.enum(["INCOME", "EXPENSE", "INVESTMENT"]),
     amount: z.number().positive(),
     description: z.string().trim().min(1).max(200),
     date: z.string(),
@@ -79,6 +79,10 @@ export const transactionCreateSchema = z
     cropBatchId: z.string().uuid().optional().nullable(),
     livestockBatchId: z.string().uuid().optional().nullable(),
     loanId: z.string().uuid().optional().nullable(),
+    investmentId: z.string().uuid().optional().nullable(),
+    investmentAction: z.enum(["BUY", "SELL"]).optional().nullable(),
+    investmentQty: z.number().positive().optional().nullable(),
+    investmentPrice: z.number().positive().optional().nullable(),
     beneficiaryMemberId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
   })
@@ -89,6 +93,10 @@ export const transactionCreateSchema = z
   .refine((d) => !(d.memberChargeType === "RECOVERABLE" && !d.beneficiaryMemberId), {
     message: "Pick a beneficiary for recoverable charges",
     path: ["beneficiaryMemberId"],
+  })
+  .refine((d) => d.type !== "INVESTMENT" || (!!d.investmentId && !!d.investmentAction), {
+    message: "Investment transaction needs a holding and action",
+    path: ["investmentId"],
   });
 
 export const transactionUpdateSchema = z.object({

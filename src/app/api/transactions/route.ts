@@ -134,6 +134,30 @@ export async function POST(request: Request) {
       }
     }
 
+    let investmentForUpdate: {
+      id: string;
+      amount: number;
+      quantity: number | null;
+      currentValue: number | null;
+    } | null = null;
+    if (data.investmentId) {
+      const inv = await prisma.investment.findUnique({
+        where: { id: data.investmentId },
+      });
+      if (!inv || inv.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Investment not found" }, { status: 404 });
+      }
+      if (!canAccessRecord(session, inv)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      investmentForUpdate = {
+        id: inv.id,
+        amount: Number(inv.amount),
+        quantity: inv.quantity == null ? null : Number(inv.quantity),
+        currentValue: inv.currentValue == null ? null : Number(inv.currentValue),
+      };
+    }
+
     const txDate = new Date(data.date);
     const charge =
       data.memberChargeType === "RECOVERABLE" && data.beneficiaryMemberId
@@ -167,6 +191,10 @@ export async function POST(request: Request) {
           cropBatchId: data.cropBatchId ?? null,
           livestockBatchId: data.livestockBatchId ?? null,
           loanId: data.loanId ?? null,
+          investmentId: data.investmentId ?? null,
+          investmentAction: data.investmentAction ?? null,
+          investmentQty: data.investmentQty ?? null,
+          investmentPrice: data.investmentPrice ?? null,
           beneficiaryMemberId: data.beneficiaryMemberId ?? null,
           memberChargeType: (data.memberChargeType as MemberChargeType) ?? "NONE",
           memberChargeId,
@@ -178,6 +206,25 @@ export async function POST(request: Request) {
         await tx.memberCharge.update({
           where: { id: memberChargeId },
           data: { originTransaction: { connect: { id: txn.id } } },
+        });
+      }
+      // Side effect: update the linked investment's amount + quantity.
+      // BUY adds; SELL subtracts (clamped at 0). currentValue tracks the
+      // last-known market value — we don't touch it here.
+      if (investmentForUpdate && data.investmentAction) {
+        const sign = data.investmentAction === "BUY" ? 1 : -1;
+        const newAmount = Math.max(0, investmentForUpdate.amount + sign * data.amount);
+        const qtyDelta = data.investmentQty ?? 0;
+        const newQty =
+          investmentForUpdate.quantity == null && qtyDelta === 0
+            ? null
+            : Math.max(0, (investmentForUpdate.quantity ?? 0) + sign * qtyDelta);
+        await tx.investment.update({
+          where: { id: investmentForUpdate.id },
+          data: {
+            amount: newAmount,
+            quantity: newQty,
+          },
         });
       }
       return txn;

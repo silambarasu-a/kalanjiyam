@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR } from "@/lib/utils";
+import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Worker = {
   id: string;
@@ -66,23 +67,23 @@ export default function WorkersPage() {
                   ? ` (${w.customCadenceDays}d)`
                   : ""}
               </div>
-              <div className="mt-2 flex items-baseline gap-2">
-                <span
-                  className={`text-lg font-semibold ${
-                    w.balance > 0
-                      ? "text-primary"
-                      : w.balance < 0
-                        ? "text-destructive"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {w.balance > 0 ? "+" : w.balance < 0 ? "−" : ""}
-                  {formatINR(Math.abs(w.balance))}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {w.balance > 0 ? "owed" : w.balance < 0 ? "advance" : "settled"} ·{" "}
-                  {w.daysWorked}d
-                </span>
+              <div className="mt-2 flex items-center gap-2">
+                <MoneyValue
+                  tone={
+                    w.balance > 0 ? "owed_in" : w.balance < 0 ? "advance" : "settled"
+                  }
+                  value={`${w.balance > 0 ? "+" : w.balance < 0 ? "−" : ""}${formatINR(Math.abs(w.balance))}`}
+                  className="text-lg font-semibold"
+                />
+                <ToneBadge
+                  tone={
+                    w.balance > 0 ? "owed_in" : w.balance < 0 ? "advance" : "settled"
+                  }
+                  label={
+                    w.balance > 0 ? "Owed" : w.balance < 0 ? "Advance" : "Settled"
+                  }
+                />
+                <span className="text-xs text-muted-foreground">{w.daysWorked}d</span>
               </div>
             </Link>
             <Button variant="ghost" size="icon" onClick={() => setEditOpen(w)} aria-label="Edit">
