@@ -1,4 +1,4 @@
-import { escapeHtml, renderButton, renderLayout, renderSoftPanel } from "./_layout";
+import { COLORS, escapeHtml, renderButton, renderLayout, renderSoftPanel } from "./_layout";
 
 type Args = {
   inviterName: string;
@@ -23,11 +23,11 @@ export function workspaceInviteTemplate({
       <strong>${escapeHtml(workspaceName)}</strong> on Kalanjiyam as <strong>${escapeHtml(role)}</strong>.</p>
     ${renderSoftPanel(`
       ${renderButton("Accept invite", acceptUrl)}
-      <p style="margin:12px 0 0 0;font-size:13px;color:#64748B;text-align:center;">
+      <p style="margin:12px 0 0 0;font-size:13px;color:${COLORS.textMuted};text-align:center;">
         This invite expires in ${ttlDays} days. You can belong to up to 3 workspaces.
       </p>
     `)}
-    <p style="margin:20px 0 0 0;font-size:13px;color:#64748B;">
+    <p style="margin:20px 0 0 0;font-size:13px;color:${COLORS.textMuted};">
       If you don't have a Kalanjiyam account yet, the link will guide you through creating one.
     </p>
   `;
