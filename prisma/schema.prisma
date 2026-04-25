@@ -1,0 +1,1122 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+//
+// ENUMS
+//
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  SUPER_ADMIN
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  INVESTMENT
+  HAND_LOAN
+  TRANSFER
+}
+
+enum TransactionKind {
+  SALARY
+  INTEREST
+  AGRI_INCOME
+  LEASE_INCOME
+  OTHER_INCOME
+  HOUSEHOLD
+  GROCERY
+  FARM_DEV
+  WAGE
+  FEED
+  VACCINATION
+  INVESTMENT
+  LOAN_PAYMENT
+  OTHER_EXPENSE
+}
+
+enum MemberChargeType {
+  NONE
+  RECOVERABLE
+  GIFT
+}
+
+enum MemberChargeStatus {
+  OUTSTANDING
+  PARTIAL
+  SETTLED
+  WRITTEN_OFF
+}
+
+enum AccountKind {
+  BANK
+  CASH
+  CARD
+  WALLET
+}
+
+enum CardKind {
+  DEBIT
+  CREDIT
+}
+
+enum CardLimitMode {
+  SOLO
+  SHARED
+}
+
+enum CardNetwork {
+  VISA
+  MASTERCARD
+  RUPAY
+  AMEX
+  DINERS
+  OTHER
+}
+
+enum LoanSource {
+  BANK
+  HAND_FORMAL
+  CARD_EMI
+}
+
+enum LoanKind {
+  PERSONAL
+  HOME
+  CAR
+  GOLD
+  BUSINESS
+  EDUCATION
+  OTHER
+}
+
+enum HandLoanDirection {
+  GIVEN
+  RECEIVED
+}
+
+enum HandLoanKind {
+  FORMAL
+  INFORMAL
+}
+
+enum InvestmentKind {
+  STOCK
+  FD
+  MUTUAL_FUND
+  SIP
+  INSURANCE
+  OTHER
+}
+
+enum InvestmentAction {
+  BUY
+  SELL
+}
+
+enum InsurancePolicyType {
+  LIFE
+  HEALTH
+  VEHICLE
+  HOME
+  TRAVEL
+  TERM
+  ULIP
+  ENDOWMENT
+  OTHER
+}
+
+enum InsuranceStatus {
+  ACTIVE
+  LAPSED
+  MATURED
+  SURRENDERED
+  CLAIMED
+}
+
+enum PremiumFrequency {
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+  ONE_TIME
+}
+
+enum CompoundingFrequency {
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum FDStatus {
+  ACTIVE
+  MATURED
+  CLOSED
+  PREMATURE_WITHDRAWAL
+}
+
+enum CropStatus {
+  PLANNED
+  ACTIVE
+  HARVESTED
+  CLOSED
+}
+
+enum LivestockEventType {
+  PURCHASE
+  BIRTH
+  DEATH
+  SALE
+}
+
+enum LeaseAssetType {
+  CROP_BATCH
+  LIVESTOCK_BATCH
+}
+
+enum LeaseDirection {
+  LEASED_OUT
+  LEASED_IN
+}
+
+enum LeaseFrequency {
+  ONE_TIME
+  YEARLY
+  CUSTOM_MONTHS
+}
+
+enum WageSettlementCadence {
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+enum WageSettlementStatus {
+  PENDING
+  SETTLED
+  CANCELLED
+}
+
+enum AreaUnit {
+  ACRES
+  HECTARES
+  CENTS
+  SQFT
+  SQM
+}
+
+enum ReminderKind {
+  SIP_BUY
+  FD_INTEREST
+  INSURANCE_PREMIUM
+  LEASE_PAYMENT
+  LOAN_EMI
+  CARD_STATEMENT
+}
+
+enum ReminderStatus {
+  UPCOMING
+  CONFIRMED
+  SKIPPED
+  MISSED
+}
+
+//
+// IDENTITY
+//
+
+model User {
+  id                String     @id @default(uuid())
+  name              String
+  email             String     @unique
+  emailVerified     DateTime?
+  passwordHash      String
+  activeWorkspaceId String?
+  activeWorkspace   Workspace? @relation("UserActiveWorkspace", fields: [activeWorkspaceId], references: [id], onDelete: SetNull)
+  lastLoginAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  ownedWorkspaces         Workspace[]              @relation("WorkspaceOwner")
+  memberships             WorkspaceMember[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  familyProfile           FamilyMember?
+
+  ownedAccounts           Account[]       @relation("AccountOwner")
+  ownedCards              Card[]          @relation("CardOwner")
+  ownedLoans              Loan[]          @relation("LoanOwner")
+  ownedInvestments        Investment[]    @relation("InvestmentOwner")
+  transactions            Transaction[]   @relation("TransactionAuthor")
+  createdTransactions     Transaction[]   @relation("TransactionCreatedBy")
+  editedTransactions      Transaction[]   @relation("TransactionEditedBy")
+  wagePayments            WagePayment[]
+  wageSettlements         WageSettlement[]
+  transfers               Transfer[]      @relation("TransferAuthor")
+  handLoanEntries         HandLoanEntry[] @relation("HandLoanEntryCreatedBy")
+  auditLogs               AuditLog[]
+  sentWorkspaceInvites    WorkspaceInvite[] @relation("WorkspaceInviteInviter")
+
+  @@index([email])
+}
+
+model Workspace {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String?  @unique
+  ownerUserId  String
+  owner        User     @relation("WorkspaceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members              WorkspaceMember[]
+  invites              WorkspaceInvite[]
+  activeForUsers       User[]               @relation("UserActiveWorkspace")
+  familyMembers        FamilyMember[]
+  categories           Category[]
+  accounts             Account[]
+  cards                Card[]
+  cardStatements       CardStatement[]
+  transactions         Transaction[]
+  transfers            Transfer[]
+  memberCharges        MemberCharge[]
+  lands                Land[]
+  crops                Crop[]
+  livestock            Livestock[]
+  leases               Lease[]
+  workers              Worker[]
+  loans                Loan[]
+  handLoanMembers      HandLoanMember[]
+  investments          Investment[]
+  investmentReminders  InvestmentReminder[]
+  auditLogs            AuditLog[]
+
+  @@index([ownerUserId])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole
+  permissions Json          @default("{}")
+  invitedAt   DateTime      @default(now())
+  acceptedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([workspaceId, role])
+}
+
+model WorkspaceInvite {
+  id              String        @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  email           String
+  role            WorkspaceRole
+  permissions     Json          @default("{}")
+  tokenHash       String        @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  cancelledAt     DateTime?
+  invitedByUserId String
+  invitedByUser   User          @relation("WorkspaceInviteInviter", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([workspaceId, acceptedAt])
+  @@index([email, acceptedAt])
+  @@index([expiresAt])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model FamilyMember {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name         String
+  relationship String?
+  dob          DateTime? @db.Date
+  userId       String?   @unique
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  notes        String?
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  ownedAccounts       Account[]      @relation("AccountFamilyOwner")
+  ownedCards          Card[]         @relation("CardFamilyOwner")
+  beneficiaryTxns     Transaction[]  @relation("TransactionBeneficiary")
+  memberCharges       MemberCharge[]
+  lessorLeases        Lease[]        @relation("LeaseLessor")
+  lesseeLeases        Lease[]        @relation("LeaseLessee")
+  handLoanMemberLinks HandLoanMember[]
+
+  @@index([workspaceId, active])
+}
+
+//
+// MONEY
+//
+
+model Account {
+  id             String       @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId    String?
+  ownerUser      User?        @relation("AccountOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerMemberId  String?
+  ownerMember    FamilyMember? @relation("AccountFamilyOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]  @default([])
+  kind           AccountKind
+  name           String
+  openingBalance Decimal      @default(0) @db.Decimal(14, 2)
+  creditLimit    Decimal?     @db.Decimal(14, 2)
+  statementDate  Int?
+  gracePeriod    Int?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  transactions   Transaction[]
+  loans          Loan[]
+  transfersFrom  Transfer[]      @relation("TransferFrom")
+  transfersTo    Transfer[]      @relation("TransferTo")
+  cardsAsParent  Card[]          @relation("CardParentAccount")
+  linkedCard     Card?           @relation("CardAccount")
+  cardStatements CardStatement[]
+
+  @@index([workspaceId, active])
+  @@index([workspaceId, ownerUserId])
+  @@index([workspaceId, ownerMemberId])
+}
+
+model Card {
+  id              String        @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId     String?
+  ownerUser       User?         @relation("CardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerMemberId   String?
+  ownerMember     FamilyMember? @relation("CardFamilyOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]    @default([])
+  name            String
+  kind            CardKind
+  network         CardNetwork   @default(OTHER)
+  supportsUpi     Boolean       @default(false)
+  last4           String?
+  parentAccountId String?
+  parentAccount   Account?      @relation("CardParentAccount", fields: [parentAccountId], references: [id], onDelete: SetNull)
+  accountId       String?       @unique
+  account         Account?      @relation("CardAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  limitMode       CardLimitMode @default(SOLO)
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  transactions Transaction[]
+  emiLoans     Loan[]        @relation("CardEmiLoan")
+
+  @@index([workspaceId, active])
+  @@index([workspaceId, ownerUserId])
+  @@index([parentAccountId])
+}
+
+model CardStatement {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accountId    String
+  account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  periodStart  DateTime  @db.Date
+  periodEnd    DateTime  @db.Date
+  dueDate      DateTime  @db.Date
+  totalDue     Decimal   @db.Decimal(14, 2)
+  paidAt       DateTime?
+  paidTransfer Transfer? @relation("StatementPaidTransfer")
+  closedAt     DateTime?
+  reminders    InvestmentReminder[] @relation("ReminderCardStatement")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([accountId, periodStart])
+  @@index([accountId, periodEnd])
+  @@index([workspaceId])
+}
+
+model Transfer {
+  id            String         @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User           @relation("TransferAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  fromAccountId String
+  fromAccount   Account        @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccountId   String
+  toAccount     Account        @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  amount        Decimal        @db.Decimal(14, 2)
+  date          DateTime
+  notes         String?
+  statementId   String?        @unique
+  statement     CardStatement? @relation("StatementPaidTransfer", fields: [statementId], references: [id], onDelete: SetNull)
+  legs          Transaction[]  @relation("TransferLegs")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([workspaceId, date])
+  @@index([fromAccountId])
+  @@index([toAccountId])
+}
+
+//
+// LEDGER
+//
+
+model Category {
+  id           String            @id @default(uuid())
+  name         String
+  types        TransactionType[]
+  group        String?
+  icon         String?
+  isDefault    Boolean           @default(false)
+  workspaceId  String?
+  workspace    Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  createdAt    DateTime          @default(now())
+
+  @@index([name])
+  @@index([workspaceId])
+}
+
+model Transaction {
+  id                String            @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  amount            Decimal           @db.Decimal(12, 2)
+  type              TransactionType
+  kind              TransactionKind?
+  description       String
+  date              DateTime
+  categoryId        String?
+  category          Category?         @relation(fields: [categoryId], references: [id])
+
+  accountId         String?
+  account           Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cardId            String?
+  card              Card?             @relation(fields: [cardId], references: [id], onDelete: SetNull)
+
+  workerId          String?
+  worker            Worker?           @relation(fields: [workerId], references: [id], onDelete: SetNull)
+
+  cropBatchId       String?
+  cropBatch         CropBatch?        @relation(fields: [cropBatchId], references: [id], onDelete: SetNull)
+  livestockBatchId  String?
+  livestockBatch    LivestockBatch?   @relation(fields: [livestockBatchId], references: [id], onDelete: SetNull)
+
+  leaseId           String?
+  lease             Lease?            @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  leaseScheduleId   String?           @unique
+  leaseSchedule     LeasePaymentSchedule? @relation("ScheduleConfirmedTxn", fields: [leaseScheduleId], references: [id], onDelete: SetNull)
+
+  loanId            String?
+  loan              Loan?             @relation(fields: [loanId], references: [id], onDelete: SetNull)
+
+  investmentId      String?
+  investment        Investment?       @relation(fields: [investmentId], references: [id], onDelete: SetNull)
+  investmentAction  InvestmentAction?
+  investmentQty     Decimal?          @db.Decimal(14, 4)
+  investmentPrice   Decimal?          @db.Decimal(14, 4)
+  exchangeRate      Decimal?          @db.Decimal(10, 4)
+
+  transferId        String?
+  transfer          Transfer?         @relation("TransferLegs", fields: [transferId], references: [id], onDelete: Cascade)
+
+  userId            String
+  user              User              @relation("TransactionAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  createdByUserId   String?
+  createdByUser     User?             @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  editedByUserId    String?
+  editedByUser      User?             @relation("TransactionEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
+  editedAt          DateTime?
+  editNote          String?
+
+  beneficiaryMemberId String?
+  beneficiaryMember   FamilyMember? @relation("TransactionBeneficiary", fields: [beneficiaryMemberId], references: [id], onDelete: SetNull)
+  memberChargeType    MemberChargeType @default(NONE)
+  memberChargeId      String?          @unique
+  memberCharge        MemberCharge?    @relation("ChargeOriginTxn", fields: [memberChargeId], references: [id], onDelete: SetNull)
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  wagePayment           WagePayment?
+  handLoanEntry         HandLoanEntry?
+  livestockEvent        LivestockEvent?
+  feedLog               FeedLog?
+  vaccinationLog        VaccinationLog?
+  memberChargeSettlements MemberChargeSettlement[]
+  reminderConfirmation  InvestmentReminder? @relation("ReminderConfirmation")
+
+  @@index([workspaceId, date])
+  @@index([workspaceId, categoryId])
+  @@index([workspaceId, accountId])
+  @@index([cardId])
+  @@index([workerId])
+  @@index([cropBatchId])
+  @@index([livestockBatchId])
+  @@index([leaseId])
+  @@index([loanId])
+  @@index([investmentId])
+  @@index([transferId])
+  @@index([beneficiaryMemberId])
+}
+
+model MemberCharge {
+  id                   String             @id @default(uuid())
+  workspaceId          String
+  workspace            Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  beneficiaryMemberId  String
+  beneficiaryMember    FamilyMember       @relation(fields: [beneficiaryMemberId], references: [id], onDelete: Cascade)
+  amount               Decimal            @db.Decimal(14, 2)
+  settledAmount        Decimal            @default(0) @db.Decimal(14, 2)
+  status               MemberChargeStatus @default(OUTSTANDING)
+  lastSettlementAt     DateTime?
+  notes                String?
+  originTransaction    Transaction?       @relation("ChargeOriginTxn")
+  settlements          MemberChargeSettlement[]
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([workspaceId, beneficiaryMemberId, status])
+}
+
+model MemberChargeSettlement {
+  id              String       @id @default(uuid())
+  chargeId        String
+  charge          MemberCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  amount          Decimal      @db.Decimal(14, 2)
+  paidAt          DateTime
+  transactionId   String?
+  transaction     Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes           String?
+  createdAt       DateTime     @default(now())
+
+  @@index([chargeId, paidAt])
+}
+
+//
+// FARM
+//
+
+model Land {
+  id          String     @id @default(uuid())
+  workspaceId String
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  area        Decimal?   @db.Decimal(12, 4)
+  areaUnit    AreaUnit?
+  location    String?
+  notes       String?
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  cropBatches      CropBatch[]
+  livestockBatches LivestockBatch[]
+
+  @@index([workspaceId, active])
+}
+
+model Crop {
+  id          String      @id @default(uuid())
+  workspaceId String
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  category    String?
+  description String?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  batches CropBatch[]
+
+  @@index([workspaceId, active])
+}
+
+model CropBatch {
+  id                 String     @id @default(uuid())
+  cropId             String
+  crop               Crop       @relation(fields: [cropId], references: [id], onDelete: Cascade)
+  landId             String?
+  land               Land?      @relation(fields: [landId], references: [id], onDelete: SetNull)
+  name               String
+  status             CropStatus @default(ACTIVE)
+  startDate          DateTime?
+  endDate            DateTime?
+  expectedCycleDays  Int?
+  notes              String?
+  active             Boolean    @default(true)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  transactions Transaction[]
+  attendance   Attendance[]
+  leases       Lease[]       @relation("LeaseCropBatch")
+
+  @@index([cropId, status])
+  @@index([landId])
+}
+
+model Livestock {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  species     String?
+  description String?
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  batches LivestockBatch[]
+
+  @@index([workspaceId, active])
+}
+
+model LivestockBatch {
+  id                String    @id @default(uuid())
+  livestockId       String
+  livestock         Livestock @relation(fields: [livestockId], references: [id], onDelete: Cascade)
+  landId            String?
+  land              Land?     @relation(fields: [landId], references: [id], onDelete: SetNull)
+  name              String
+  startDate         DateTime
+  endDate           DateTime?
+  expectedCycleDays Int?
+  initialCount      Int       @default(0)
+  currentCount      Int       @default(0)
+  notes             String?
+  active            Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  events         LivestockEvent[]
+  feedLogs       FeedLog[]
+  vaccinations   VaccinationLog[]
+  transactions   Transaction[]
+  attendance     Attendance[]
+  leases         Lease[]          @relation("LeaseLivestockBatch")
+
+  @@index([livestockId, active])
+  @@index([landId])
+}
+
+model LivestockEvent {
+  id            String             @id @default(uuid())
+  batchId       String
+  batch         LivestockBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  eventType     LivestockEventType
+  date          DateTime
+  count         Int
+  unitValue     Decimal?           @db.Decimal(12, 2)
+  notes         String?
+  transactionId String?            @unique
+  transaction   Transaction?       @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime           @default(now())
+
+  @@index([batchId, date])
+}
+
+model FeedLog {
+  id            String          @id @default(uuid())
+  batchId       String
+  batch         LivestockBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  date          DateTime
+  amount        Decimal         @db.Decimal(12, 2)
+  quantity      Decimal?        @db.Decimal(12, 4)
+  unit          String?
+  notes         String?
+  transactionId String?         @unique
+  transaction   Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+
+  @@index([batchId, date])
+}
+
+model VaccinationLog {
+  id            String          @id @default(uuid())
+  batchId       String
+  batch         LivestockBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  vaccine       String
+  date          DateTime
+  nextDueDate   DateTime?
+  cost          Decimal?        @db.Decimal(12, 2)
+  notes         String?
+  transactionId String?         @unique
+  transaction   Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+
+  @@index([batchId, date])
+}
+
+//
+// LEASES
+//
+
+model Lease {
+  id                String         @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  direction         LeaseDirection
+  lessorMemberId    String?
+  lessorMember      FamilyMember?  @relation("LeaseLessor", fields: [lessorMemberId], references: [id], onDelete: SetNull)
+  lessorName        String?
+  lesseeMemberId    String?
+  lesseeMember      FamilyMember?  @relation("LeaseLessee", fields: [lesseeMemberId], references: [id], onDelete: SetNull)
+  lesseeName        String?
+  assetType         LeaseAssetType
+  cropBatchId       String?
+  cropBatch         CropBatch?     @relation("LeaseCropBatch", fields: [cropBatchId], references: [id], onDelete: SetNull)
+  livestockBatchId  String?
+  livestockBatch    LivestockBatch? @relation("LeaseLivestockBatch", fields: [livestockBatchId], references: [id], onDelete: SetNull)
+  amount            Decimal        @db.Decimal(14, 2)
+  frequency         LeaseFrequency
+  customMonths      Int?
+  startDate         DateTime
+  endDate           DateTime
+  scheduleGenerated Boolean        @default(false)
+  notes             String?
+  active            Boolean        @default(true)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  schedule     LeasePaymentSchedule[]
+  transactions Transaction[]
+
+  @@index([workspaceId, active])
+  @@index([cropBatchId])
+  @@index([livestockBatchId])
+}
+
+model LeasePaymentSchedule {
+  id            String               @id @default(uuid())
+  leaseId       String
+  lease         Lease                @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  dueDate       DateTime             @db.Date
+  amount        Decimal              @db.Decimal(14, 2)
+  status        ReminderStatus       @default(UPCOMING)
+  confirmedTxn  Transaction?         @relation("ScheduleConfirmedTxn")
+  reminders     InvestmentReminder[] @relation("ReminderLeaseSchedule")
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([leaseId, dueDate])
+  @@index([status, dueDate])
+}
+
+//
+// LOANS
+//
+
+model Loan {
+  id              String        @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId     String?
+  ownerUser       User?         @relation("LoanOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]    @default([])
+  kind            LoanKind
+  source          LoanSource    @default(BANK)
+  lender          String
+  borrower        String?
+  principal       Decimal       @db.Decimal(14, 2)
+  outstanding     Decimal       @db.Decimal(14, 2)
+  interestRate    Decimal?      @db.Decimal(6, 3)
+  gstOnInterest   Decimal?      @db.Decimal(6, 3)
+  emiAmount       Decimal?      @db.Decimal(12, 2)
+  tenure          Int?
+  frequency       String?       @default("MONTHLY")
+  charges         Decimal?      @db.Decimal(12, 2)
+  accountId       String?
+  account         Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cardId          String?
+  card            Card?         @relation("CardEmiLoan", fields: [cardId], references: [id], onDelete: SetNull)
+  isExisting      Boolean       @default(false)
+  foreclosedAt    DateTime?
+  foreclosureAmt  Decimal?      @db.Decimal(14, 2)
+  startedAt       DateTime
+  maturityAt      DateTime?
+  nextDueDate     DateTime?
+  notes           String?
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  transactions    Transaction[]
+  handLoanEntry   HandLoanEntry?
+  reminders       InvestmentReminder[] @relation("ReminderLoan")
+
+  @@index([workspaceId, active, source])
+  @@index([workspaceId, ownerUserId])
+  @@index([cardId])
+}
+
+model HandLoanMember {
+  id              String          @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  familyMemberId  String?
+  familyMember    FamilyMember?   @relation(fields: [familyMemberId], references: [id], onDelete: SetNull)
+  name            String
+  email           String?
+  phone           String?
+  notes           String?
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  entries HandLoanEntry[]
+
+  @@index([workspaceId, active])
+  @@index([email])
+}
+
+model HandLoanEntry {
+  id              String            @id @default(uuid())
+  memberId        String
+  member          HandLoanMember    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  kind            HandLoanKind      @default(INFORMAL)
+  direction       HandLoanDirection
+  amount          Decimal           @db.Decimal(14, 2)
+  date            DateTime
+  notes           String?
+  transactionId   String?           @unique
+  transaction     Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  loanId          String?           @unique
+  loan            Loan?             @relation(fields: [loanId], references: [id], onDelete: SetNull)
+  createdByUserId String
+  createdByUser   User              @relation("HandLoanEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([memberId, date])
+}
+
+//
+// INVESTMENTS + REMINDERS
+//
+
+model Investment {
+  id                   String                @id @default(uuid())
+  workspaceId          String
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId          String?
+  ownerUser            User?                 @relation("InvestmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds    String[]              @default([])
+  holderName           String?
+  kind                 InvestmentKind
+  name                 String
+  institution          String?
+  amount               Decimal               @db.Decimal(14, 2)
+  currentValue         Decimal?              @db.Decimal(14, 2)
+  interestRate         Decimal?              @db.Decimal(6, 3)
+  compoundingFrequency CompoundingFrequency?
+  fdStatus             FDStatus?
+  startedAt            DateTime
+  maturityAt           DateTime?
+  notes                String?
+  active               Boolean               @default(true)
+  symbol               String?
+  quantity             Decimal?              @db.Decimal(14, 4)
+  purchasePrice        Decimal?              @db.Decimal(14, 4)
+  dividends            Decimal?              @db.Decimal(14, 2)
+  exchange             String?
+  currency             String?               @default("INR")
+  policyNumber         String?
+  policyType           InsurancePolicyType?
+  insuranceStatus      InsuranceStatus?      @default(ACTIVE)
+  premiumAmount        Decimal?              @db.Decimal(14, 2)
+  premiumFrequency     PremiumFrequency?
+  sumAssured           Decimal?              @db.Decimal(14, 2)
+  nextDueDate          DateTime?
+  nominee              String?
+  riders               String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  transactions Transaction[]
+  reminders    InvestmentReminder[] @relation("ReminderInvestment")
+
+  @@index([workspaceId, kind, active])
+  @@index([workspaceId, ownerUserId])
+}
+
+model InvestmentReminder {
+  id                    String                @id @default(uuid())
+  workspaceId           String
+  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  investmentId          String?
+  investment            Investment?           @relation("ReminderInvestment", fields: [investmentId], references: [id], onDelete: Cascade)
+  loanId                String?
+  loan                  Loan?                 @relation("ReminderLoan", fields: [loanId], references: [id], onDelete: Cascade)
+  leaseScheduleId       String?
+  leaseSchedule         LeasePaymentSchedule? @relation("ReminderLeaseSchedule", fields: [leaseScheduleId], references: [id], onDelete: Cascade)
+  cardStatementId       String?
+  cardStatement         CardStatement?        @relation("ReminderCardStatement", fields: [cardStatementId], references: [id], onDelete: Cascade)
+  kind                  ReminderKind
+  dueDate               DateTime              @db.Date
+  amount                Decimal?              @db.Decimal(14, 2)
+  status                ReminderStatus        @default(UPCOMING)
+  confirmedTransactionId String?              @unique
+  confirmedTransaction  Transaction?          @relation("ReminderConfirmation", fields: [confirmedTransactionId], references: [id], onDelete: SetNull)
+  skippedReason         String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([workspaceId, status, dueDate])
+  @@index([investmentId])
+  @@index([loanId])
+}
+
+//
+// WORKERS
+//
+
+model Worker {
+  id                   String                @id @default(uuid())
+  workspaceId          String
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name                 String
+  phone                String?
+  dailyRate            Decimal?              @db.Decimal(10, 2)
+  settlementCadence    WageSettlementCadence @default(MONTHLY)
+  customCadenceDays    Int?
+  active               Boolean               @default(true)
+  archivedAt           DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  attendance      Attendance[]
+  wagePayments    WagePayment[]
+  wageSettlements WageSettlement[]
+  transactions    Transaction[]
+
+  @@index([workspaceId, active])
+}
+
+model Attendance {
+  id                String          @id @default(uuid())
+  workerId          String
+  worker            Worker          @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  date              DateTime        @db.Date
+  present           Boolean         @default(true)
+  dailyRateOverride Decimal?        @db.Decimal(10, 2)
+  quantity          Decimal?        @db.Decimal(8, 2)
+  rate              Decimal?        @db.Decimal(10, 2)
+  cropBatchId       String?
+  cropBatch         CropBatch?      @relation(fields: [cropBatchId], references: [id], onDelete: SetNull)
+  livestockBatchId  String?
+  livestockBatch    LivestockBatch? @relation(fields: [livestockBatchId], references: [id], onDelete: SetNull)
+  notes             String?
+  createdAt         DateTime        @default(now())
+
+  @@unique([workerId, date])
+  @@index([workerId, date])
+}
+
+model WagePayment {
+  id            String       @id @default(uuid())
+  workerId      String
+  worker        Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  amount        Decimal      @db.Decimal(12, 2)
+  paidAt        DateTime
+  paidByUserId  String
+  paidByUser    User         @relation(fields: [paidByUserId], references: [id], onDelete: Restrict)
+  isBonus       Boolean      @default(false)
+  isAdvance     Boolean      @default(false)
+  notes         String?
+  transactionId String?      @unique
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+
+  @@index([workerId, paidAt])
+}
+
+model WageSettlement {
+  id              String                @id @default(uuid())
+  workerId        String
+  worker          Worker                @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  periodStart     DateTime              @db.Date
+  periodEnd       DateTime              @db.Date
+  cadence         WageSettlementCadence
+  earnedAmount    Decimal               @db.Decimal(12, 2)
+  paidAmount      Decimal               @db.Decimal(12, 2)
+  amountDue       Decimal               @db.Decimal(12, 2)
+  status          WageSettlementStatus  @default(PENDING)
+  settledAt       DateTime?
+  settledByUserId String?
+  settledByUser   User?                 @relation(fields: [settledByUserId], references: [id], onDelete: SetNull)
+  snapshot        Json?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([workerId, periodStart, periodEnd])
+  @@index([workerId, status, periodEnd])
+}
+
+//
+// AUDIT
+//
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action      String
+  entityType  String
+  entityId    String
+  diff        Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([entityType, entityId])
+}
