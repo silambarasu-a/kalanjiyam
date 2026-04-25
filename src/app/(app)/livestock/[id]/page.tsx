@@ -7,6 +7,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -215,7 +216,7 @@ function CreateBatchDialog({
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Start date</span>
-              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <DateInput value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </label>
             <label className="block">
               <span className="text-xs font-medium">Initial count</span>
@@ -400,7 +401,7 @@ function BatchActionDialog({
                 </label>
                 <label className="block">
                   <span className="text-xs font-medium">Date</span>
-                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                  <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
                 </label>
               </div>
               {(eventType === "SALE" || eventType === "PURCHASE") && (
@@ -426,7 +427,7 @@ function BatchActionDialog({
                 </label>
                 <label className="block">
                   <span className="text-xs font-medium">Date</span>
-                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                  <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -456,12 +457,11 @@ function BatchActionDialog({
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Date</span>
-                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                  <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
                 </label>
                 <label className="block">
                   <span className="text-xs font-medium">Next due date</span>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={nextDueDate}
                     onChange={(e) => setNextDueDate(e.target.value)}
                   />

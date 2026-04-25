@@ -8,6 +8,7 @@ import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { BankPicker } from "@/components/ui/bank-picker";
 import {
   Dialog,
   DialogContent,
@@ -155,7 +156,9 @@ function AccountDialog({
   const account = mode?.kind === "edit" ? mode.account : null;
   const showCardForm = mode?.kind === "newCard";
 
-  const [name, setName] = useState("");
+  const [name, setName] = useState(""); // free-form (CASH/WALLET) or read-only assembled (BANK)
+  const [bankName, setBankName] = useState(""); // BankPicker value
+  const [bankTag, setBankTag] = useState(""); // optional suffix, e.g. "Savings"
   const [kind, setKind] = useState<"BANK" | "CASH" | "WALLET">("BANK");
   const [opening, setOpening] = useState("0");
   const [submitting, setSubmitting] = useState(false);
@@ -164,18 +167,47 @@ function AccountDialog({
   useEffect(() => {
     if (!mode) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset on dialog open */
-    setName(account?.name ?? "");
-    setKind((account?.kind === "CARD" ? "BANK" : account?.kind) ?? "BANK");
+    const nextKind = (account?.kind === "CARD" ? "BANK" : account?.kind) ?? "BANK";
+    setKind(nextKind);
+    const existingName = account?.name ?? "";
+    setName(existingName);
+    if (nextKind === "BANK" && existingName) {
+      // Try to split "BankName · Tag" back into pieces. If no "·" separator,
+      // treat the whole string as the bank name (BankPicker enters Other mode).
+      const sep = existingName.indexOf(" · ");
+      if (sep !== -1) {
+        setBankName(existingName.slice(0, sep));
+        setBankTag(existingName.slice(sep + 3));
+      } else {
+        setBankName(existingName);
+        setBankTag("");
+      }
+    } else {
+      setBankName("");
+      setBankTag("");
+    }
     setOpening(String(account?.openingBalance ?? 0));
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [mode, account]);
 
+  // For BANK kind, the assembled name is "BankName" or "BankName · Tag".
+  const assembledName =
+    kind === "BANK"
+      ? bankTag.trim()
+        ? `${bankName.trim()} · ${bankTag.trim()}`
+        : bankName.trim()
+      : name.trim();
+
   async function submit() {
     setError(null);
     setSubmitting(true);
     try {
-      const payload = { name, kind, openingBalance: Number(opening) || 0 };
+      const payload = {
+        name: assembledName,
+        kind,
+        openingBalance: Number(opening) || 0,
+      };
       const res = await fetch(account ? `/api/accounts/${account.id}` : "/api/accounts", {
         method: account ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
@@ -206,16 +238,45 @@ function AccountDialog({
         ) : (
           <>
             <div className="space-y-3">
-              <label className="block">
-                <span className="text-xs font-medium">Name</span>
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  autoFocus
-                  maxLength={80}
-                  placeholder="e.g. SBI Savings"
-                />
-              </label>
+              {kind === "BANK" ? (
+                <>
+                  <label className="block">
+                    <span className="text-xs font-medium">Bank</span>
+                    <BankPicker
+                      value={bankName}
+                      onChange={setBankName}
+                      autoFocus
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Account label{" "}
+                      <span className="text-muted-foreground font-normal">
+                        (optional, e.g. Savings, Salary, Joint)
+                      </span>
+                    </span>
+                    <Input
+                      value={bankTag}
+                      onChange={(e) => setBankTag(e.target.value)}
+                      maxLength={40}
+                      placeholder="Savings"
+                    />
+                  </label>
+                </>
+              ) : (
+                <label className="block">
+                  <span className="text-xs font-medium">Name</span>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    autoFocus
+                    maxLength={80}
+                    placeholder={
+                      kind === "WALLET" ? "e.g. PhonePe wallet" : "e.g. Cash on hand"
+                    }
+                  />
+                </label>
+              )}
               <div>
                 <span className="text-xs font-medium block mb-2">Kind</span>
                 <div className="flex flex-wrap gap-2">
@@ -252,7 +313,7 @@ function AccountDialog({
               <Button variant="ghost" onClick={onClose}>
                 Cancel
               </Button>
-              <Button onClick={submit} disabled={submitting || !name.trim()}>
+              <Button onClick={submit} disabled={submitting || !assembledName}>
                 {account ? "Save" : "Create"}
               </Button>
             </DialogFooter>

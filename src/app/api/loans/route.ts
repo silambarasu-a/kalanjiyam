@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { loanCreateSchema } from "@/lib/validators-domain";
+import { calculateEMI, countPaidEmis } from "@/lib/loan-math";
 import {
   LoanKind,
   LoanSource,
@@ -107,6 +108,68 @@ export async function POST(request: Request) {
       }
     }
 
+    // Server-side fallback: if the client didn't send an explicit emiAmount
+    // but we have principal + rate + tenure, compute the standard
+    // reducing-balance EMI so every loan has a numeric EMI on file.
+    const tenureMonths =
+      data.tenure != null
+        ? data.frequency === "YEARLY"
+          ? data.tenure * 12
+          : data.tenure
+        : null;
+    const computedEmi =
+      data.emiAmount ??
+      (data.interestRate != null && tenureMonths
+        ? calculateEMI(data.principal, data.interestRate, tenureMonths) || null
+        : null);
+
+    // Maturity falls out of startedAt + tenure when the client hasn't
+    // overridden it.
+    const computedMaturity =
+      data.maturityAt
+        ? new Date(data.maturityAt)
+        : tenureMonths
+          ? (() => {
+              const m = new Date(data.startedAt);
+              m.setMonth(m.getMonth() + tenureMonths);
+              return m;
+            })()
+          : null;
+
+    // First due date: startedAt + 1 cycle, advanced past any already-paid
+    // EMIs for `isExisting` loans.
+    const computedNextDueDate =
+      data.nextDueDate
+        ? new Date(data.nextDueDate)
+        : computedEmi && tenureMonths
+          ? (() => {
+              const start = new Date(data.startedAt);
+              let advance = 1;
+              if (
+                data.isExisting &&
+                data.interestRate != null &&
+                data.outstanding != null &&
+                data.outstanding < data.principal
+              ) {
+                const paid = countPaidEmis(
+                  data.principal,
+                  data.interestRate,
+                  computedEmi,
+                  tenureMonths,
+                  data.outstanding
+                );
+                advance = (data.frequency === "YEARLY" ? Math.floor(paid / 12) : paid) + 1;
+              }
+              const next = new Date(start);
+              if (data.frequency === "YEARLY") {
+                next.setFullYear(next.getFullYear() + advance);
+              } else {
+                next.setMonth(next.getMonth() + advance);
+              }
+              return next;
+            })()
+          : null;
+
     const result = await prisma.$transaction(async (tx) => {
       const loan = await tx.loan.create({
         data: {
@@ -120,7 +183,7 @@ export async function POST(request: Request) {
           outstanding: data.outstanding ?? data.principal,
           interestRate: data.interestRate ?? null,
           gstOnInterest: data.gstOnInterest ?? null,
-          emiAmount: data.emiAmount ?? null,
+          emiAmount: computedEmi,
           tenure: data.tenure ?? null,
           frequency: data.frequency ?? "MONTHLY",
           charges: data.charges ?? null,
@@ -128,8 +191,8 @@ export async function POST(request: Request) {
           cardId: data.cardId ?? null,
           isExisting: data.isExisting ?? false,
           startedAt: new Date(data.startedAt),
-          maturityAt: data.maturityAt ? new Date(data.maturityAt) : null,
-          nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : null,
+          maturityAt: computedMaturity,
+          nextDueDate: computedNextDueDate,
           notes: data.notes,
         },
       });

@@ -195,6 +195,7 @@ enum LeaseFrequency {
 }
 
 enum WageSettlementCadence {
+  AS_NEEDED
   WEEKLY
   MONTHLY
   CUSTOM
@@ -1026,7 +1027,7 @@ model Worker {
   name                 String
   phone                String?
   dailyRate            Decimal?              @db.Decimal(10, 2)
-  settlementCadence    WageSettlementCadence @default(MONTHLY)
+  settlementCadence    WageSettlementCadence @default(AS_NEEDED)
   customCadenceDays    Int?
   active               Boolean               @default(true)
   archivedAt           DateTime?

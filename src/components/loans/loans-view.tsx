@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -17,6 +18,7 @@ import {
 import { LoanForm } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { splitPayment } from "@/lib/loan-math";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Loan = {
@@ -27,6 +29,7 @@ type Loan = {
   principal: number;
   outstanding: number;
   interestRate: number | null;
+  gstOnInterest: number | null;
   emiAmount: number | null;
   tenure: number | null;
   startedAt: string;
@@ -214,6 +217,7 @@ function PayDialog({
 
   const today = new Date().toISOString().slice(0, 10);
   const [amount, setAmount] = useState("");
+  const [overrideSplit, setOverrideSplit] = useState(false);
   const [principalPortion, setPrincipalPortion] = useState("");
   const [interestPortion, setInterestPortion] = useState("");
   const [gstPortion, setGstPortion] = useState("");
@@ -223,10 +227,22 @@ function PayDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset on loan change
-  if (loan && amount === "" && loan.emiAmount != null) {
-    // One-time init; subsequent edits keep user input
-  }
+  // Suggested split derived from outstanding · monthly rate. Recomputes as
+  // the user types a different amount.
+  const amt = Number(amount) || (loan?.emiAmount ?? 0);
+  const suggestion =
+    loan && amt > 0
+      ? splitPayment(
+          loan.outstanding,
+          loan.interestRate ?? 0,
+          Math.min(loan.emiAmount ?? amt, amt),
+          loan.gstOnInterest ?? null
+        )
+      : { interest: 0, principal: 0, gst: 0 };
+  const suggestedPrincipal = Math.max(
+    0,
+    Math.round((amt - suggestion.interest - suggestion.gst) * 100) / 100
+  );
 
   async function submit() {
     if (!loan) return;
@@ -249,9 +265,14 @@ function PayDialog({
           amount: amt,
           paidAt,
           accountId,
-          principalPortion: principalPortion ? Number(principalPortion) : null,
-          interestPortion: interestPortion ? Number(interestPortion) : null,
-          gstPortion: gstPortion ? Number(gstPortion) : null,
+          // Send overrides only when the user explicitly opted in. Otherwise
+          // the server auto-splits using the standard reducing-balance rule.
+          principalPortion:
+            overrideSplit && principalPortion ? Number(principalPortion) : null,
+          interestPortion:
+            overrideSplit && interestPortion ? Number(interestPortion) : null,
+          gstPortion:
+            overrideSplit && gstPortion ? Number(gstPortion) : null,
           notes: notes.trim() || undefined,
         }),
       });
@@ -289,33 +310,71 @@ function PayDialog({
               </label>
               <label className="block">
                 <span className="text-xs font-medium">Date</span>
-                <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+                <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
               </label>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <label className="block">
-                <span className="text-xs font-medium">Principal</span>
-                <AmountInput value={principalPortion} onChange={setPrincipalPortion}
-                  placeholder="Optional"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium">Interest</span>
-                <AmountInput value={interestPortion} onChange={setInterestPortion}
-                  placeholder="Optional"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium">GST</span>
-                <AmountInput value={gstPortion} onChange={setGstPortion}
-                  placeholder="Optional"
-                />
-              </label>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              If you split the payment, <strong>outstanding drops by the principal portion only</strong>.
-              If you leave it blank, the full amount reduces outstanding.
-            </p>
+            {amt > 0 && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5">
+                <div className="flex items-center justify-between font-medium text-foreground">
+                  <span>Auto-split (reducing balance)</span>
+                  <button
+                    type="button"
+                    className="text-[11px] font-normal underline text-muted-foreground"
+                    onClick={() => setOverrideSplit((v) => !v)}
+                  >
+                    {overrideSplit ? "Use auto-split" : "Override"}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Principal</span>
+                  <span className="tabular-nums">{formatINR(suggestedPrincipal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Interest</span>
+                  <span className="tabular-nums">{formatINR(suggestion.interest)}</span>
+                </div>
+                {suggestion.gst > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">GST on interest</span>
+                    <span className="tabular-nums">{formatINR(suggestion.gst)}</span>
+                  </div>
+                )}
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  Interest = outstanding × {((loan.interestRate ?? 0) / 12).toFixed(3)}%
+                  {suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""}.
+                  Remaining is principal.
+                </p>
+              </div>
+            )}
+
+            {overrideSplit && (
+              <div className="grid grid-cols-3 gap-2">
+                <label className="block">
+                  <span className="text-xs font-medium">Principal</span>
+                  <AmountInput
+                    value={principalPortion}
+                    onChange={setPrincipalPortion}
+                    placeholder={String(suggestedPrincipal)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Interest</span>
+                  <AmountInput
+                    value={interestPortion}
+                    onChange={setInterestPortion}
+                    placeholder={String(suggestion.interest)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">GST</span>
+                  <AmountInput
+                    value={gstPortion}
+                    onChange={setGstPortion}
+                    placeholder={String(suggestion.gst)}
+                  />
+                </label>
+              </div>
+            )}
             <label className="block">
               <span className="text-xs font-medium">Pay from</span>
               <select

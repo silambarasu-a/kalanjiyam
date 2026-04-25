@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Check, X, Trash2, CalendarDays, Wallet2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -390,7 +391,7 @@ function AttendanceDialog({
         <div className="space-y-3">
           <label className="block">
             <span className="text-xs font-medium">Date</span>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
           </label>
           <div className="flex gap-2">
             <Button
@@ -552,7 +553,7 @@ function PayDialog({
             </label>
             <label className="block">
               <span className="text-xs font-medium">Date</span>
-              <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+              <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
             </label>
           </div>
           <label className="block">

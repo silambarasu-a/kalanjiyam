@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Plus, FileSignature } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -395,11 +396,11 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Start date</span>
-              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <DateInput value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </label>
             <label className="block">
               <span className="text-xs font-medium">End date</span>
-              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <DateInput value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </label>
           </div>
 

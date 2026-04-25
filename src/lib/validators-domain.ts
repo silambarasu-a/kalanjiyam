@@ -235,7 +235,10 @@ export const workerCreateSchema = z.object({
   name: z.string().trim().min(1).max(80),
   phone: z.string().trim().max(20).optional(),
   dailyRate: z.number().nonnegative().optional().nullable(),
-  settlementCadence: z.enum(["WEEKLY", "MONTHLY", "CUSTOM"]).optional().default("MONTHLY"),
+  settlementCadence: z
+    .enum(["AS_NEEDED", "WEEKLY", "MONTHLY", "CUSTOM"])
+    .optional()
+    .default("AS_NEEDED"),
   customCadenceDays: z.number().int().positive().optional().nullable(),
 });
 

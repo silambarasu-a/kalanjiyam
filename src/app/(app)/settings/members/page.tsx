@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FEATURES, type PermissionLevel } from "@/lib/permissions";
+import { formatDate } from "@/lib/utils";
 
 type Member = {
   id: string;
@@ -134,7 +135,7 @@ export default function MembersPage() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate">{i.email}</div>
                   <div className="text-xs text-muted-foreground">
-                    Invited as {i.role} · expires {new Date(i.expiresAt).toLocaleDateString()}
+                    Invited as {i.role} · expires {formatDate(i.expiresAt)}
                   </div>
                 </div>
                 {canManage && (

@@ -18,16 +18,25 @@ import {
 import { formatINR } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
+type Cadence = "AS_NEEDED" | "WEEKLY" | "MONTHLY" | "CUSTOM";
+
 type Worker = {
   id: string;
   name: string;
   phone: string | null;
   dailyRate: number | null;
-  settlementCadence: "WEEKLY" | "MONTHLY" | "CUSTOM";
+  settlementCadence: Cadence;
   customCadenceDays: number | null;
   active: boolean;
   balance: number;
   daysWorked: number;
+};
+
+const CADENCE_LABELS: Record<Cadence, string> = {
+  AS_NEEDED: "Pay as needed",
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+  CUSTOM: "Custom",
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -62,7 +71,7 @@ export default function WorkersPage() {
               <div className="mt-0.5 text-xs text-muted-foreground truncate">
                 {w.phone ? `${w.phone} · ` : ""}
                 {w.dailyRate != null ? `₹${w.dailyRate}/day · ` : ""}
-                {w.settlementCadence}
+                {CADENCE_LABELS[w.settlementCadence]}
                 {w.settlementCadence === "CUSTOM" && w.customCadenceDays
                   ? ` (${w.customCadenceDays}d)`
                   : ""}
@@ -135,7 +144,7 @@ function WorkerDialog({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [dailyRate, setDailyRate] = useState("");
-  const [cadence, setCadence] = useState<"WEEKLY" | "MONTHLY" | "CUSTOM">("MONTHLY");
+  const [cadence, setCadence] = useState<Cadence>("AS_NEEDED");
   const [customDays, setCustomDays] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +155,7 @@ function WorkerDialog({
     setName(worker?.name ?? "");
     setPhone(worker?.phone ?? "");
     setDailyRate(worker?.dailyRate != null ? String(worker.dailyRate) : "");
-    setCadence(worker?.settlementCadence ?? "MONTHLY");
+    setCadence(worker?.settlementCadence ?? "AS_NEEDED");
     setCustomDays(
       worker?.customCadenceDays != null ? String(worker.customCadenceDays) : ""
     );
@@ -204,17 +213,28 @@ function WorkerDialog({
             </label>
           </div>
           <div>
-            <span className="text-xs font-medium block mb-2">Settlement cadence</span>
-            <div className="flex gap-2">
-              {(["WEEKLY", "MONTHLY", "CUSTOM"] as const).map((c) => (
+            <span className="text-xs font-medium block mb-1">Settlement cadence</span>
+            <p className="text-xs text-muted-foreground mb-2">
+              Pick a cadence only if you settle on a fixed schedule. Otherwise leave it as
+              <strong className="text-foreground"> Pay as needed</strong> and pay when you choose.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  { v: "AS_NEEDED", l: "Pay as needed" },
+                  { v: "WEEKLY", l: "Weekly" },
+                  { v: "MONTHLY", l: "Monthly" },
+                  { v: "CUSTOM", l: "Custom" },
+                ] as { v: Cadence; l: string }[]
+              ).map((opt) => (
                 <Button
-                  key={c}
+                  key={opt.v}
                   type="button"
                   size="sm"
-                  variant={cadence === c ? "default" : "outline"}
-                  onClick={() => setCadence(c)}
+                  variant={cadence === opt.v ? "default" : "outline"}
+                  onClick={() => setCadence(opt.v)}
                 >
-                  {c}
+                  {opt.l}
                 </Button>
               ))}
             </div>

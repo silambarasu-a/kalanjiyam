@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -223,7 +224,7 @@ function SettleDialog({
           </label>
           <label className="block">
             <span className="text-xs font-medium">Paid on</span>
-            <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+            <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
           </label>
           <label className="block">
             <span className="text-xs font-medium">Received into account (optional)</span>

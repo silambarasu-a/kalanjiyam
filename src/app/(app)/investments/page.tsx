@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Plus, LineChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -350,8 +351,7 @@ function CreateInvestmentDialog({
             </label>
             <label className="block">
               <span className="text-xs font-medium">Started on</span>
-              <Input
-                type="date"
+              <DateInput
                 value={startedAt}
                 onChange={(e) => setStartedAt(e.target.value)}
               />
@@ -366,8 +366,7 @@ function CreateInvestmentDialog({
               </label>
               <label className="block">
                 <span className="text-xs font-medium">Maturity date</span>
-                <Input
-                  type="date"
+                <DateInput
                   value={maturityAt}
                   onChange={(e) => setMaturityAt(e.target.value)}
                 />
@@ -434,8 +433,7 @@ function CreateInvestmentDialog({
               </label>
               <label className="block">
                 <span className="text-xs font-medium">Next due</span>
-                <Input
-                  type="date"
+                <DateInput
                   value={nextDueDate}
                   onChange={(e) => setNextDueDate(e.target.value)}
                 />

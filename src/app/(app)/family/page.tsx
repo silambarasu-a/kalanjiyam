@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import {
   Dialog,
   DialogContent,
@@ -171,8 +172,10 @@ function FamilyDialog({
             />
           </label>
           <label className="block">
-            <span className="text-xs font-medium">Date of birth</span>
-            <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} />
+            <span className="text-xs font-medium">
+              Date of birth <span className="text-muted-foreground font-normal">(optional)</span>
+            </span>
+            <DateInput value={dob} onChange={(e) => setDob(e.target.value)} />
           </label>
           <label className="block">
             <span className="text-xs font-medium">Notes</span>

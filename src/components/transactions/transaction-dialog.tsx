@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -298,7 +299,7 @@ function IncomeExpenseForm({
         </label>
         <label className="block">
           <span className="text-xs font-medium">Date</span>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
 
@@ -535,7 +536,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         </label>
         <label className="block">
           <span className="text-xs font-medium">Date</span>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
       <label className="block">
@@ -699,7 +700,7 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         </label>
         <label className="block">
           <span className="text-xs font-medium">Date</span>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
 
@@ -880,7 +881,7 @@ function InvestmentForm({
         </label>
         <label className="block">
           <span className="text-xs font-medium">Date</span>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
 
