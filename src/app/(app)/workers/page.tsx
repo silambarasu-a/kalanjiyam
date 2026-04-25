@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
-import { HardHat, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarDays, HardHat, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { formatINR } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
+import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
 type Cadence = "AS_NEEDED" | "WEEKLY" | "MONTHLY" | "CUSTOM";
 
@@ -44,6 +45,9 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 export default function WorkersPage() {
   const { data, isLoading } = useSWR<{ workers: Worker[] }>("/api/workers", fetcher);
   const [editOpen, setEditOpen] = useState<Worker | "new" | null>(null);
+  const [attendanceOpen, setAttendanceOpen] = useState(false);
+
+  const activeWorkers = (data?.workers ?? []).filter((w) => w.active);
 
   return (
     <div className="space-y-6">
@@ -55,9 +59,19 @@ export default function WorkersPage() {
             balance (earnings minus non-bonus payments).
           </p>
         </div>
-        <Button onClick={() => setEditOpen("new")} className="gap-2">
-          <Plus className="h-4 w-4" /> New worker
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setAttendanceOpen(true)}
+            disabled={activeWorkers.length === 0}
+            className="gap-2"
+          >
+            <CalendarDays className="h-4 w-4" /> Mark attendance
+          </Button>
+          <Button onClick={() => setEditOpen("new")} className="gap-2">
+            <Plus className="h-4 w-4" /> New worker
+          </Button>
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -127,6 +141,12 @@ export default function WorkersPage() {
         worker={editOpen === "new" ? null : (editOpen as Worker | null)}
         open={editOpen !== null}
         onClose={() => setEditOpen(null)}
+      />
+
+      <MarkAttendanceModal
+        open={attendanceOpen}
+        onOpenChange={setAttendanceOpen}
+        workers={activeWorkers}
       />
     </div>
   );

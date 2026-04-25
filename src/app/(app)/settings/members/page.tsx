@@ -324,7 +324,7 @@ function PermissionsDialog({
 
   return (
     <Dialog open={member !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="w-[min(32rem,calc(100%-2rem))]">
         <DialogHeader>
           <DialogTitle>Permissions — {member?.name}</DialogTitle>
         </DialogHeader>

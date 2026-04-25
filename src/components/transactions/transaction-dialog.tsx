@@ -8,7 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn, formatINR } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
@@ -82,11 +88,11 @@ export function TransactionDialog() {
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(o) => !o && closeDialog()}>
-        <SheetContent side="bottom" className="max-h-[92vh] overflow-y-auto p-0 rounded-t-2xl shadow-[var(--shadow-popover)]">
-          <SheetHeader className="px-5 pt-4 pb-2">
+        <SheetContent side="bottom">
+          <SheetHeader>
             <SheetTitle>New transaction</SheetTitle>
           </SheetHeader>
-          <div className="px-5 pb-6">{body}</div>
+          {body}
         </SheetContent>
       </Sheet>
     );
@@ -94,7 +100,7 @@ export function TransactionDialog() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && closeDialog()}>
-      <DialogContent className="max-w-lg rounded-2xl shadow-[var(--shadow-popover)] sm:p-6">
+      <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
         <DialogHeader>
           <DialogTitle>New transaction</DialogTitle>
         </DialogHeader>
@@ -335,16 +341,6 @@ function IncomeExpenseForm({
         </select>
       </label>
 
-      <label className="block">
-        <span className="text-xs font-medium">Description</span>
-        <Input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={type === "INCOME" ? "What's it for?" : "What did you spend on?"}
-          maxLength={200}
-        />
-      </label>
-
       {(cropBatches.length > 0 || livestockBatches.length > 0) && (
         <label className="block">
           <span className="text-xs font-medium">Tag to farm batch (optional)</span>
@@ -430,14 +426,24 @@ function IncomeExpenseForm({
         </details>
       )}
 
+      <label className="block">
+        <span className="text-xs font-medium">Description</span>
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder={type === "INCOME" ? "What's it for?" : "What did you spend on?"}
+          maxLength={200}
+        />
+      </label>
+
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      <div className="flex gap-2 justify-end pt-1">
+      <DialogFooter>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : `Save ${type === "INCOME" ? "income" : "expense"}`}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }
@@ -549,12 +555,12 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         />
       </label>
       {error && <p className="text-sm text-destructive">{error}</p>}
-      <div className="flex gap-2 justify-end pt-1">
+      <DialogFooter>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : "Save transfer"}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }
@@ -733,14 +739,14 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      <div className="flex gap-2 justify-end pt-1">
+      <DialogFooter>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : "Save"}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }
@@ -950,14 +956,14 @@ function InvestmentForm({
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      <div className="flex gap-2 justify-end pt-1">
+      <DialogFooter>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : action === "BUY" ? "Record purchase" : "Record sale"}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }

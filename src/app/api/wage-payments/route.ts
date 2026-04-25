@@ -19,24 +19,42 @@ export async function GET(request: Request) {
     const ctx = await requireWorkspace("wages", "read");
     const url = new URL(request.url);
     const workerId = url.searchParams.get("workerId");
+    const month = url.searchParams.get("month");
+    let dateFilter: { gte: Date; lt: Date } | undefined;
+    if (month) {
+      if (!/^\d{4}-\d{2}$/.test(month)) {
+        return NextResponse.json({ error: "month must be YYYY-MM" }, { status: 400 });
+      }
+      const [y, m] = month.split("-").map(Number);
+      dateFilter = {
+        gte: new Date(Date.UTC(y, m - 1, 1)),
+        lt: new Date(Date.UTC(y, m, 1)),
+      };
+    }
     const payments = await prisma.wagePayment.findMany({
       where: {
         worker: { workspaceId: ctx.workspaceId },
         ...(workerId ? { workerId } : {}),
+        ...(dateFilter ? { paidAt: dateFilter } : {}),
       },
       orderBy: { paidAt: "desc" },
       take: 100,
-      include: { worker: { select: { id: true, name: true } } },
+      include: {
+        worker: { select: { id: true, name: true } },
+        paidByUser: { select: { id: true, name: true } },
+      },
     });
     return NextResponse.json({
       payments: payments.map((p) => ({
         id: p.id,
+        workerId: p.workerId,
         amount: Number(p.amount),
         paidAt: p.paidAt.toISOString(),
         isBonus: p.isBonus,
         isAdvance: p.isAdvance,
         notes: p.notes,
         worker: p.worker,
+        paidByUser: p.paidByUser,
         transactionId: p.transactionId,
       })),
     });

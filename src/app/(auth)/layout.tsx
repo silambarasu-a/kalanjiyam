@@ -4,7 +4,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="flex items-center justify-center gap-2 text-2xl font-semibold tracking-tight text-foreground">
-            <span className="h-7 w-1.5 bg-primary rounded-full" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="" className="h-9 w-9" />
             Kalanjiyam
           </div>
           <div className="mt-1 text-xs text-muted-foreground">

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { useSession, signOut } from "next-auth/react";
 
 const IDLE_MS = 2 * 60 * 1000; // 2 min of no activity -> lock
 const TICK_MS = 5_000;
@@ -13,6 +13,17 @@ export function SessionGuard() {
   const pathname = usePathname();
   const lastActivity = useRef<number>(0);
   const hasLocked = useRef(false);
+  const lockedThisMount = useRef(false);
+  const updateRef = useRef(update);
+
+  // Keep the ref pointing at the latest `update` without depending on its
+  // identity in the idle effect. NextAuth recreates `update` on every session
+  // refetch (refetchInterval=60); listing it as a dep would tear down and
+  // restart the idle timer every minute and the user would never reach the
+  // 2-minute threshold.
+  useEffect(() => {
+    updateRef.current = update;
+  }, [update]);
 
   const isAuthed = !!session?.user;
   const isLocked = !!session?.reverifyRequiredAt;
@@ -29,6 +40,16 @@ export function SessionGuard() {
     const callback = encodeURIComponent(pathname);
     router.replace(`/login?callbackUrl=${callback}`);
   }, [status, pathname, router]);
+
+  // If we mount into an already-locked session, the user reloaded the page
+  // (or opened a new tab) while the lock dialog was up. Sign them out instead
+  // of letting them re-enter their password to bypass the lock.
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (!isLocked) return;
+    if (lockedThisMount.current) return;
+    void signOut({ callbackUrl: "/login" });
+  }, [status, isLocked]);
 
   // Idle detector. Depends only on stable booleans so refetchInterval-driven
   // session refreshes don't reset the activity timer.
@@ -49,7 +70,8 @@ export function SessionGuard() {
       const idle = Date.now() - lastActivity.current;
       if (idle >= IDLE_MS && !hasLocked.current) {
         hasLocked.current = true;
-        void update({ lock: true });
+        lockedThisMount.current = true;
+        void updateRef.current({ lock: true });
       }
     }, TICK_MS);
 
@@ -57,7 +79,7 @@ export function SessionGuard() {
       for (const e of events) window.removeEventListener(e, bump);
       clearInterval(tick);
     };
-  }, [isAuthed, isLocked, update]);
+  }, [isAuthed, isLocked]);
 
   return null;
 }

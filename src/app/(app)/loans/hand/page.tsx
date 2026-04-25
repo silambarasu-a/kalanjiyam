@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Plus, HandCoins, Pencil, Trash2, ArrowDownLeft, ArrowUpRight } from "lucide-react";
@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LoanForm } from "@/components/loans/loan-form";
+import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
@@ -44,6 +44,8 @@ export default function HandLoansPage() {
   const [editMember, setEditMember] = useState<Member | "new" | null>(null);
   const [entryMember, setEntryMember] = useState<Member | null>(null);
   const [formalOpen, setFormalOpen] = useState(false);
+  const loanFormRef = useRef<LoanFormHandle>(null);
+  const [loanFormBusy, setLoanFormBusy] = useState(false);
 
   const totalsOut = (data?.members ?? []).reduce(
     (s, m) => s + Math.max(0, m.balance),
@@ -190,7 +192,7 @@ export default function HandLoansPage() {
         onClose={() => setEntryMember(null)}
       />
       <Dialog open={formalOpen} onOpenChange={(o) => !o && setFormalOpen(false)}>
-        <DialogContent>
+        <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
           <DialogHeader>
             <DialogTitle>Formal hand loan</DialogTitle>
           </DialogHeader>
@@ -198,10 +200,19 @@ export default function HandLoansPage() {
             Formal hand loans behave like bank loans — with interest and an EMI schedule.
           </p>
           <LoanForm
+            ref={loanFormRef}
             source="HAND_FORMAL"
             onSaved={() => setFormalOpen(false)}
-            onCancel={() => setFormalOpen(false)}
+            onSubmittingChange={setLoanFormBusy}
           />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setFormalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => loanFormRef.current?.submit()} disabled={loanFormBusy}>
+              {loanFormBusy ? "Saving…" : "Create"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

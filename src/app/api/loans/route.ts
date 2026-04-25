@@ -60,6 +60,7 @@ export async function GET(request: Request) {
         tenure: l.tenure,
         frequency: l.frequency,
         charges: l.charges == null ? null : Number(l.charges),
+        chargeBreakdown: l.chargeBreakdown ?? null,
         account: l.account,
         card: l.card,
         isExisting: l.isExisting,
@@ -170,6 +171,14 @@ export async function POST(request: Request) {
             })()
           : null;
 
+    // If the client supplied a per-line breakdown, sum it; otherwise fall
+    // back to the explicit `charges` total. This is the amount that banks
+    // deduct upfront — processing fee, GST, stamp duty, insurance, etc.
+    const breakdown = data.chargeBreakdown ?? [];
+    const chargesTotal = breakdown.length
+      ? Math.round(breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100) / 100
+      : data.charges ?? 0;
+
     const result = await prisma.$transaction(async (tx) => {
       const loan = await tx.loan.create({
         data: {
@@ -186,7 +195,8 @@ export async function POST(request: Request) {
           emiAmount: computedEmi,
           tenure: data.tenure ?? null,
           frequency: data.frequency ?? "MONTHLY",
-          charges: data.charges ?? null,
+          charges: chargesTotal > 0 ? chargesTotal : null,
+          chargeBreakdown: breakdown.length ? breakdown : undefined,
           accountId: data.accountId ?? null,
           cardId: data.cardId ?? null,
           isExisting: data.isExisting ?? false,
@@ -197,8 +207,11 @@ export async function POST(request: Request) {
         },
       });
 
-      // BANK disbursement — if a payout account is linked and loan isn't flagged
-      // as existing, money arrives into that account as INCOME kind=LOAN_PAYMENT.
+      // BANK disbursement — full principal is credited to the account as
+      // INCOME, then upfront charges (processing fee, stamp duty, GST,
+      // insurance, etc.) post as a separate EXPENSE. Net account change is
+      // (principal − charges), matching how banks show it on the passbook
+      // and keeping fees discoverable as real expenses in reports.
       if (!data.isExisting && data.source === "BANK" && data.accountId) {
         await tx.transaction.create({
           data: {
@@ -214,6 +227,27 @@ export async function POST(request: Request) {
             createdByUserId: ctx.userId,
           },
         });
+
+        if (chargesTotal > 0) {
+          const chargeLabel =
+            breakdown.length > 0
+              ? breakdown.map((c) => c.label).join(", ")
+              : "Processing & other charges";
+          await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: TransactionType.EXPENSE,
+              kind: TransactionKind.OTHER_EXPENSE,
+              amount: chargesTotal,
+              description: `Loan charges · ${data.lender} · ${chargeLabel}`,
+              date: new Date(data.startedAt),
+              accountId: data.accountId,
+              loanId: loan.id,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+        }
       }
 
       // CARD_EMI — the underlying purchase is already an expense on the card

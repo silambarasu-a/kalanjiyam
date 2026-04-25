@@ -20,7 +20,8 @@ export default async function InvitePage({
       <div className="w-full max-w-md bg-card border border-border rounded-lg p-6 shadow-sm">
         <div className="mb-5 text-center">
           <div className="flex items-center justify-center gap-1.5 text-sm font-semibold tracking-tight text-foreground">
-            <span className="h-4 w-1 bg-primary rounded-full" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="" className="h-5 w-5" />
             Kalanjiyam
           </div>
           <h1 className="mt-2 text-xl font-semibold">Workspace invite</h1>

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
-import { attendanceUpsertSchema } from "@/lib/validators-domain";
+import {
+  attendanceBatchSchema,
+  attendanceUpsertSchema,
+} from "@/lib/validators-domain";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -16,31 +19,39 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const workerId = url.searchParams.get("workerId");
     const month = url.searchParams.get("month"); // YYYY-MM
-    if (!workerId) {
-      return NextResponse.json({ error: "workerId required" }, { status: 400 });
+    if (!workerId && !month) {
+      return NextResponse.json({ error: "workerId or month required" }, { status: 400 });
     }
-    const worker = await prisma.worker.findUnique({ where: { id: workerId } });
-    if (!worker || worker.workspaceId !== ctx.workspaceId) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (workerId) {
+      const worker = await prisma.worker.findUnique({ where: { id: workerId } });
+      if (!worker || worker.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
     }
     let dateFilter: { gte: Date; lt: Date } | undefined;
     if (month) {
-      const [y, m] = month.split("-").map(Number);
-      if (y && m) {
-        dateFilter = {
-          gte: new Date(Date.UTC(y, m - 1, 1)),
-          lt: new Date(Date.UTC(y, m, 1)),
-        };
+      if (!/^\d{4}-\d{2}$/.test(month)) {
+        return NextResponse.json({ error: "month must be YYYY-MM" }, { status: 400 });
       }
+      const [y, m] = month.split("-").map(Number);
+      dateFilter = {
+        gte: new Date(Date.UTC(y, m - 1, 1)),
+        lt: new Date(Date.UTC(y, m, 1)),
+      };
     }
     const rows = await prisma.attendance.findMany({
-      where: { workerId, ...(dateFilter ? { date: dateFilter } : {}) },
+      where: {
+        worker: { workspaceId: ctx.workspaceId },
+        ...(workerId ? { workerId } : {}),
+        ...(dateFilter ? { date: dateFilter } : {}),
+      },
       orderBy: { date: "desc" },
-      take: 400,
+      take: workerId ? 400 : 2000,
     });
     return NextResponse.json({
       attendance: rows.map((a) => ({
         id: a.id,
+        workerId: a.workerId,
         date: a.date.toISOString(),
         present: a.present,
         dailyRateOverride: a.dailyRateOverride == null ? null : Number(a.dailyRateOverride),
@@ -56,11 +67,60 @@ export async function GET(request: Request) {
   }
 }
 
-// Upsert — one attendance row per (workerId, date).
+// Upsert — one attendance row per (workerId, date). Accepts either:
+//   • single shape: { workerId, date, present, ... }
+//   • batch shape:  { date, entries: [{ workerId, present, dailyRateOverride? }], cropBatchId?, livestockBatchId?, notes? }
+// The bulk-attendance modal posts one batch per selected date.
 export async function POST(request: Request) {
   try {
     const ctx = await requireWorkspace("wages", "write");
     const body = await request.json();
+
+    if (body && typeof body === "object" && "entries" in body) {
+      const parsed = attendanceBatchSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+      }
+      const ids = parsed.data.entries.map((e) => e.workerId);
+      const valid = await prisma.worker.findMany({
+        where: { id: { in: ids }, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      const validSet = new Set(valid.map((w) => w.id));
+      for (const e of parsed.data.entries) {
+        if (!validSet.has(e.workerId)) {
+          return NextResponse.json({ error: "Worker not in workspace" }, { status: 400 });
+        }
+      }
+      const date = new Date(parsed.data.date);
+      const results = await prisma.$transaction(
+        parsed.data.entries.map((e) =>
+          prisma.attendance.upsert({
+            where: { workerId_date: { workerId: e.workerId, date } },
+            update: {
+              present: e.present,
+              dailyRateOverride: e.dailyRateOverride ?? null,
+              quantity: null,
+              rate: null,
+              cropBatchId: parsed.data.cropBatchId ?? null,
+              livestockBatchId: parsed.data.livestockBatchId ?? null,
+              notes: parsed.data.notes,
+            },
+            create: {
+              workerId: e.workerId,
+              date,
+              present: e.present,
+              dailyRateOverride: e.dailyRateOverride ?? null,
+              cropBatchId: parsed.data.cropBatchId ?? null,
+              livestockBatchId: parsed.data.livestockBatchId ?? null,
+              notes: parsed.data.notes,
+            },
+          })
+        )
+      );
+      return NextResponse.json({ count: results.length });
+    }
+
     const parsed = attendanceUpsertSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });

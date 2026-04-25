@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LoanForm } from "@/components/loans/loan-form";
+import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
 import { splitPayment } from "@/lib/loan-math";
@@ -66,6 +66,8 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [payLoan, setPayLoan] = useState<Loan | null>(null);
+  const loanFormRef = useRef<LoanFormHandle>(null);
+  const [loanFormBusy, setLoanFormBusy] = useState(false);
 
   const activeOutstanding = (data?.loans ?? [])
     .filter((l) => l.active)
@@ -180,17 +182,26 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
       </div>
 
       <Dialog open={createOpen} onOpenChange={(o) => !o && setCreateOpen(false)}>
-        <DialogContent>
+        <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
           <DialogHeader>
             <DialogTitle>
               {source === "CARD_EMI" ? "Convert a purchase to EMI" : "New loan"}
             </DialogTitle>
           </DialogHeader>
           <LoanForm
+            ref={loanFormRef}
             source={source}
             onSaved={() => setCreateOpen(false)}
-            onCancel={() => setCreateOpen(false)}
+            onSubmittingChange={setLoanFormBusy}
           />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => loanFormRef.current?.submit()} disabled={loanFormBusy}>
+              {loanFormBusy ? "Saving…" : "Create"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -227,8 +238,8 @@ function PayDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Suggested split derived from outstanding · monthly rate. Recomputes as
-  // the user types a different amount.
+  // Suggested split using standard reducing-balance: interest = outstanding
+  // × monthlyRate, GST (card EMI) on top, remainder is principal.
   const amt = Number(amount) || (loan?.emiAmount ?? 0);
   const suggestion =
     loan && amt > 0
@@ -291,7 +302,7 @@ function PayDialog({
 
   return (
     <Dialog open={loan !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
         <DialogHeader>
           <DialogTitle>Record EMI payment</DialogTitle>
         </DialogHeader>
@@ -340,7 +351,8 @@ function PayDialog({
                   </div>
                 )}
                 <p className="text-[10px] text-muted-foreground pt-1">
-                  Interest = outstanding × {((loan.interestRate ?? 0) / 12).toFixed(3)}%
+                  Interest = outstanding ×{" "}
+                  {((loan.interestRate ?? 0) / 12).toFixed(3)}%
                   {suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""}.
                   Remaining is principal.
                 </p>
