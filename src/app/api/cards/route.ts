@@ -9,7 +9,7 @@ import {
 import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { cardCreateSchema } from "@/lib/validators-domain";
-import { computeAccountBalance } from "@/lib/account-balance";
+import { computeAvailableLimitForPool } from "@/lib/card-available-limit";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -17,20 +17,6 @@ function error(err: unknown) {
   }
   console.error("[cards]", err);
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
-}
-
-async function computeCardAvailableLimit(cardId: string, accountId: string | null, creditLimit: number | null) {
-  if (creditLimit == null) return null;
-  const [balance, emiAgg] = await Promise.all([
-    accountId ? computeAccountBalance(accountId) : Promise.resolve(null),
-    prisma.loan.aggregate({
-      where: { cardId, source: "CARD_EMI", active: true },
-      _sum: { outstanding: true },
-    }),
-  ]);
-  const outstandingStatement = balance ? balance.balance : 0;
-  const outstandingEmi = Number(emiAgg._sum.outstanding ?? 0);
-  return creditLimit - outstandingEmi - Math.max(0, outstandingStatement);
 }
 
 export async function GET() {
@@ -48,36 +34,73 @@ export async function GET() {
         ownerMember: { select: { id: true, name: true } },
         account: { select: { id: true, creditLimit: true } },
         parentAccount: { select: { id: true, name: true } },
+        parentCard: {
+          select: {
+            id: true,
+            name: true,
+            accountId: true,
+            account: { select: { creditLimit: true } },
+          },
+        },
+        childCards: { select: { id: true, accountId: true } },
       },
     });
 
     const availableLimits = await Promise.all(
       cards.map((c) => {
-        const cl = c.account?.creditLimit == null ? null : Number(c.account.creditLimit);
-        return c.kind === "CREDIT"
-          ? computeCardAvailableLimit(c.id, c.accountId, cl)
-          : Promise.resolve(null);
+        if (c.kind !== "CREDIT") return Promise.resolve(null);
+        const isSharedChild = c.limitMode === "SHARED" && c.parentCard;
+        const limitSource = isSharedChild
+          ? c.parentCard?.account?.creditLimit
+          : c.account?.creditLimit;
+        const cl = limitSource == null ? null : Number(limitSource);
+        // Pool members: for a sub-card, parent + all siblings; for a parent
+        // with SHARED children, self + children; otherwise just self.
+        const poolCardIds: string[] = [];
+        const poolAccountIds: string[] = [];
+        if (isSharedChild && c.parentCard) {
+          poolCardIds.push(c.parentCard.id, c.id);
+          if (c.parentCard.accountId) poolAccountIds.push(c.parentCard.accountId);
+          if (c.accountId) poolAccountIds.push(c.accountId);
+        } else {
+          poolCardIds.push(c.id);
+          if (c.accountId) poolAccountIds.push(c.accountId);
+          for (const ch of c.childCards) {
+            poolCardIds.push(ch.id);
+            if (ch.accountId) poolAccountIds.push(ch.accountId);
+          }
+        }
+        return computeAvailableLimitForPool({ poolCardIds, poolAccountIds, creditLimit: cl });
       })
     );
 
     return NextResponse.json({
-      cards: cards.map((c, i) => ({
-        id: c.id,
-        name: c.name,
-        kind: c.kind,
-        network: c.network,
-        supportsUpi: c.supportsUpi,
-        last4: c.last4,
-        limitMode: c.limitMode,
-        active: c.active,
-        ownerUser: c.ownerUser,
-        ownerMember: c.ownerMember,
-        parentAccount: c.parentAccount,
-        accountId: c.accountId,
-        creditLimit: c.account?.creditLimit == null ? null : Number(c.account.creditLimit),
-        availableLimit: availableLimits[i],
-        sharedWithUserIds: c.sharedWithUserIds,
-      })),
+      cards: cards.map((c, i) => {
+        const isSharedChild = c.limitMode === "SHARED" && c.parentCard;
+        const effectiveLimit = isSharedChild
+          ? c.parentCard?.account?.creditLimit
+          : c.account?.creditLimit;
+        return {
+          id: c.id,
+          name: c.name,
+          kind: c.kind,
+          network: c.network,
+          supportsUpi: c.supportsUpi,
+          last4: c.last4,
+          limitMode: c.limitMode,
+          active: c.active,
+          ownerUser: c.ownerUser,
+          ownerMember: c.ownerMember,
+          parentAccount: c.parentAccount,
+          parentCard: c.parentCard
+            ? { id: c.parentCard.id, name: c.parentCard.name }
+            : null,
+          accountId: c.accountId,
+          creditLimit: effectiveLimit == null ? null : Number(effectiveLimit),
+          availableLimit: availableLimits[i],
+          sharedWithUserIds: c.sharedWithUserIds,
+        };
+      }),
     });
   } catch (err) {
     return error(err);
@@ -98,8 +121,28 @@ export async function POST(request: Request) {
     ]);
     await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
     // For a CREDIT card we also create a companion Account (kind=CARD) to track
-    // its outstanding balance and statements. For DEBIT cards, the user must
-    // pick an existing BANK account to link (parentAccountId).
+    // statement spend. SHARED sub-cards still get their own companion (because
+    // accountId is unique on Card) but with creditLimit=null — the pool limit
+    // lives on the parent's companion account.
+    const isSharedChild =
+      parsed.data.kind === "CREDIT" &&
+      parsed.data.limitMode === "SHARED" &&
+      !!parsed.data.parentCardId;
+    if (parsed.data.kind === "CREDIT" && parsed.data.limitMode === "SHARED" && !parsed.data.parentCardId) {
+      return NextResponse.json(
+        { error: "Pick a parent card for a shared sub-card." },
+        { status: 400 },
+      );
+    }
+    if (parsed.data.parentCardId) {
+      const parent = await prisma.card.findUnique({
+        where: { id: parsed.data.parentCardId },
+        select: { workspaceId: true, kind: true },
+      });
+      if (!parent || parent.workspaceId !== ctx.workspaceId || parent.kind !== "CREDIT") {
+        return NextResponse.json({ error: "Invalid parent card." }, { status: 400 });
+      }
+    }
     const result = await prisma.$transaction(async (tx) => {
       let companionAccountId: string | null = parsed.data.accountId ?? null;
       if (parsed.data.kind === "CREDIT" && !companionAccountId) {
@@ -109,7 +152,7 @@ export async function POST(request: Request) {
             kind: "CARD",
             name: parsed.data.name,
             openingBalance: 0,
-            creditLimit: parsed.data.creditLimit ?? null,
+            creditLimit: isSharedChild ? null : parsed.data.creditLimit ?? null,
             statementDate: parsed.data.statementDate ?? null,
             gracePeriod: parsed.data.gracePeriod ?? null,
             ownerUserId: parsed.data.ownerUserId ?? ctx.userId,
@@ -128,6 +171,7 @@ export async function POST(request: Request) {
           supportsUpi: parsed.data.supportsUpi ?? false,
           last4: parsed.data.last4 ?? null,
           parentAccountId: parsed.data.parentAccountId ?? null,
+          parentCardId: isSharedChild ? parsed.data.parentCardId! : null,
           accountId: companionAccountId,
           limitMode: parsed.data.limitMode ?? "SOLO",
           ownerUserId: parsed.data.ownerUserId ?? ctx.userId,

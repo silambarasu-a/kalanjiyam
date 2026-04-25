@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { cn, formatINR } from "@/lib/utils";
+import { cn, formatINR, buildAccountOption } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import {
   useTransactionDialog,
@@ -29,6 +30,7 @@ type Account = {
   name: string;
   kind: "BANK" | "CASH" | "CARD" | "WALLET";
   balance: number;
+  availableLimit: number | null;
 };
 type Card = {
   id: string;
@@ -44,6 +46,7 @@ type Category = {
   types: string[];
 };
 type FamilyMember = { id: string; name: string };
+type Worker = { id: string; name: string; dailyRate: number | null; balance: number };
 type CropBatch = {
   id: string;
   name: string;
@@ -136,6 +139,10 @@ function DialogBody({
     "/api/livestock-batches?active=true",
     fetcher
   );
+  const { data: workersData } = useSWR<{ workers: Worker[] }>(
+    type === "EXPENSE" ? "/api/workers" : null,
+    fetcher,
+  );
 
   const accounts = accountsData?.accounts ?? [];
   const cards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT" && c.accountId);
@@ -143,6 +150,7 @@ function DialogBody({
   const family = familyData?.members ?? [];
   const cropBatches = cropBatchesData?.batches ?? [];
   const livestockBatches = livestockBatchesData?.batches ?? [];
+  const workers = (workersData?.workers ?? []).filter((w) => w);
 
   return (
     <div>
@@ -185,6 +193,7 @@ function DialogBody({
           family={family}
           cropBatches={cropBatches}
           livestockBatches={livestockBatches}
+          workers={workers}
           onClose={onClose}
         />
       )}
@@ -200,6 +209,7 @@ function IncomeExpenseForm({
   family,
   cropBatches,
   livestockBatches,
+  workers,
   onClose,
 }: {
   type: "INCOME" | "EXPENSE";
@@ -209,6 +219,7 @@ function IncomeExpenseForm({
   family: FamilyMember[];
   cropBatches: CropBatch[];
   livestockBatches: LivestockBatch[];
+  workers: Worker[];
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -222,28 +233,42 @@ function IncomeExpenseForm({
   const [tagSource, setTagSource] = useState<string>(""); // "" | "crop:<id>" | "livestock:<id>"
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Wage-mode state — active when category.name === "Wage" on EXPENSE.
+  const [workerIds, setWorkerIds] = useState<string[]>([]);
+  const [splitMode, setSplitMode] = useState<"equal" | "custom">("equal");
+  const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
 
+  const selectedCategory = categories.find((c) => c.id === categoryId);
+  const isWageMode =
+    type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
+
+  const amtNum = parseFloat(amount) || 0;
   const sources = useMemo(() => {
-    const items: { value: string; label: string; sub: string }[] = [];
+    const items: { value: string; label: string; sub: string; disabled: boolean }[] = [];
     for (const a of accounts) {
       if (a.kind === "CARD") continue; // companion cards are surfaced via Cards
+      const insufficient = type === "EXPENSE" && amtNum > 0 && amtNum > a.balance;
       items.push({
         value: `account:${a.id}`,
         label: a.name,
         sub: `${a.kind} · ${formatINR(a.balance)}`,
+        disabled: insufficient,
       });
     }
     if (type === "EXPENSE") {
       for (const c of cards) {
+        const avail = c.availableLimit;
+        const insufficient = avail != null && amtNum > 0 && amtNum > avail;
         items.push({
           value: `card:${c.id}`,
           label: c.name,
-          sub: `Credit · ${c.availableLimit != null ? formatINR(c.availableLimit) : "—"} avail`,
+          sub: `Credit · ${avail != null ? formatINR(avail) : "—"} avail`,
+          disabled: insufficient,
         });
       }
     }
     return items;
-  }, [accounts, cards, type]);
+  }, [accounts, cards, type, amtNum]);
 
   async function submit() {
     setError(null);
@@ -256,9 +281,70 @@ function IncomeExpenseForm({
       setError("Pick an account or card");
       return;
     }
+    const [kind, sid] = paymentSource.split(":");
+
+    // Wage mode → fan out to /api/wage-payments, one call per worker.
+    if (isWageMode) {
+      if (workerIds.length === 0) {
+        setError("Pick at least one worker");
+        return;
+      }
+      const perWorker: Record<string, number> = {};
+      if (splitMode === "equal") {
+        const share = amt / workerIds.length;
+        for (const wid of workerIds) perWorker[wid] = share;
+      } else {
+        let sum = 0;
+        for (const wid of workerIds) {
+          const v = parseFloat(customAmounts[wid] || "0") || 0;
+          if (v <= 0) {
+            setError("Enter an amount for every selected worker");
+            return;
+          }
+          perWorker[wid] = v;
+          sum += v;
+        }
+        if (Math.abs(sum - amt) > 0.01) {
+          setError("Worker amounts must add up to the total");
+          return;
+        }
+      }
+      setSubmitting(true);
+      try {
+        const results = await Promise.all(
+          workerIds.map((wid) =>
+            fetch("/api/wage-payments", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                workerId: wid,
+                amount: perWorker[wid],
+                paidAt: date,
+                accountId: kind === "account" ? sid : undefined,
+                cardId: kind === "card" ? sid : undefined,
+                notes: description.trim() || undefined,
+              }),
+            }).then(async (r) => ({ ok: r.ok, body: await r.json().catch(() => null) })),
+          ),
+        );
+        const failed = results.find((r) => !r.ok);
+        if (failed) {
+          setError(failed.body?.error ?? "One or more wage payments failed");
+        } else {
+          toast.success(`Paid ${workerIds.length} worker${workerIds.length === 1 ? "" : "s"}`);
+          await mutateBalances();
+          onClose();
+        }
+      } catch {
+        setError("Network error");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const [kind, sid] = paymentSource.split(":");
       const payload: Record<string, unknown> = {
         type,
         amount: amt,
@@ -310,69 +396,83 @@ function IncomeExpenseForm({
         </label>
       </div>
 
-      <label className="block">
-        <span className="text-xs font-medium">{type === "INCOME" ? "To account" : "Pay from"}</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={paymentSource}
-          onChange={(e) => setPaymentSource(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {sources.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label} ({s.sub})
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">
+            {type === "INCOME" ? "To account" : "Pay from"}
+          </span>
+          <div className="mt-1">
+            <NativeSelect
+              value={paymentSource}
+              onChange={setPaymentSource}
+              options={sources.map((s) => ({
+                value: s.value,
+                label: s.label,
+                hint: s.sub,
+                disabled: s.disabled,
+              }))}
+            />
+          </div>
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">Category</span>
+          <div className="mt-1">
+            <NativeSelect
+              value={categoryId}
+              onChange={setCategoryId}
+              placeholder="— optional —"
+              options={categories.map((c) => ({
+                value: c.id,
+                label: c.group ? `${c.group} · ${c.name}` : c.name,
+              }))}
+            />
+          </div>
+        </label>
+      </div>
 
-      <label className="block">
-        <span className="text-xs font-medium">Category</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={categoryId}
-          onChange={(e) => setCategoryId(e.target.value)}
-        >
-          <option value="">— optional —</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.group ? `${c.group} · ${c.name}` : c.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {isWageMode && (
+        <WorkersPanel
+          workers={workers}
+          totalAmount={amtNum}
+          workerIds={workerIds}
+          setWorkerIds={setWorkerIds}
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
+          customAmounts={customAmounts}
+          setCustomAmounts={setCustomAmounts}
+        />
+      )}
 
       {(cropBatches.length > 0 || livestockBatches.length > 0) && (
         <label className="block">
           <span className="text-xs font-medium">Tag to farm batch (optional)</span>
-          <select
-            className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-            value={tagSource}
-            onChange={(e) => setTagSource(e.target.value)}
-          >
-            <option value="">— none —</option>
-            {cropBatches.length > 0 && (
-              <optgroup label="Crops">
-                {cropBatches.map((b) => (
-                  <option key={b.id} value={`crop:${b.id}`}>
-                    {b.crop.name} · {b.name} ({b.status})
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {livestockBatches.length > 0 && (
-              <optgroup label="Livestock">
-                {livestockBatches.map((b) => (
-                  <option key={b.id} value={`livestock:${b.id}`}>
-                    {b.livestock.name} · {b.name} ({b.currentCount} head)
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
+          <div className="mt-1">
+            <NativeSelect
+              value={tagSource}
+              onChange={setTagSource}
+              placeholder="— none —"
+              options={
+                [
+                  cropBatches.length > 0 && {
+                    label: "Crops",
+                    options: cropBatches.map((b) => ({
+                      value: `crop:${b.id}`,
+                      label: `${b.crop.name} · ${b.name} (${b.status})`,
+                    })),
+                  },
+                  livestockBatches.length > 0 && {
+                    label: "Livestock",
+                    options: livestockBatches.map((b) => ({
+                      value: `livestock:${b.id}`,
+                      label: `${b.livestock.name} · ${b.name} (${b.currentCount} head)`,
+                    })),
+                  },
+                ].filter(Boolean) as NativeSelectGroup[]
+              }
+            />
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Tags this transaction to a crop or livestock batch for per-batch P&amp;L. Leases land
-            in M11.
+            Tags this transaction to a crop or livestock batch for per-batch P&amp;L.
           </p>
         </label>
       )}
@@ -383,18 +483,12 @@ function IncomeExpenseForm({
             Spent for a family member?
           </summary>
           <div className="px-4 pb-4 pt-2 space-y-2">
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
+            <NativeSelect
               value={beneficiaryMemberId}
-              onChange={(e) => setBeneficiaryMemberId(e.target.value)}
-            >
-              <option value="">— pick member —</option>
-              {family.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
+              onChange={setBeneficiaryMemberId}
+              placeholder="— pick member —"
+              options={family.map((m) => ({ value: m.id, label: m.name }))}
+            />
             {beneficiaryMemberId && (
               <div className="flex gap-2 flex-wrap">
                 {(
@@ -441,10 +535,146 @@ function IncomeExpenseForm({
 
       <DialogFooter>
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={submitting}>
-          {submitting ? "Saving…" : `Save ${type === "INCOME" ? "income" : "expense"}`}
+        <Button
+          onClick={submit}
+          disabled={
+            submitting ||
+            (isWageMode && (workerIds.length === 0 || amtNum <= 0))
+          }
+        >
+          {submitting
+            ? "Saving…"
+            : isWageMode
+              ? `Pay ${workerIds.length || ""} worker${workerIds.length === 1 ? "" : "s"}`.trim()
+              : `Save ${type === "INCOME" ? "income" : "expense"}`}
         </Button>
       </DialogFooter>
+    </div>
+  );
+}
+
+function WorkersPanel({
+  workers,
+  totalAmount,
+  workerIds,
+  setWorkerIds,
+  splitMode,
+  setSplitMode,
+  customAmounts,
+  setCustomAmounts,
+}: {
+  workers: Worker[];
+  totalAmount: number;
+  workerIds: string[];
+  setWorkerIds: React.Dispatch<React.SetStateAction<string[]>>;
+  splitMode: "equal" | "custom";
+  setSplitMode: React.Dispatch<React.SetStateAction<"equal" | "custom">>;
+  customAmounts: Record<string, string>;
+  setCustomAmounts: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}) {
+  const sum = workerIds.reduce((s, wid) => s + (parseFloat(customAmounts[wid] || "0") || 0), 0);
+  const diff = totalAmount - sum;
+  const matches = Math.abs(diff) < 0.01;
+  const equalShare = workerIds.length > 0 ? totalAmount / workerIds.length : 0;
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Workers
+        </span>
+        {workerIds.length > 0 && totalAmount > 0 && (
+          <div className="flex gap-1">
+            <Button
+              type="button"
+              size="xs"
+              variant={splitMode === "equal" ? "default" : "outline"}
+              onClick={() => {
+                setSplitMode("equal");
+                setCustomAmounts({});
+              }}
+            >
+              Equal
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant={splitMode === "custom" ? "default" : "outline"}
+              onClick={() => setSplitMode("custom")}
+            >
+              Custom
+            </Button>
+          </div>
+        )}
+      </div>
+      {workers.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No active workers. Add them from the Workers page.
+        </p>
+      ) : (
+        <div className="rounded-md border bg-card divide-y max-h-56 overflow-y-auto">
+          {workers.map((w) => {
+            const checked = workerIds.includes(w.id);
+            return (
+              <label
+                key={w.id}
+                className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-accent/30"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() =>
+                    setWorkerIds((prev) =>
+                      checked ? prev.filter((id) => id !== w.id) : [...prev, w.id],
+                    )
+                  }
+                  className="h-4 w-4 accent-primary"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{w.name}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {w.dailyRate ? `₹${w.dailyRate}/day` : "—"}
+                    {w.balance > 0 && (
+                      <span className="ml-2 text-rose-600">
+                        owed {formatINR(w.balance)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {checked && splitMode === "custom" && (
+                  <Input
+                    type="number"
+                    min={0}
+                    value={customAmounts[w.id] ?? ""}
+                    onChange={(e) =>
+                      setCustomAmounts((prev) => ({ ...prev, [w.id]: e.target.value }))
+                    }
+                    placeholder="₹"
+                    className="w-24 h-8"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                )}
+                {checked && splitMode === "equal" && (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {formatINR(equalShare)}
+                  </span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {workerIds.length > 0 && totalAmount > 0 && splitMode === "custom" && (
+        <div
+          className={cn(
+            "text-xs font-medium",
+            matches ? "text-emerald-700" : "text-rose-600",
+          )}
+        >
+          Total: {formatINR(sum)} / {formatINR(totalAmount)}
+          {!matches &&
+            ` (${diff > 0 ? `${formatINR(diff)} short` : `${formatINR(Math.abs(diff))} over`})`}
+        </div>
+      )}
     </div>
   );
 }
@@ -500,39 +730,30 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
     }
   }
 
+  const amtNum = parseFloat(amount) || 0;
   return (
     <div className="space-y-3">
       <label className="block">
         <span className="text-xs font-medium">From</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={fromId}
-          onChange={(e) => setFromId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name} ({a.kind})
-            </option>
-          ))}
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={fromId}
+            onChange={setFromId}
+            options={accounts.map((a) => buildAccountOption(a, amtNum))}
+          />
+        </div>
       </label>
       <label className="block">
         <span className="text-xs font-medium">To</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={toId}
-          onChange={(e) => setToId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {accounts
-            .filter((a) => a.id !== fromId)
-            .map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.kind})
-              </option>
-            ))}
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={toId}
+            onChange={setToId}
+            options={accounts
+              .filter((a) => a.id !== fromId)
+              .map((a) => buildAccountOption(a, 0))}
+          />
+        </div>
       </label>
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
@@ -670,20 +891,23 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
 
       <label className="block">
         <span className="text-xs font-medium">Person</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={memberId}
-          onChange={(e) => setMemberId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-              {m.balance !== 0 ? ` (${m.balance > 0 ? "owes" : "advanced"} ₹${Math.abs(m.balance).toLocaleString("en-IN")})` : ""}
-            </option>
-          ))}
-          <option value="NEW">+ Add new person</option>
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={memberId}
+            onChange={setMemberId}
+            options={[
+              ...members.map((m) => ({
+                value: m.id,
+                label:
+                  m.name +
+                  (m.balance !== 0
+                    ? ` (${m.balance > 0 ? "owes" : "advanced"} ₹${Math.abs(m.balance).toLocaleString("en-IN")})`
+                    : ""),
+              })),
+              { value: "NEW", label: "+ Add new person" },
+            ]}
+          />
+        </div>
       </label>
 
       {memberId === "NEW" && (
@@ -715,18 +939,15 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         <span className="text-xs font-medium">
           {direction === "GIVEN" ? "Paid from" : "Received into"}
         </span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name} ({a.kind})
-            </option>
-          ))}
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={accountId}
+            onChange={setAccountId}
+            options={accounts.map((a) =>
+              buildAccountOption(a, direction === "GIVEN" ? Number(amount) || 0 : 0),
+            )}
+          />
+        </div>
       </label>
 
       <label className="block">
@@ -900,20 +1121,19 @@ function InvestmentForm({
 
       <label className="block">
         <span className="text-xs font-medium">Holding</span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={investmentId}
-          onChange={(e) => setInvestmentId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {investments.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.kind} · {i.name}
-              {i.symbol ? ` (${i.symbol})` : ""}
-              {i.quantity != null ? ` · ${i.quantity} units` : ""}
-            </option>
-          ))}
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={investmentId}
+            onChange={setInvestmentId}
+            options={investments.map((i) => ({
+              value: i.id,
+              label:
+                `${i.kind} · ${i.name}` +
+                (i.symbol ? ` (${i.symbol})` : "") +
+                (i.quantity != null ? ` · ${i.quantity} units` : ""),
+            }))}
+          />
+        </div>
         {investments.length === 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
             No active holdings yet. Create one in Investments first.
@@ -987,20 +1207,24 @@ function InvestmentForm({
         <span className="text-xs font-medium">
           {action === "BUY" ? "Pay from" : "Deposit to"}
         </span>
-        <select
-          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-        >
-          <option value="">— pick —</option>
-          {accounts
-            .filter((a) => a.kind !== "CARD")
-            .map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.kind} · {formatINR(a.balance)})
-              </option>
-            ))}
-        </select>
+        <div className="mt-1">
+          <NativeSelect
+            value={accountId}
+            onChange={setAccountId}
+            options={accounts
+              .filter((a) => a.kind !== "CARD")
+              .map((a) => {
+                const amtNum = parseFloat(amount) || 0;
+                const insufficient = action === "BUY" && amtNum > 0 && amtNum > a.balance;
+                return {
+                  value: a.id,
+                  label: a.name,
+                  hint: `${a.kind} · ${formatINR(a.balance)}`,
+                  disabled: insufficient,
+                };
+              })}
+          />
+        </div>
       </label>
 
       <label className="block">

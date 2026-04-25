@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate } from "@/lib/utils";
+import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
 
 type Lease = {
   id: string;
@@ -44,7 +45,13 @@ type ScheduleRow = {
   confirmedTxn: { id: string; description: string; date: string } | null;
 };
 
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -317,18 +324,15 @@ function ConfirmPaymentDialog({
               <span className="text-xs font-medium">
                 {direction === "LEASED_OUT" ? "Received into" : "Paid from"}
               </span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.kind})
-                  </option>
-                ))}
-              </select>
+              <div className="mt-1">
+                <NativeSelect
+                  value={accountId}
+                  onChange={setAccountId}
+                  options={accounts.map((a) =>
+                    buildAccountOption(a, direction === "LEASED_IN" ? Number(amount) || 0 : 0),
+                  )}
+                />
+              </div>
             </label>
             <label className="block">
               <span className="text-xs font-medium">Notes</span>

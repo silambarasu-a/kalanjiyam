@@ -9,18 +9,25 @@ import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { BankPicker } from "@/components/ui/bank-picker";
+import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals } from "@/lib/loan-math";
-import { formatINR } from "@/lib/utils";
+import { formatINR, buildAccountOption } from "@/lib/utils";
 
 type ChargeRow = { label: string; amount: string };
 const DEFAULT_CHARGE_ROWS: ChargeRow[] = [
   { label: "Processing fee", amount: "" },
-  { label: "GST on processing fee", amount: "" },
+  // { label: "GST on processing fee", amount: "" },
   { label: "Stamp duty", amount: "" },
 ];
 
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 type Card = { id: string; name: string; kind: "CREDIT" | "DEBIT" };
 type LoanKind =
   | "PERSONAL"
@@ -207,17 +214,13 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           </label>
           <label className="block">
             <span className="text-xs font-medium">Kind</span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={kind}
-              onChange={(e) => setKind(e.target.value as LoanKind)}
-            >
-              {KIND_OPTIONS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
+            <div className="">
+              <NativeSelect
+                value={kind}
+                onChange={(next) => setKind(next as LoanKind)}
+                options={KIND_OPTIONS.map((k) => ({ value: k, label: k }))}
+              />
+            </div>
           </label>
         </div>
       )}
@@ -401,18 +404,13 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           {!isExisting && (
             <label className="block">
               <span className="text-xs font-medium">Disbursed into (bank account)</span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-              >
-                <option value="">— pick —</option>
-                {bankAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-1">
+                <NativeSelect
+                  value={accountId}
+                  onChange={setAccountId}
+                  options={bankAccounts.map((a) => buildAccountOption(a, 0))}
+                />
+              </div>
             </label>
           )}
         </>
@@ -421,19 +419,14 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       {source === "CARD_EMI" && (
         <label className="block">
           <span className="text-xs font-medium">Credit card</span>
-          <select
-            className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-            value={cardId}
-            onChange={(e) => setCardId(e.target.value)}
-            disabled={!!lockedCardId}
-          >
-            <option value="">— pick —</option>
-            {creditCards.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <div className="mt-1">
+            <NativeSelect
+              value={cardId}
+              onChange={setCardId}
+              options={creditCards.map((c) => ({ value: c.id, label: c.name }))}
+              disabled={!!lockedCardId}
+            />
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
             The principal will be subtracted from this card&apos;s available limit until the EMI
             is paid off.

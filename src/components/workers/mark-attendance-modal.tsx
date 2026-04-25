@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR } from "@/lib/utils";
 
@@ -316,31 +317,31 @@ export function MarkAttendanceModal({
           {(cropBatches.length > 0 || livestockBatches.length > 0) && (
             <label className="block">
               <span className="text-xs font-medium">Tag to batch (optional)</span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={tagSource}
-                onChange={(e) => setTagSource(e.target.value)}
-              >
-                <option value="">— none —</option>
-                {cropBatches.length > 0 && (
-                  <optgroup label="Crops">
-                    {cropBatches.map((b) => (
-                      <option key={b.id} value={`crop:${b.id}`}>
-                        {b.crop.name} · {b.name} ({b.status})
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {livestockBatches.length > 0 && (
-                  <optgroup label="Livestock">
-                    {livestockBatches.map((b) => (
-                      <option key={b.id} value={`livestock:${b.id}`}>
-                        {b.livestock.name} · {b.name} ({b.currentCount} head)
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
+              <div className="mt-1">
+                <NativeSelect
+                  value={tagSource}
+                  onChange={setTagSource}
+                  placeholder="— none —"
+                  options={
+                    [
+                      cropBatches.length > 0 && {
+                        label: "Crops",
+                        options: cropBatches.map((b) => ({
+                          value: `crop:${b.id}`,
+                          label: `${b.crop.name} · ${b.name} (${b.status})`,
+                        })),
+                      },
+                      livestockBatches.length > 0 && {
+                        label: "Livestock",
+                        options: livestockBatches.map((b) => ({
+                          value: `livestock:${b.id}`,
+                          label: `${b.livestock.name} · ${b.name} (${b.currentCount} head)`,
+                        })),
+                      },
+                    ].filter(Boolean) as NativeSelectGroup[]
+                  }
+                />
+              </div>
             </label>
           )}
 

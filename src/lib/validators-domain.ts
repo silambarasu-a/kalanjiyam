@@ -52,6 +52,7 @@ export const cardCreateSchema = z.object({
   supportsUpi: z.boolean().optional().default(false),
   last4: z.string().trim().max(4).optional().nullable(),
   parentAccountId: z.string().uuid().optional().nullable(),
+  parentCardId: z.string().uuid().optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   limitMode: cardLimitModeEnum.optional().default("SOLO"),
   ownerUserId: z.string().uuid().optional().nullable(),

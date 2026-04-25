@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { UserPlus, Trash2, Sliders } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -332,19 +333,15 @@ function PermissionsDialog({
           {FEATURES.map((f) => (
             <div key={f} className="flex items-center justify-between py-2 text-sm">
               <span className="capitalize">{f.replace(/_/g, " ")}</span>
-              <select
-                className="rounded border border-input bg-background px-2 py-1 text-sm"
-                value={(perms[f] ?? "hidden") as string}
-                onChange={(e) =>
-                  setPerms((p) => ({ ...p, [f]: e.target.value as PermissionLevel }))
-                }
-              >
-                {LEVELS.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
+              <div className="w-32">
+                <NativeSelect
+                  value={(perms[f] ?? "hidden") as string}
+                  onChange={(next) =>
+                    setPerms((p) => ({ ...p, [f]: next as PermissionLevel }))
+                  }
+                  options={LEVELS.map((l) => ({ value: l, label: l }))}
+                />
+              </div>
             </div>
           ))}
         </div>

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR } from "@/lib/utils";
+import { formatINR, buildAccountOption } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Member = {
@@ -32,7 +33,13 @@ type Member = {
   entryCount: number;
 };
 
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -426,18 +433,15 @@ function EntryDialog({
             <span className="text-xs font-medium">
               {direction === "GIVEN" ? "Paid from" : "Received into"}
             </span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-            >
-              <option value="">— pick —</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={accounts.map((a) =>
+                  buildAccountOption(a, direction === "GIVEN" ? Number(amount) || 0 : 0),
+                )}
+              />
+            </div>
           </label>
           <label className="block">
             <span className="text-xs font-medium">Notes</span>

@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { formatINR, formatDate } from "@/lib/utils";
+import { NativeSelect } from "@/components/ui/native-select";
+import { formatINR, formatDate, accountSpendable, buildAccountOption } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
@@ -41,7 +42,13 @@ type Payment = {
   worker: { id: string; name: string };
   paidByUser: { id: string; name: string } | null;
 };
-type Account = { id: string; name: string; kind: string; balance: number };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 type CropBatch = {
   id: string;
   name: string;
@@ -247,17 +254,16 @@ export default function WagesPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="flex items-center gap-2">
           <Label className="text-sm shrink-0">Month</Label>
-          <select
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-            className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
-          >
-            {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-              <option key={m} value={m}>
-                {new Date(2000, m - 1, 1).toLocaleString("en", { month: "long" })}
-              </option>
-            ))}
-          </select>
+          <div className="w-40">
+            <NativeSelect
+              value={String(month)}
+              onChange={(next) => setMonth(Number(next))}
+              options={Array.from({ length: 12 }, (_, i) => i + 1).map((m) => ({
+                value: String(m),
+                label: new Date(2000, m - 1, 1).toLocaleString("en", { month: "long" }),
+              }))}
+            />
+          </div>
           <Input
             type="number"
             value={year}
@@ -267,18 +273,14 @@ export default function WagesPage() {
         </div>
         <div className="flex items-center gap-2 sm:ml-auto">
           <Label className="text-sm shrink-0">View worker</Label>
-          <select
-            value={viewWorkerId}
-            onChange={(e) => setViewWorkerId(e.target.value)}
-            className="h-9 min-w-44 rounded-lg border border-input bg-background px-3 text-sm"
-          >
-            <option value="">All workers</option>
-            {activeWorkers.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
+          <div className="min-w-44">
+            <NativeSelect
+              value={viewWorkerId}
+              onChange={setViewWorkerId}
+              placeholder="All workers"
+              options={activeWorkers.map((w) => ({ value: w.id, label: w.name }))}
+            />
+          </div>
         </div>
       </div>
 
@@ -442,7 +444,7 @@ export default function WagesPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[820px]">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
+                <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:bg-muted/30 [&>th]:border-b">
                   <th className="py-2 px-3 w-8" />
                   <th className="py-2 px-2">Worker</th>
                   <th className="py-2 px-2">Pending</th>
@@ -462,7 +464,9 @@ export default function WagesPage() {
                   if (!e) return null;
                   const selectedAcc = accounts.find((a) => a.id === e.accountId);
                   const amt = parseFloat(e.amount) || 0;
-                  const insufficient = !!selectedAcc && amt > selectedAcc.balance;
+                  const selectedSpendable = selectedAcc ? accountSpendable(selectedAcc) : null;
+                  const insufficient =
+                    !!selectedAcc && selectedSpendable != null && amt > selectedSpendable;
                   return (
                     <tr key={w.id} className={e.selected ? "bg-primary/5" : ""}>
                       <td className="py-2.5 px-3">
@@ -508,43 +512,35 @@ export default function WagesPage() {
                         />
                       </td>
                       <td className="py-2.5 px-2">
-                        <select
+                        <NativeSelect
                           value={e.accountId}
-                          onChange={(ev) => updatePay(w.id, { accountId: ev.target.value })}
+                          onChange={(next) => updatePay(w.id, { accountId: next })}
                           disabled={!e.selected}
-                          className="w-full h-9 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
-                        >
-                          <option value="">No account</option>
-                          {accounts.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.name} (₹{a.balance.toLocaleString("en-IN")})
-                            </option>
-                          ))}
-                        </select>
-                        {insufficient && selectedAcc && (
+                          placeholder="No account"
+                          options={accounts.map((a) => buildAccountOption(a, amt))}
+                        />
+                        {insufficient && selectedAcc && selectedSpendable != null && (
                           <p className="text-[10px] text-rose-500 mt-0.5">
-                            Low balance: {formatINR(selectedAcc.balance)}
+                            {selectedAcc.kind === "CARD" ? "Limit left:" : "Balance:"}{" "}
+                            {formatINR(selectedSpendable)}
                           </p>
                         )}
                       </td>
                       <td className="py-2.5 px-2">
-                        <select
+                        <NativeSelect
                           value={e.cropBatchId}
-                          onChange={(ev) =>
-                            updatePay(w.id, { cropBatchId: ev.target.value })
-                          }
+                          onChange={(next) => updatePay(w.id, { cropBatchId: next })}
                           disabled={!e.selected}
-                          className="w-full h-9 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
-                        >
-                          <option value="maintenance">Maintenance</option>
-                          {batches
-                            .filter((b) => b.active)
-                            .map((b) => (
-                              <option key={b.id} value={b.id}>
-                                {b.crop.name} / {b.name}
-                              </option>
-                            ))}
-                        </select>
+                          options={[
+                            { value: "maintenance", label: "Maintenance" },
+                            ...batches
+                              .filter((b) => b.active)
+                              .map((b) => ({
+                                value: b.id,
+                                label: `${b.crop.name} / ${b.name}`,
+                              })),
+                          ]}
+                        />
                       </td>
                       <td className="py-2.5 px-2 text-center">
                         {e.selected && (

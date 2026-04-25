@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate } from "@/lib/utils";
+import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
 type Charge = {
@@ -35,7 +36,13 @@ type Ledger = {
   totals: { outstanding: number; settled: number };
   charges: Charge[];
 };
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -228,18 +235,14 @@ function SettleDialog({
           </label>
           <label className="block">
             <span className="text-xs font-medium">Received into account (optional)</span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-            >
-              <option value="">— don&apos;t create income transaction —</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                placeholder="— don't create income transaction —"
+                options={accounts.map((a) => buildAccountOption(a, 0))}
+              />
+            </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Pick to auto-create an INCOME transaction when this member pays you back.
             </p>

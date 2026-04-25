@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -30,7 +31,7 @@ import {
   ArrowDownRight,
   ArrowLeft,
 } from "lucide-react";
-import { formatINR, cn } from "@/lib/utils";
+import { formatINR, cn, buildAccountOption } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { SymbolSearch } from "@/components/investments/symbol-search";
@@ -168,7 +169,13 @@ function SummaryCard({
   );
 }
 
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 export function StockPortfolio() {
   const router = useRouter();
@@ -582,25 +589,17 @@ export function StockPortfolio() {
 
                   <div className="space-y-1.5">
                     <Label>Exchange *</Label>
-                    <select
-                      className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
+                    <NativeSelect
                       value={holdingForm.exchange}
-                      onChange={(e) => {
-                        const ex = e.target.value;
+                      onChange={(ex) =>
                         setHoldingForm((f) => ({
                           ...f,
                           exchange: ex,
                           currency: EXCHANGE_CURRENCIES[ex] ?? "INR",
-                        }));
-                      }}
-                      required
-                    >
-                      {EXCHANGE_OPTIONS.map((ex) => (
-                        <option key={ex} value={ex}>
-                          {ex}
-                        </option>
-                      ))}
-                    </select>
+                        }))
+                      }
+                      options={EXCHANGE_OPTIONS.map((ex) => ({ value: ex, label: ex }))}
+                    />
                   </div>
 
                   <div className="space-y-1.5">
@@ -676,37 +675,38 @@ export function StockPortfolio() {
                     />
                   </div>
 
-                  {!editingHoldingId && (
+                  {!editingHoldingId && (() => {
+                    const qty = parseFloat(holdingForm.quantity) || 0;
+                    const pp = parseFloat(holdingForm.purchasePrice) || 0;
+                    const conv = holdingForm.currency === "USD" ? usdInrRate : 1;
+                    const investedNow = qty * pp * conv;
+                    return (
                     <div className="space-y-1.5">
                       <Label>Payment mode</Label>
-                      <select
-                        className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
+                      <NativeSelect
                         value={isExisting ? "__existing__" : accountId}
-                        onChange={(e) => {
-                          if (e.target.value === "__existing__") {
+                        onChange={(next) => {
+                          if (next === "__existing__") {
                             setIsExisting(true);
                             setAccountId("");
                           } else {
                             setIsExisting(false);
-                            setAccountId(e.target.value);
+                            setAccountId(next);
                           }
                         }}
-                      >
-                        <option value="">— pick —</option>
-                        {accounts.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}
-                          </option>
-                        ))}
-                        <option value="__existing__">Already owned (no transaction)</option>
-                      </select>
+                        options={[
+                          ...accounts.map((a) => buildAccountOption(a, investedNow)),
+                          { value: "__existing__", label: "Already owned (no transaction)" },
+                        ]}
+                      />
                       {isExisting && (
                         <p className="text-[10px] text-amber-600">
                           No buy transaction will be recorded.
                         </p>
                       )}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   <div className="sm:col-span-3 flex gap-2 pt-1">
                     <Button type="submit" disabled={savingHolding}>
@@ -1013,17 +1013,11 @@ export function StockPortfolio() {
 
                   <div className="space-y-1.5">
                     <Label>Exchange</Label>
-                    <select
-                      className="w-full rounded border border-input bg-background px-2 py-2 text-sm"
+                    <NativeSelect
                       value={wishlistForm.exchange}
-                      onChange={(e) => setWishlistField("exchange", e.target.value)}
-                    >
-                      {EXCHANGE_OPTIONS.map((ex) => (
-                        <option key={ex} value={ex}>
-                          {ex}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(next) => setWishlistField("exchange", next)}
+                      options={EXCHANGE_OPTIONS.map((ex) => ({ value: ex, label: ex }))}
+                    />
                   </div>
 
                   <div className="space-y-1.5">

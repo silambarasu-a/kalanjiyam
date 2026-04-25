@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate } from "@/lib/utils";
+import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
 type Balance = {
@@ -73,7 +74,13 @@ type WorkerDetail = {
   payments: Payment[];
   settlements: Settlement[];
 };
-type Account = { id: string; name: string; kind: string };
+type Account = {
+  id: string;
+  name: string;
+  kind: string;
+  balance: number;
+  availableLimit: number | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -82,7 +89,7 @@ export default function WorkerDetailPage() {
   const id = params?.id;
   const { data } = useSWR<WorkerDetail>(id ? `/api/workers/${id}` : null, fetcher);
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
+  const accounts = accountsData?.accounts ?? [];
 
   const [attendanceOpen, setAttendanceOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
@@ -446,18 +453,13 @@ function PayDialog({
           </div>
           <label className="block">
             <span className="text-xs font-medium">Pay from</span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-            >
-              <option value="">— pick —</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({a.kind})
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={accounts.map((a) => buildAccountOption(a, Number(amount) || 0))}
+              />
+            </div>
           </label>
           <label className="block">
             <span className="text-xs font-medium">Notes (optional)</span>
@@ -544,18 +546,16 @@ function SettleDialog({
               <>
                 <label className="block">
                   <span className="text-xs font-medium">Pay from</span>
-                  <select
-                    className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                    value={accountId}
-                    onChange={(e) => setAccountId(e.target.value)}
-                  >
-                    <option value="">— don&apos;t pay now, mark settled —</option>
-                    {accounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name} ({a.kind})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={accountId}
+                      onChange={setAccountId}
+                      placeholder="— don't pay now, mark settled —"
+                      options={accounts.map((a) =>
+                        buildAccountOption(a, settlement.amountDue),
+                      )}
+                    />
+                  </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Picking an account auto-creates the wage payment (+ expense transaction) and
                     marks the settlement SETTLED.

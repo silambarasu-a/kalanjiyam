@@ -9,6 +9,7 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -286,18 +287,14 @@ function BatchDialog({
           </label>
           <label className="block">
             <span className="text-xs font-medium">Land / plot (optional)</span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={landId}
-              onChange={(e) => setLandId(e.target.value)}
-            >
-              <option value="">— none —</option>
-              {lands.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
+            <div className="mt-1">
+              <NativeSelect
+                value={landId}
+                onChange={setLandId}
+                placeholder="— none —"
+                options={lands.map((l) => ({ value: l.id, label: l.name }))}
+              />
+            </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Manage land plots from Settings (coming soon).
             </p>
