@@ -259,6 +259,24 @@ export const attendanceUpsertSchema = z.object({
   notes: z.string().trim().max(500).optional(),
 });
 
+// Bulk: many workers, one date. The bulk-attendance modal sends one of
+// these per selected date so each (worker × date) cell is one upsert.
+export const attendanceBatchSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  cropBatchId: z.string().uuid().optional().nullable(),
+  livestockBatchId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+  entries: z
+    .array(
+      z.object({
+        workerId: z.string().uuid(),
+        present: z.boolean().default(true),
+        dailyRateOverride: z.number().nonnegative().optional().nullable(),
+      })
+    )
+    .min(1),
+});
+
 export const wagePaymentCreateSchema = z.object({
   workerId: z.string().uuid(),
   amount: z.number().positive(),
@@ -300,6 +318,15 @@ const loanFieldsSchema = z.object({
   tenure: z.number().int().positive().optional().nullable(),
   frequency: z.string().optional(),
   charges: z.number().nonnegative().optional().nullable(),
+  chargeBreakdown: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(60),
+        amount: z.number().nonnegative(),
+      })
+    )
+    .optional()
+    .nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
   isExisting: z.boolean().optional().default(false),

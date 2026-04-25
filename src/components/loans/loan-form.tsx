@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { toast } from "sonner";
 import useSWR, { mutate as globalMutate } from "swr";
+import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
@@ -11,6 +12,13 @@ import { BankPicker } from "@/components/ui/bank-picker";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals } from "@/lib/loan-math";
 import { formatINR } from "@/lib/utils";
+
+type ChargeRow = { label: string; amount: string };
+const DEFAULT_CHARGE_ROWS: ChargeRow[] = [
+  { label: "Processing fee", amount: "" },
+  { label: "GST on processing fee", amount: "" },
+  { label: "Stamp duty", amount: "" },
+];
 
 type Account = { id: string; name: string; kind: string };
 type Card = { id: string; name: string; kind: "CREDIT" | "DEBIT" };
@@ -35,17 +43,23 @@ const KIND_OPTIONS: LoanKind[] = [
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-export function LoanForm({
-  source,
-  onSaved,
-  onCancel,
-  lockedCardId,
-}: {
+export type LoanFormHandle = {
+  /** Trigger a submit from outside the component (e.g. a sibling DialogFooter button). */
+  submit: () => void;
+};
+
+type LoanFormProps = {
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   onSaved: () => void;
-  onCancel: () => void;
+  /** Mirrors internal `submitting` state up so a parent button can disable. */
+  onSubmittingChange?: (submitting: boolean) => void;
   lockedCardId?: string;
-}) {
+};
+
+export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanForm(
+  { source, onSaved, onSubmittingChange, lockedCardId },
+  ref
+) {
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
@@ -64,11 +78,17 @@ export function LoanForm({
   const [isExisting, setIsExisting] = useState(source === "CARD_EMI" ? true : false);
   const [startedAt, setStartedAt] = useState(today);
   const [notes, setNotes] = useState("");
+  const [chargeRows, setChargeRows] = useState<ChargeRow[]>(DEFAULT_CHARGE_ROWS);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Mirror the busy flag up so a sibling DialogFooter button can disable
+  // itself while the form is in flight.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from prop
+    onSubmittingChange?.(submitting);
+  }, [submitting, onSubmittingChange]);
+
+  useEffect(() => {
     if (lockedCardId) setCardId(lockedCardId);
   }, [lockedCardId]);
 
@@ -87,6 +107,25 @@ export function LoanForm({
   }, [principal, interestRate, tenure, gstOnInterest, source]);
 
   const effectiveEmi = emiAmount ? Number(emiAmount) : preview?.emi ?? null;
+
+  // Charges total + disbursed amount preview. Filtered breakdown drops
+  // empty/zero rows so the API only sees real entries.
+  const breakdown = useMemo(
+    () =>
+      chargeRows
+        .map((c) => ({
+          label: c.label.trim(),
+          amount: Number(c.amount) || 0,
+        }))
+        .filter((c) => c.label && c.amount > 0),
+    [chargeRows]
+  );
+  const chargesTotal = useMemo(
+    () => breakdown.reduce((s, c) => s + c.amount, 0),
+    [breakdown]
+  );
+  const principalNum = Number(principal) || 0;
+  const disbursedAmount = Math.max(0, principalNum - chargesTotal);
 
   async function submit() {
     setError(null);
@@ -121,6 +160,8 @@ export function LoanForm({
           cardId: source === "CARD_EMI" ? cardId : null,
           isExisting,
           startedAt,
+          chargeBreakdown: breakdown.length ? breakdown : null,
+          charges: breakdown.length ? chargesTotal : null,
           notes: notes.trim() || undefined,
         }),
       });
@@ -142,13 +183,14 @@ export function LoanForm({
     }
   }
 
+  // Expose submit() so the parent dialog's footer can trigger it.
+  useImperativeHandle(ref, () => ({ submit }));
+
   return (
     <div className="space-y-3">
-      <label className="block">
-        <span className="text-xs font-medium">
-          {source === "CARD_EMI" ? "Merchant / description" : "Lender"}
-        </span>
-        {source === "CARD_EMI" ? (
+      {source === "CARD_EMI" ? (
+        <label className="block">
+          <span className="text-xs font-medium">Merchant / description</span>
           <Input
             value={lender}
             onChange={(e) => setLender(e.target.value)}
@@ -156,33 +198,34 @@ export function LoanForm({
             autoFocus
             maxLength={120}
           />
-        ) : (
-          <BankPicker value={lender} onChange={setLender} autoFocus />
-        )}
-      </label>
-
-      {source !== "CARD_EMI" && (
-        <label className="block">
-          <span className="text-xs font-medium">Kind</span>
-          <select
-            className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-            value={kind}
-            onChange={(e) => setKind(e.target.value as LoanKind)}
-          >
-            {KIND_OPTIONS.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
         </label>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs font-medium">Lender</span>
+            <BankPicker value={lender} onChange={setLender} autoFocus />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium">Kind</span>
+            <select
+              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as LoanKind)}
+            >
+              {KIND_OPTIONS.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Principal (₹)</span>
-          <AmountInput value={principal} onChange={setPrincipal}
-          />
+          <AmountInput value={principal} onChange={setPrincipal} />
         </label>
         <label className="block">
           <span className="text-xs font-medium">Started on</span>
@@ -190,31 +233,10 @@ export function LoanForm({
         </label>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Interest rate (% p.a.)</span>
-          <AmountInput value={interestRate} onChange={setInterestRate}
-            placeholder="e.g. 14"
-          />
-        </label>
-        {source === "CARD_EMI" && (
-          <label className="block">
-            <span className="text-xs font-medium">GST on interest (%)</span>
-            <AmountInput value={gstOnInterest} onChange={setGstOnInterest}
-              placeholder="18"
-            />
-          </label>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="text-xs font-medium">EMI amount (₹)</span>
-          <AmountInput
-            value={emiAmount}
-            onChange={setEmiAmount}
-            placeholder={preview?.emi ? String(preview.emi) : "Auto"}
-          />
+          <AmountInput value={interestRate} onChange={setInterestRate} placeholder="e.g. 14" />
         </label>
         <label className="block">
           <span className="text-xs font-medium">Tenure (months)</span>
@@ -225,10 +247,29 @@ export function LoanForm({
             onChange={(e) => setTenure(e.target.value)}
           />
         </label>
+        <label className="block">
+          <span className="text-xs font-medium">EMI amount (₹)</span>
+          <AmountInput
+            value={emiAmount}
+            onChange={setEmiAmount}
+            placeholder={preview?.emi ? String(preview.emi) : "Auto"}
+          />
+        </label>
       </div>
       <p className="-mt-1 text-xs text-muted-foreground">
         Leave EMI blank to use the standard reducing-balance calculation.
       </p>
+
+      {source === "CARD_EMI" && (
+        <label className="block">
+          <span className="text-xs font-medium">GST on interest (%)</span>
+          <AmountInput
+            value={gstOnInterest}
+            onChange={setGstOnInterest}
+            placeholder="18"
+          />
+        </label>
+      )}
 
       {preview && (
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5">
@@ -270,6 +311,83 @@ export function LoanForm({
 
       {source === "BANK" && (
         <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium">Upfront charges</span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-[11px] underline text-muted-foreground hover:text-foreground"
+                onClick={() =>
+                  setChargeRows((rows) => [...rows, { label: "", amount: "" }])
+                }
+              >
+                <Plus className="h-3 w-3" /> Add line
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {chargeRows.map((row, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    value={row.label}
+                    onChange={(e) =>
+                      setChargeRows((rows) =>
+                        rows.map((r, j) => (j === i ? { ...r, label: e.target.value } : r))
+                      )
+                    }
+                    placeholder="e.g. Insurance premium"
+                    maxLength={60}
+                    className="flex-1"
+                  />
+                  <div className="w-44">
+                    <AmountInput
+                      value={row.amount}
+                      onChange={(next) =>
+                        setChargeRows((rows) =>
+                          rows.map((r, j) => (j === i ? { ...r, amount: next } : r))
+                        )
+                      }
+                      placeholder="0"
+                    />
+                  </div>
+                  {chargeRows.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() =>
+                        setChargeRows((rows) => rows.filter((_, j) => j !== i))
+                      }
+                      aria-label="Remove charge"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {principalNum > 0 && (
+              <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Loan principal</span>
+                  <span className="tabular-nums">{formatINR(principalNum)}</span>
+                </div>
+                {chargesTotal > 0 && (
+                  <div className="flex items-center justify-between text-destructive">
+                    <span>− Upfront charges</span>
+                    <span className="tabular-nums">{formatINR(chargesTotal)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1 font-medium">
+                  <span>Disbursed to your account</span>
+                  <span className="tabular-nums">{formatINR(disbursedAmount)}</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  Outstanding starts at the full principal — interest accrues on{" "}
+                  {formatINR(principalNum)}, not the disbursed amount.
+                </p>
+              </div>
+            )}
+          </div>
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -329,15 +447,6 @@ export function LoanForm({
       </label>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-
-      <div className="flex gap-2 justify-end pt-1">
-        <Button variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button onClick={submit} disabled={submitting}>
-          {submitting ? "Saving…" : "Create"}
-        </Button>
-      </div>
     </div>
   );
-}
+});

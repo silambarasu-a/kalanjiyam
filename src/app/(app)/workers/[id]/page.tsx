@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
 type Balance = {
   workerId: string;
@@ -266,11 +267,19 @@ export default function WorkerDetailPage() {
         </div>
       </section>
 
-      <AttendanceDialog
-        workerId={id ?? ""}
-        defaultRate={data.worker.dailyRate}
+      <MarkAttendanceModal
         open={attendanceOpen}
-        onClose={() => setAttendanceOpen(false)}
+        onOpenChange={setAttendanceOpen}
+        workers={[
+          {
+            id: data.worker.id,
+            name: data.worker.name,
+            dailyRate: data.worker.dailyRate,
+          },
+        ]}
+        focused
+        preselectedIds={[data.worker.id]}
+        onSaved={() => globalMutate(`/api/workers/${id}`)}
       />
       <PayDialog
         workerId={id ?? ""}
@@ -319,127 +328,6 @@ function Stat({
       </div>
       {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
     </div>
-  );
-}
-
-function AttendanceDialog({
-  workerId,
-  defaultRate,
-  open,
-  onClose,
-}: {
-  workerId: string;
-  defaultRate: number | null;
-  open: boolean;
-  onClose: () => void;
-}) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [date, setDate] = useState(today);
-  const [present, setPresent] = useState(true);
-  const [rateOverride, setRateOverride] = useState("");
-  const [useOverride, setUseOverride] = useState(false);
-  const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
-    setDate(today);
-    setPresent(true);
-    setRateOverride("");
-    setUseOverride(false);
-    setNotes("");
-    setError(null);
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, today]);
-
-  async function submit() {
-    setError(null);
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/attendance", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          workerId,
-          date,
-          present,
-          dailyRateOverride: useOverride && rateOverride ? Number(rateOverride) : null,
-          notes: notes.trim() || undefined,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) setError(body.error ?? "Failed");
-      else {
-        toast.success(present ? "Marked present" : "Marked absent");
-        globalMutate(`/api/workers/${workerId}`);
-        globalMutate("/api/workers");
-        onClose();
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Mark attendance</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <label className="block">
-            <span className="text-xs font-medium">Date</span>
-            <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
-          </label>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant={present ? "default" : "outline"}
-              onClick={() => setPresent(true)}
-            >
-              Present
-            </Button>
-            <Button
-              type="button"
-              variant={!present ? "default" : "outline"}
-              onClick={() => setPresent(false)}
-            >
-              Absent
-            </Button>
-          </div>
-          {present && (
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={useOverride}
-                onChange={(e) => setUseOverride(e.target.checked)}
-              />
-              <span className="text-sm">Different rate today (default: ₹{defaultRate ?? 0})</span>
-            </label>
-          )}
-          {useOverride && (
-            <AmountInput value={rateOverride} onChange={setRateOverride}
-              placeholder="Today's rate (₹)"
-            />
-          )}
-          <label className="block">
-            <span className="text-xs font-medium">Notes (optional)</span>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
-          </label>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={submitting}>
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -66,6 +66,7 @@ export async function POST(
     const annualRate = loan.interestRate ? Number(loan.interestRate) : 0;
     const gstPct = loan.gstOnInterest ? Number(loan.gstOnInterest) : null;
     const emiHint = loan.emiAmount ? Number(loan.emiAmount) : data.amount;
+
     const suggested = splitPayment(
       Number(loan.outstanding),
       annualRate,

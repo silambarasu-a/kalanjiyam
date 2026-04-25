@@ -38,7 +38,11 @@ type Summary = {
   }[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+};
 
 export default function DashboardPage() {
   const { data: session } = useSession();

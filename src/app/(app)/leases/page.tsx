@@ -244,7 +244,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
         <DialogHeader>
           <DialogTitle>New lease</DialogTitle>
         </DialogHeader>

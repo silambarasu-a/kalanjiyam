@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(npx eslint *)",
+      "Read(//Users/silambu/Developer/Personal/Projects/kanakkan/**)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:3000/login)",
+      "Bash(curl -s 'http://localhost:3000/_next/static/chunks/%5Broot-of-the-server%5D__02nfq85._.css')",
+      "Bash(grep -oE '\\\\.max-w-[^{ ,]*')",
+      "Bash(grep -oE '\\\\.sm\\\\\\\\:max-w-[^{ ,]*')",
+      "Bash(sed -n '54,67p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/ui/command.tsx)",
+      "Bash(sed -n '70,80p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-lock-dialog.tsx)",
+      "Bash(sed -n '70,82p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-expiry-banner.tsx)"
     ]
   }
 }

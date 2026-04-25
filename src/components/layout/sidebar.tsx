@@ -18,7 +18,8 @@ export function Sidebar() {
     <aside className="hidden md:flex sticky top-3 self-start h-[calc(100vh-1.5rem)] w-64 shrink-0 flex-col bg-sidebar border border-sidebar-border rounded-2xl shadow-[var(--shadow-soft)] overflow-hidden text-sidebar-foreground">
       <div className="px-5 pt-5 pb-3">
         <div className="flex items-center gap-2">
-          <span className="h-7 w-1.5 bg-primary rounded-full" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="" className="h-7 w-7" />
           <span className="text-base font-semibold tracking-tight">Kalanjiyam</span>
         </div>
       </div>
