@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { BankPicker } from "@/components/ui/bank-picker";
 import { mutateBalances } from "@/lib/mutate-balances";
 
 export type CardSnapshot = {
@@ -44,7 +45,8 @@ export function CardForm({
   );
   const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
 
-  const [name, setName] = useState("");
+  const [issuer, setIssuer] = useState("");
+  const [variant, setVariant] = useState("");
   const [kind, setKind] = useState<"DEBIT" | "CREDIT">("CREDIT");
   const [network, setNetwork] = useState<CardSnapshot["network"]>("VISA");
   const [supportsUpi, setSupportsUpi] = useState(false);
@@ -59,7 +61,20 @@ export function CardForm({
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- reset on card change */
-    setName(card?.name ?? "");
+    const existing = card?.name ?? "";
+    if (existing) {
+      const sep = existing.indexOf(" · ");
+      if (sep !== -1) {
+        setIssuer(existing.slice(0, sep));
+        setVariant(existing.slice(sep + 3));
+      } else {
+        setIssuer(existing);
+        setVariant("");
+      }
+    } else {
+      setIssuer("");
+      setVariant("");
+    }
     setKind(card?.kind ?? "CREDIT");
     setNetwork(card?.network ?? "VISA");
     setSupportsUpi(card?.supportsUpi ?? false);
@@ -73,12 +88,16 @@ export function CardForm({
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [card]);
 
+  const assembledName = variant.trim()
+    ? `${issuer.trim()} · ${variant.trim()}`
+    : issuer.trim();
+
   async function submit() {
     setError(null);
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {
-        name,
+        name: assembledName,
         kind,
         network,
         supportsUpi,
@@ -113,13 +132,21 @@ export function CardForm({
   return (
     <div className="space-y-3">
       <label className="block">
-        <span className="text-xs font-medium">Name</span>
+        <span className="text-xs font-medium">Issuer</span>
+        <BankPicker value={issuer} onChange={setIssuer} autoFocus />
+      </label>
+      <label className="block">
+        <span className="text-xs font-medium">
+          Card variant{" "}
+          <span className="text-muted-foreground font-normal">
+            (optional, e.g. Amazon Pay, Platinum)
+          </span>
+        </span>
         <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-          maxLength={80}
-          placeholder="e.g. ICICI Amazon Pay"
+          value={variant}
+          onChange={(e) => setVariant(e.target.value)}
+          maxLength={60}
+          placeholder="Amazon Pay"
         />
       </label>
       <div>
@@ -244,7 +271,7 @@ export function CardForm({
         <Button variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
-        <Button onClick={submit} disabled={submitting || !name.trim()}>
+        <Button onClick={submit} disabled={submitting || !assembledName}>
           {card ? "Save card" : "Create card"}
         </Button>
       </div>

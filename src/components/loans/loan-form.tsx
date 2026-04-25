@@ -5,8 +5,12 @@ import { toast } from "sonner";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { BankPicker } from "@/components/ui/bank-picker";
 import { mutateBalances } from "@/lib/mutate-balances";
+import { loanTotals } from "@/lib/loan-math";
+import { formatINR } from "@/lib/utils";
 
 type Account = { id: string; name: string; kind: string };
 type Card = { id: string; name: string; kind: "CREDIT" | "DEBIT" };
@@ -68,6 +72,22 @@ export function LoanForm({
     if (lockedCardId) setCardId(lockedCardId);
   }, [lockedCardId]);
 
+  // Live EMI preview based on principal + rate + tenure, using the standard
+  // reducing-balance formula. The user can still override emiAmount
+  // explicitly (some bank quotes round differently).
+  const preview = useMemo(() => {
+    const p = Number(principal);
+    const r = Number(interestRate);
+    const t = Number(tenure);
+    const gst = source === "CARD_EMI" && gstOnInterest ? Number(gstOnInterest) : null;
+    if (!p || !t || !Number.isFinite(r) || r < 0) return null;
+    const totals = loanTotals(p, r, t, gst);
+    if (!totals.emi) return null;
+    return totals;
+  }, [principal, interestRate, tenure, gstOnInterest, source]);
+
+  const effectiveEmi = emiAmount ? Number(emiAmount) : preview?.emi ?? null;
+
   async function submit() {
     setError(null);
     const principalNum = Number(principal);
@@ -95,7 +115,7 @@ export function LoanForm({
           principal: principalNum,
           interestRate: interestRate ? Number(interestRate) : null,
           gstOnInterest: gstOnInterest ? Number(gstOnInterest) : null,
-          emiAmount: emiAmount ? Number(emiAmount) : null,
+          emiAmount: effectiveEmi ?? null,
           tenure: tenure ? Number(tenure) : null,
           accountId: source === "BANK" ? accountId || null : null,
           cardId: source === "CARD_EMI" ? cardId : null,
@@ -128,13 +148,17 @@ export function LoanForm({
         <span className="text-xs font-medium">
           {source === "CARD_EMI" ? "Merchant / description" : "Lender"}
         </span>
-        <Input
-          value={lender}
-          onChange={(e) => setLender(e.target.value)}
-          placeholder={source === "CARD_EMI" ? "What was purchased" : "Bank / lender name"}
-          autoFocus
-          maxLength={120}
-        />
+        {source === "CARD_EMI" ? (
+          <Input
+            value={lender}
+            onChange={(e) => setLender(e.target.value)}
+            placeholder="What was purchased"
+            autoFocus
+            maxLength={120}
+          />
+        ) : (
+          <BankPicker value={lender} onChange={setLender} autoFocus />
+        )}
       </label>
 
       {source !== "CARD_EMI" && (
@@ -162,7 +186,7 @@ export function LoanForm({
         </label>
         <label className="block">
           <span className="text-xs font-medium">Started on</span>
-          <Input type="date" value={startedAt} onChange={(e) => setStartedAt(e.target.value)} />
+          <DateInput value={startedAt} onChange={(e) => setStartedAt(e.target.value)} />
         </label>
       </div>
 
@@ -186,7 +210,10 @@ export function LoanForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">EMI amount (₹)</span>
-          <AmountInput value={emiAmount} onChange={setEmiAmount}
+          <AmountInput
+            value={emiAmount}
+            onChange={setEmiAmount}
+            placeholder={preview?.emi ? String(preview.emi) : "Auto"}
           />
         </label>
         <label className="block">
@@ -199,6 +226,47 @@ export function LoanForm({
           />
         </label>
       </div>
+      <p className="-mt-1 text-xs text-muted-foreground">
+        Leave EMI blank to use the standard reducing-balance calculation.
+      </p>
+
+      {preview && (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Monthly EMI</span>
+            <span className="font-semibold text-base text-foreground tabular-nums">
+              {formatINR(preview.emi)}
+              {emiAmount && Number(emiAmount) !== preview.emi && (
+                <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                  · using your override
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Total interest</span>
+            <span className="tabular-nums">{formatINR(preview.totalInterest)}</span>
+          </div>
+          {preview.totalGst > 0 && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Total GST on interest</span>
+              <span className="tabular-nums">{formatINR(preview.totalGst)}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between border-t border-primary/20 pt-1.5 mt-1.5">
+            <span className="text-muted-foreground">Total payable</span>
+            <span className="font-medium tabular-nums">
+              {formatINR(preview.totalPayable)}
+            </span>
+          </div>
+          <p className="text-[10px] text-muted-foreground pt-1">
+            Standard reducing-balance EMI (
+            {Number(interestRate)}% p.a. ·{" "}
+            {Number(tenure)} months
+            {preview.totalGst > 0 ? ` · ${gstOnInterest}% GST on interest` : ""}).
+          </p>
+        </div>
+      )}
 
       {source === "BANK" && (
         <>

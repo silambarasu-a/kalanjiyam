@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { loanPaymentSchema } from "@/lib/validators-domain";
+import { splitPayment } from "@/lib/loan-math";
 import { TransactionType, TransactionKind } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -58,11 +59,45 @@ export async function POST(
       return NextResponse.json({ error: "Pick an account or card" }, { status: 400 });
     }
 
-    // If principal/interest split is supplied, decrement outstanding by
-    // principal only (interest + GST are pure expense). Otherwise, decrement
-    // by the full amount.
-    const principalDrop = data.principalPortion ?? data.amount;
+    // Auto-split when the client didn't supply principal/interest portions.
+    // Standard reducing-balance: interest = outstanding · monthlyRate. GST
+    // (card EMI) sits on top of interest. Whatever remains of `amount` is
+    // principal, clamped at outstanding so the loan can't go negative.
+    const annualRate = loan.interestRate ? Number(loan.interestRate) : 0;
+    const gstPct = loan.gstOnInterest ? Number(loan.gstOnInterest) : null;
+    const emiHint = loan.emiAmount ? Number(loan.emiAmount) : data.amount;
+    const suggested = splitPayment(
+      Number(loan.outstanding),
+      annualRate,
+      Math.min(emiHint, data.amount),
+      gstPct
+    );
+
+    const interestPortion =
+      data.interestPortion != null ? data.interestPortion : suggested.interest;
+    const gstPortion =
+      data.gstPortion != null ? data.gstPortion : suggested.gst;
+    const principalDrop =
+      data.principalPortion != null
+        ? data.principalPortion
+        : Math.max(0, data.amount - interestPortion - gstPortion);
+
     const newOutstanding = Math.max(0, Number(loan.outstanding) - principalDrop);
+
+    // Advance nextDueDate by one cycle when the principal portion covers
+    // (close to) one full EMI principal. Heuristic, but matches what banks
+    // do — partial pre-payments don't shift the schedule.
+    const nextDue = (() => {
+      if (!loan.nextDueDate) return loan.nextDueDate;
+      if (newOutstanding <= 0) return null;
+      // Treat anything within 1% of the suggested principal as a full EMI.
+      const fullEmiPaid = principalDrop >= suggested.principal * 0.99;
+      if (!fullEmiPaid) return loan.nextDueDate;
+      const next = new Date(loan.nextDueDate);
+      if (loan.frequency === "YEARLY") next.setFullYear(next.getFullYear() + 1);
+      else next.setMonth(next.getMonth() + 1);
+      return next;
+    })();
 
     await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
@@ -84,14 +119,24 @@ export async function POST(
         where: { id },
         data: {
           outstanding: newOutstanding,
+          nextDueDate: nextDue,
           active: newOutstanding > 0 ? loan.active : false,
-          foreclosedAt: newOutstanding === 0 && loan.active ? new Date() : loan.foreclosedAt,
+          foreclosedAt:
+            newOutstanding === 0 && loan.active ? new Date() : loan.foreclosedAt,
         },
       });
       return txn;
     });
 
-    return NextResponse.json({ ok: true, outstanding: newOutstanding });
+    return NextResponse.json({
+      ok: true,
+      outstanding: newOutstanding,
+      split: {
+        principal: principalDrop,
+        interest: interestPortion,
+        gst: gstPortion,
+      },
+    });
   } catch (e) {
     return err(e);
   }

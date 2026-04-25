@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         name: parsed.data.name,
         phone: parsed.data.phone,
         dailyRate: parsed.data.dailyRate ?? null,
-        settlementCadence: parsed.data.settlementCadence ?? "MONTHLY",
+        settlementCadence: parsed.data.settlementCadence ?? "AS_NEEDED",
         customCadenceDays: parsed.data.customCadenceDays ?? null,
       },
     });

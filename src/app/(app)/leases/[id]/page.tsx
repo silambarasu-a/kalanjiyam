@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { CalendarCheck, CalendarX, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
@@ -309,7 +310,7 @@ function ConfirmPaymentDialog({
               </label>
               <label className="block">
                 <span className="text-xs font-medium">Date</span>
-                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
               </label>
             </div>
             <label className="block">

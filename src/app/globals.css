@@ -152,6 +152,14 @@
     cursor: not-allowed;
   }
 
+  /* Native checkboxes + radios pick up the brand emerald via the
+     `accent-color` CSS property. All modern browsers respect this; older
+     ones fall through to the default OS accent. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--primary);
+  }
+
   /* Native <select> elements share the same border + focus look as inputs so
      the form has a single visual rhythm. The Tailwind `appearance-none` is
      unnecessary because we keep the system caret arrow, but we drop the dotted
