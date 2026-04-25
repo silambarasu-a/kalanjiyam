@@ -51,12 +51,12 @@ type LivestockBatch = {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
 
-const TABS: { value: TransactionDefault | "INVESTMENT" | "HAND_LOAN"; label: string; icon: React.ElementType; disabled?: boolean }[] = [
+const TABS: { value: TransactionDefault | "INVESTMENT"; label: string; icon: React.ElementType; disabled?: boolean }[] = [
   { value: "INCOME", label: "Income", icon: ArrowDownLeft },
   { value: "EXPENSE", label: "Expense", icon: ArrowUpRight },
   { value: "TRANSFER", label: "Transfer", icon: ArrowLeftRight },
+  { value: "HAND_LOAN", label: "Hand loan", icon: HandCoins },
   { value: "INVESTMENT", label: "Invest", icon: LineChart, disabled: true },
-  { value: "HAND_LOAN", label: "Hand loan", icon: HandCoins, disabled: true },
 ];
 
 export function TransactionDialog() {
@@ -113,7 +113,9 @@ function DialogBody({
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const { data: categoriesData } = useSWR<{ categories: Category[] }>(
-    `/api/categories?type=${type === "TRANSFER" ? "EXPENSE" : type}`,
+    type === "INCOME" || type === "EXPENSE"
+      ? `/api/categories?type=${type}`
+      : null,
     fetcher
   );
   const { data: familyData } = useSWR<{ members: FamilyMember[] }>("/api/family", fetcher);
@@ -161,6 +163,8 @@ function DialogBody({
 
       {type === "TRANSFER" ? (
         <TransferForm accounts={accounts} onClose={onClose} />
+      ) : type === "HAND_LOAN" ? (
+        <HandLoanForm accounts={accounts} onClose={onClose} />
       ) : (
         <IncomeExpenseForm
           type={type}
@@ -553,6 +557,196 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : "Save transfer"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type HandLoanMember = { id: string; name: string; balance: number };
+
+function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { data: membersData } = useSWR<{ members: HandLoanMember[] }>(
+    "/api/hand-loan-members",
+    fetcher
+  );
+  const members = membersData?.members ?? [];
+
+  const [memberId, setMemberId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [direction, setDirection] = useState<"GIVEN" | "RECEIVED">("GIVEN");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(today);
+  const [accountId, setAccountId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setError(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter an amount");
+      return;
+    }
+    if (!accountId) {
+      setError("Pick an account");
+      return;
+    }
+    let resolvedMemberId = memberId;
+    if (memberId === "NEW") {
+      if (!newName.trim()) {
+        setError("Enter a name or pick an existing person");
+        return;
+      }
+    } else if (!memberId) {
+      setError("Pick a person or create a new one");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (memberId === "NEW") {
+        const createRes = await fetch("/api/hand-loan-members", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: newName.trim() }),
+        });
+        const createBody = await createRes.json();
+        if (!createRes.ok) {
+          setError(createBody.error ?? "Failed to create person");
+          return;
+        }
+        resolvedMemberId = createBody.id;
+      }
+      const res = await fetch("/api/hand-loan-entries", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          memberId: resolvedMemberId,
+          direction,
+          amount: amt,
+          date,
+          accountId,
+          notes: notes.trim() || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error ?? "Failed");
+        return;
+      }
+      toast.success(direction === "GIVEN" ? "Hand loan given" : "Hand loan received");
+      await mutateBalances();
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant={direction === "GIVEN" ? "default" : "outline"}
+          onClick={() => setDirection("GIVEN")}
+          className="gap-1.5"
+        >
+          <ArrowUpRight className="h-4 w-4" /> I gave
+        </Button>
+        <Button
+          type="button"
+          variant={direction === "RECEIVED" ? "default" : "outline"}
+          onClick={() => setDirection("RECEIVED")}
+          className="gap-1.5"
+        >
+          <ArrowDownLeft className="h-4 w-4" /> I received
+        </Button>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium">Person</span>
+        <select
+          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+          value={memberId}
+          onChange={(e) => setMemberId(e.target.value)}
+        >
+          <option value="">— pick —</option>
+          {members.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+              {m.balance !== 0 ? ` (${m.balance > 0 ? "owes" : "advanced"} ₹${Math.abs(m.balance).toLocaleString("en-IN")})` : ""}
+            </option>
+          ))}
+          <option value="NEW">+ Add new person</option>
+        </select>
+      </label>
+
+      {memberId === "NEW" && (
+        <label className="block">
+          <span className="text-xs font-medium">Name</span>
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Friend / relative"
+            maxLength={80}
+            autoFocus
+          />
+        </label>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">Amount (₹)</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">Date</span>
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium">
+          {direction === "GIVEN" ? "Paid from" : "Received into"}
+        </span>
+        <select
+          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+          value={accountId}
+          onChange={(e) => setAccountId(e.target.value)}
+        >
+          <option value="">— pick —</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.kind})
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium">Notes</span>
+        <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
+      </label>
+
+      <p className="text-xs text-muted-foreground">
+        For formal hand loans (interest + EMI schedule), go to Hand loans → Formal loan.
+      </p>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      <div className="flex gap-2 justify-end pt-1">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={submit} disabled={submitting}>
+          {submitting ? "Saving…" : "Save"}
         </Button>
       </div>
     </div>
