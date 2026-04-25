@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import {
+  requireWorkspace,
+  WorkspaceAccessError,
+  assertWorkspaceMembers,
+  assertWorkspaceFamilyMember,
+} from "@/lib/workspace";
 import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { accountCreateSchema } from "@/lib/validators-domain";
@@ -61,6 +66,11 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
+    await assertWorkspaceMembers(ctx.workspaceId, [
+      parsed.data.ownerUserId,
+      ...(parsed.data.sharedWithUserIds ?? []),
+    ]);
+    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
     const account = await prisma.account.create({
       data: {
         workspaceId: ctx.workspaceId,

@@ -13,10 +13,18 @@ export default function LoginPage() {
   );
 }
 
+function safeCallbackUrl(raw: string | null): string {
+  if (!raw) return "/dashboard";
+  // Only accept same-origin paths. Reject absolute URLs, protocol-relative
+  // URLs, and anything that isn't a leading single slash.
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "/dashboard";
+  return raw;
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const callbackUrl = params.get("callbackUrl") ?? "/dashboard";
+  const callbackUrl = safeCallbackUrl(params.get("callbackUrl"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

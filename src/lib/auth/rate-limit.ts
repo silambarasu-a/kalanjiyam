@@ -26,6 +26,7 @@ export function getClientIp(request: Request): string {
 }
 
 const HOUR = 60 * 60 * 1000;
+const FIFTEEN_MIN = 15 * 60 * 1000;
 
 export const rateLimit = {
   signupByIp: (ip: string) => hit(`signup:ip:${ip}`, 5, HOUR),
@@ -33,6 +34,11 @@ export const rateLimit = {
   forgotByEmail: (email: string) => hit(`forgot:email:${email.toLowerCase()}`, 5, HOUR),
   resetByIp: (ip: string) => hit(`reset:ip:${ip}`, 10, HOUR),
   resendByEmail: (email: string) => hit(`resend:email:${email.toLowerCase()}`, 3, HOUR),
+  // Login: short window so legitimate users keep trying; tight per-email +
+  // per-IP buckets slow down credential stuffing.
+  loginByEmail: (email: string) =>
+    hit(`login:email:${email.toLowerCase()}`, 8, FIFTEEN_MIN),
+  loginByIp: (ip: string) => hit(`login:ip:${ip}`, 30, FIFTEEN_MIN),
 };
 
 if (typeof setInterval !== "undefined") {

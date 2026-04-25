@@ -54,7 +54,10 @@ export function AmountInput({
 
   return (
     <div className="relative">
-      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none"
+      >
         ₹
       </span>
       <Input
@@ -64,7 +67,7 @@ export function AmountInput({
         value={formatIndianGrouping(value)}
         onChange={handle}
         placeholder={placeholder}
-        className={cn("pl-6 tabular-nums", className)}
+        className={cn("pl-8 tabular-nums", className)}
         {...rest}
       />
     </div>

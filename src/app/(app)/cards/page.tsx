@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { CardForm, type CardSnapshot } from "@/components/cards/card-form";
 import { formatINR } from "@/lib/utils";
+import { MoneyValue } from "@/components/ui/money-tone";
 
 type Card = CardSnapshot & {
   active: boolean;
@@ -91,13 +92,40 @@ export default function CardsPage() {
             </div>
             {c.kind === "CREDIT" && c.creditLimit != null && (
               <div>
-                <div className="text-xs text-muted-foreground">Available limit</div>
-                <div className="text-2xl font-semibold">
-                  {formatINR(c.availableLimit ?? c.creditLimit)}
-                </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  of {formatINR(c.creditLimit)} total
-                </div>
+                {(() => {
+                  const avail = c.availableLimit ?? c.creditLimit;
+                  const pct = c.creditLimit > 0 ? avail / c.creditLimit : 1;
+                  const tone =
+                    pct > 0.5 ? "gain" : pct > 0.2 ? "outstanding" : "loss";
+                  return (
+                    <>
+                      <div className="text-xs text-muted-foreground">
+                        Available limit
+                      </div>
+                      <MoneyValue
+                        tone={tone}
+                        value={formatINR(avail)}
+                        className="text-2xl font-semibold mt-1"
+                        icon={false}
+                      />
+                      <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={
+                            tone === "gain"
+                              ? "h-full bg-primary"
+                              : tone === "outstanding"
+                                ? "h-full bg-amber-500"
+                                : "h-full bg-destructive"
+                          }
+                          style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
+                        />
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        of {formatINR(c.creditLimit)} total
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
             {c.kind === "DEBIT" && c.parentAccount && (

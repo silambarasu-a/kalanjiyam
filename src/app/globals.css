@@ -152,6 +152,20 @@
     cursor: not-allowed;
   }
 
+  /* Native <select> elements share the same border + focus look as inputs so
+     the form has a single visual rhythm. The Tailwind `appearance-none` is
+     unnecessary because we keep the system caret arrow, but we drop the dotted
+     focus outline browsers add. */
+  select {
+    @apply h-9 rounded-lg border border-input bg-transparent px-3 py-1 text-sm transition-colors outline-none;
+  }
+  select:focus-visible {
+    @apply border-ring ring-1 ring-ring/30;
+  }
+  select:disabled {
+    @apply pointer-events-none cursor-not-allowed bg-input/50 opacity-50;
+  }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: #D1D5DB transparent;

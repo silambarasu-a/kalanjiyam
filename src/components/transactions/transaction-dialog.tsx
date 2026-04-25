@@ -52,12 +52,12 @@ type LivestockBatch = {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
 
-const TABS: { value: TransactionDefault | "INVESTMENT"; label: string; icon: React.ElementType; disabled?: boolean }[] = [
+const TABS: { value: TransactionDefault; label: string; icon: React.ElementType; disabled?: boolean }[] = [
   { value: "INCOME", label: "Income", icon: ArrowDownLeft },
   { value: "EXPENSE", label: "Expense", icon: ArrowUpRight },
   { value: "TRANSFER", label: "Transfer", icon: ArrowLeftRight },
   { value: "HAND_LOAN", label: "Hand loan", icon: HandCoins },
-  { value: "INVESTMENT", label: "Invest", icon: LineChart, disabled: true },
+  { value: "INVESTMENT", label: "Invest", icon: LineChart },
 ];
 
 export function TransactionDialog() {
@@ -166,6 +166,8 @@ function DialogBody({
         <TransferForm accounts={accounts} onClose={onClose} />
       ) : type === "HAND_LOAN" ? (
         <HandLoanForm accounts={accounts} onClose={onClose} />
+      ) : type === "INVESTMENT" ? (
+        <InvestmentForm accounts={accounts} onClose={onClose} />
       ) : (
         <IncomeExpenseForm
           type={type}
@@ -736,6 +738,223 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         </Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type InvestmentHolding = {
+  id: string;
+  kind: string;
+  name: string;
+  symbol: string | null;
+  quantity: number | null;
+  amount: number;
+  active: boolean;
+};
+
+function InvestmentForm({
+  accounts,
+  onClose,
+}: {
+  accounts: Account[];
+  onClose: () => void;
+}) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { data: invData } = useSWR<{ investments: InvestmentHolding[] }>(
+    "/api/investments",
+    fetcher
+  );
+  const investments = (invData?.investments ?? []).filter((i) => i.active);
+
+  const [investmentId, setInvestmentId] = useState("");
+  const [action, setAction] = useState<"BUY" | "SELL">("BUY");
+  const [amount, setAmount] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [price, setPrice] = useState("");
+  const [date, setDate] = useState(today);
+  const [accountId, setAccountId] = useState("");
+  const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selected = investments.find((i) => i.id === investmentId) ?? null;
+
+  async function submit() {
+    setError(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter an amount");
+      return;
+    }
+    if (!investmentId) {
+      setError("Pick a holding");
+      return;
+    }
+    if (!accountId) {
+      setError("Pick an account");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload: Record<string, unknown> = {
+        type: "INVESTMENT",
+        amount: amt,
+        description:
+          description.trim() ||
+          `${action === "BUY" ? "Buy" : "Sell"} · ${selected?.name ?? "Investment"}`,
+        date,
+        accountId,
+        investmentId,
+        investmentAction: action,
+        investmentQty: quantity ? Number(quantity) : null,
+        investmentPrice: price ? Number(price) : null,
+      };
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error ?? "Failed");
+        return;
+      }
+      toast.success(action === "BUY" ? "Investment purchase recorded" : "Investment sale recorded");
+      await mutateBalances();
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant={action === "BUY" ? "default" : "outline"}
+          onClick={() => setAction("BUY")}
+          className="gap-1.5"
+        >
+          <ArrowUpRight className="h-4 w-4" /> Buy
+        </Button>
+        <Button
+          type="button"
+          variant={action === "SELL" ? "default" : "outline"}
+          onClick={() => setAction("SELL")}
+          className="gap-1.5"
+        >
+          <ArrowDownLeft className="h-4 w-4" /> Sell
+        </Button>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium">Holding</span>
+        <select
+          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+          value={investmentId}
+          onChange={(e) => setInvestmentId(e.target.value)}
+        >
+          <option value="">— pick —</option>
+          {investments.map((i) => (
+            <option key={i.id} value={i.id}>
+              {i.kind} · {i.name}
+              {i.symbol ? ` (${i.symbol})` : ""}
+              {i.quantity != null ? ` · ${i.quantity} units` : ""}
+            </option>
+          ))}
+        </select>
+        {investments.length === 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            No active holdings yet. Create one in Investments first.
+          </p>
+        )}
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">Amount (₹)</span>
+          <AmountInput value={amount} onChange={setAmount} placeholder="0" />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">Date</span>
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">Quantity</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            placeholder="Optional"
+            min="0"
+            step="any"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">Price per unit (₹)</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder="Optional"
+            min="0"
+            step="any"
+          />
+        </label>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium">
+          {action === "BUY" ? "Pay from" : "Deposit to"}
+        </span>
+        <select
+          className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
+          value={accountId}
+          onChange={(e) => setAccountId(e.target.value)}
+        >
+          <option value="">— pick —</option>
+          {accounts
+            .filter((a) => a.kind !== "CARD")
+            .map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({a.kind} · {formatINR(a.balance)})
+              </option>
+            ))}
+        </select>
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium">Description</span>
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Optional"
+          maxLength={200}
+        />
+      </label>
+
+      <p className="text-xs text-muted-foreground">
+        {action === "BUY"
+          ? "Adds to the holding's invested amount and quantity."
+          : "Reduces the holding's invested amount and quantity (clamped at 0)."}
+      </p>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      <div className="flex gap-2 justify-end pt-1">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={submit} disabled={submitting}>
+          {submitting ? "Saving…" : action === "BUY" ? "Record purchase" : "Record sale"}
         </Button>
       </div>
     </div>

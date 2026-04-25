@@ -17,6 +17,7 @@ import {
 import { LoanForm } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Loan = {
   id: string;
@@ -134,13 +135,24 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
                 </div>
               </div>
               <div>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-muted-foreground">Outstanding</span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Outstanding</span>
+                    <ToneBadge
+                      tone={l.outstanding > 0 ? "outstanding" : "settled"}
+                      label={l.outstanding > 0 ? "Active" : "Cleared"}
+                    />
+                  </div>
                   <span className="text-[10px] text-muted-foreground">
                     {formatINR(paid)} paid of {formatINR(l.principal)}
                   </span>
                 </div>
-                <div className="text-2xl font-semibold">{formatINR(l.outstanding)}</div>
+                <MoneyValue
+                  tone={l.outstanding > 0 ? "outstanding" : "settled"}
+                  value={formatINR(l.outstanding)}
+                  className="text-2xl font-semibold mt-1"
+                  icon={false}
+                />
                 <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
                   <div
                     className="h-full bg-primary transition-all"

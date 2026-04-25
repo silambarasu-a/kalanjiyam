@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Investment = {
   id: string;
@@ -115,13 +116,11 @@ export default function InvestmentsPage() {
             className="rounded-xl border bg-card p-5 hover:bg-accent/40 transition"
           >
             <div className="flex items-start gap-3">
-              <LineChart className="h-5 w-5 mt-0.5 text-primary shrink-0" />
+              <LineChart className="h-5 w-5 mt-0.5 text-sky-600 dark:text-sky-400 shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="font-semibold truncate">{i.name}</span>
-                  <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                    {i.kind}
-                  </span>
+                  <ToneBadge tone="invested" label={i.kind} />
                 </div>
                 <div className="mt-0.5 text-xs text-muted-foreground truncate">
                   {i.institution ? `${i.institution} · ` : ""}
@@ -131,14 +130,16 @@ export default function InvestmentsPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="font-semibold">{formatINR(i.currentValue ?? i.amount)}</div>
+                <div className="font-semibold tabular-nums">
+                  {formatINR(i.currentValue ?? i.amount)}
+                </div>
                 {i.currentValue != null && i.currentValue !== i.amount && (
-                  <div
-                    className={`text-[11px] ${i.currentValue > i.amount ? "text-primary" : "text-destructive"}`}
-                  >
-                    {i.currentValue > i.amount ? "+" : "−"}
-                    {formatINR(Math.abs(i.currentValue - i.amount))}
-                  </div>
+                  <MoneyValue
+                    tone={i.currentValue > i.amount ? "gain" : "loss"}
+                    value={`${i.currentValue > i.amount ? "+" : "−"}${formatINR(Math.abs(i.currentValue - i.amount))}`}
+                    className="text-[11px] mt-0.5"
+                    iconClassName="h-3 w-3"
+                  />
                 )}
               </div>
             </div>

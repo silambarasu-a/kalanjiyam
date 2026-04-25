@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import {
+  requireWorkspace,
+  WorkspaceAccessError,
+  assertWorkspaceMembers,
+  assertWorkspaceFamilyMember,
+} from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { cardUpdateSchema } from "@/lib/validators-domain";
@@ -61,6 +66,11 @@ export async function PATCH(
     if (!canModifyRecord(session, existing)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+    await assertWorkspaceMembers(ctx.workspaceId, [
+      parsed.data.ownerUserId,
+      ...(parsed.data.sharedWithUserIds ?? []),
+    ]);
+    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
     const card = await prisma.card.update({
       where: { id },
       data: {

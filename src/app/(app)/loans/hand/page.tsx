@@ -17,6 +17,7 @@ import {
 import { LoanForm } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR } from "@/lib/utils";
+import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Member = {
   id: string;
@@ -114,21 +115,41 @@ export default function HandLoansPage() {
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground">Balance</div>
-              <div
-                className={`text-2xl font-semibold ${
-                  m.balance > 0
-                    ? "text-primary"
-                    : m.balance < 0
-                      ? "text-destructive"
-                      : "text-muted-foreground"
-                }`}
-              >
-                {m.balance > 0 ? "+" : m.balance < 0 ? "−" : ""}
-                {formatINR(Math.abs(m.balance))}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Balance</span>
+                <ToneBadge
+                  tone={
+                    m.balance > 0
+                      ? "owed_in"
+                      : m.balance < 0
+                        ? "owed_out"
+                        : "settled"
+                  }
+                  label={
+                    m.balance > 0
+                      ? "They owe you"
+                      : m.balance < 0
+                        ? "You owe them"
+                        : "Even"
+                  }
+                />
               </div>
+              <MoneyValue
+                tone={
+                  m.balance > 0
+                    ? "owed_in"
+                    : m.balance < 0
+                      ? "owed_out"
+                      : "settled"
+                }
+                value={`${m.balance > 0 ? "+" : m.balance < 0 ? "−" : ""}${formatINR(Math.abs(m.balance))}`}
+                className="text-2xl font-semibold mt-1"
+                icon={false}
+              />
               <div className="mt-1 text-[11px] text-muted-foreground">
-                +{formatINR(m.totalGiven)} given / −{formatINR(m.totalReceived)} received
+                <span className="text-primary">+{formatINR(m.totalGiven)}</span> given /{" "}
+                <span className="text-destructive">−{formatINR(m.totalReceived)}</span>{" "}
+                received
               </div>
             </div>
             <div className="flex gap-2">
