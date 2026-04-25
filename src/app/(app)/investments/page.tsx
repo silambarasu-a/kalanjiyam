@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { Plus, LineChart } from "lucide-react";
+import { Plus, LineChart, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
@@ -78,9 +78,17 @@ export default function InvestmentsPage() {
             {totalInvested > 0 ? ` · ${formatINR(totalInvested)} invested` : ""}.
           </p>
         </div>
-        <Button onClick={() => setEditOpen("new")} className="gap-2">
-          <Plus className="h-4 w-4" /> New investment
-        </Button>
+        <div className="flex gap-2">
+          <Link
+            href="/investments/stocks"
+            className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+          >
+            <TrendingUp className="h-4 w-4" /> Stocks portfolio
+          </Link>
+          <Button onClick={() => setEditOpen("new")} className="gap-2">
+            <Plus className="h-4 w-4" /> New investment
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw } from "lucide-react";
+import type { StockQuote } from "@/app/api/market/quote/route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
@@ -756,6 +757,8 @@ type InvestmentHolding = {
   kind: string;
   name: string;
   symbol: string | null;
+  exchange: string | null;
+  currency: string | null;
   quantity: number | null;
   amount: number;
   active: boolean;
@@ -785,8 +788,46 @@ function InvestmentForm({
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchingPrice, setFetchingPrice] = useState(false);
+  const [livePrice, setLivePrice] = useState<{ price: number; currency: string } | null>(null);
 
   const selected = investments.find((i) => i.id === investmentId) ?? null;
+  const isStock = selected?.kind === "STOCK" && !!selected?.symbol;
+
+  // When a stock holding is selected, fetch its live price.
+  useEffect(() => {
+    setLivePrice(null);
+    if (!isStock || !selected?.symbol) return;
+    let cancelled = false;
+    setFetchingPrice(true);
+    fetch(`/api/market/quote?symbols=${encodeURIComponent(selected.symbol)}`)
+      .then((r) => r.json())
+      .then((data: StockQuote[]) => {
+        if (cancelled) return;
+        const q = data?.[0];
+        if (q && q.price > 0) setLivePrice({ price: q.price, currency: q.currency || "INR" });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setFetchingPrice(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isStock, selected?.symbol]);
+
+  // Auto-compute amount when qty + price are entered.
+  useEffect(() => {
+    const q = parseFloat(quantity);
+    const p = parseFloat(price);
+    if (q > 0 && p > 0) {
+      setAmount(String(Number((q * p).toFixed(2))));
+    }
+  }, [quantity, price]);
+
+  function applyLivePrice() {
+    if (livePrice) setPrice(livePrice.price.toFixed(2));
+  }
 
   async function submit() {
     setError(null);
@@ -899,24 +940,48 @@ function InvestmentForm({
             inputMode="decimal"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
-            placeholder="Optional"
+            placeholder={isStock ? "Shares" : "Optional"}
             min="0"
             step="any"
           />
         </label>
         <label className="block">
-          <span className="text-xs font-medium">Price per unit (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            placeholder="Optional"
-            min="0"
-            step="any"
-          />
+          <span className="text-xs font-medium">
+            Price per unit {selected?.currency === "USD" ? "($)" : "(₹)"}
+          </span>
+          <div className="relative">
+            <Input
+              type="number"
+              inputMode="decimal"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              placeholder={fetchingPrice ? "Fetching live price…" : "Optional"}
+              min="0"
+              step="any"
+              className="pr-8"
+            />
+            {fetchingPrice && (
+              <RefreshCw className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+          </div>
         </label>
       </div>
+
+      {isStock && livePrice && (
+        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+          <span>
+            Live price for <span className="font-mono font-semibold">{selected?.symbol}</span>:{" "}
+            {livePrice.currency === "USD" ? "$" : "₹"}
+            {livePrice.price.toLocaleString("en-IN", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </span>
+          <Button type="button" size="xs" variant="outline" onClick={applyLivePrice}>
+            Use live price
+          </Button>
+        </div>
+      )}
 
       <label className="block">
         <span className="text-xs font-medium">

@@ -440,6 +440,8 @@ export const investmentCreateSchema = z.object({
   quantity: z.number().nonnegative().optional().nullable(),
   purchasePrice: z.number().nonnegative().optional().nullable(),
   exchange: z.string().trim().max(20).optional(),
+  currency: z.enum(["INR", "USD"]).optional(),
+  dividends: z.number().nonnegative().optional().nullable(),
   policyNumber: z.string().trim().max(80).optional(),
   policyType: z
     .enum([

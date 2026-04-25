@@ -257,6 +257,7 @@ model User {
   ownedCards              Card[]          @relation("CardOwner")
   ownedLoans              Loan[]          @relation("LoanOwner")
   ownedInvestments        Investment[]    @relation("InvestmentOwner")
+  ownedStockWishlist      StockWishlist[] @relation("StockWishlistOwner")
   transactions            Transaction[]   @relation("TransactionAuthor")
   createdTransactions     Transaction[]   @relation("TransactionCreatedBy")
   editedTransactions      Transaction[]   @relation("TransactionEditedBy")
@@ -299,6 +300,7 @@ model Workspace {
   handLoanMembers      HandLoanMember[]
   investments          Investment[]
   investmentReminders  InvestmentReminder[]
+  stockWishlist        StockWishlist[]
   auditLogs            AuditLog[]
 
   @@index([ownerUserId])
@@ -987,6 +989,25 @@ model Investment {
   reminders    InvestmentReminder[] @relation("ReminderInvestment")
 
   @@index([workspaceId, kind, active])
+  @@index([workspaceId, ownerUserId])
+}
+
+model StockWishlist {
+  id                String   @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  ownerUser         User?    @relation("StockWishlistOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[] @default([])
+  symbol            String
+  name              String?
+  exchange          String?
+  targetPrice       Decimal? @db.Decimal(14, 4)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([workspaceId])
   @@index([workspaceId, ownerUserId])
 }
 
