@@ -222,3 +222,165 @@ export const vaccinationLogCreateSchema = z.object({
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
 });
+
+export const workerCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  phone: z.string().trim().max(20).optional(),
+  dailyRate: z.number().nonnegative().optional().nullable(),
+  settlementCadence: z.enum(["WEEKLY", "MONTHLY", "CUSTOM"]).optional().default("MONTHLY"),
+  customCadenceDays: z.number().int().positive().optional().nullable(),
+});
+
+export const workerUpdateSchema = workerCreateSchema.partial().extend({
+  active: z.boolean().optional(),
+  archivedAt: z.string().optional().nullable(),
+});
+
+export const attendanceUpsertSchema = z.object({
+  workerId: z.string().uuid(),
+  date: z.string(),
+  present: z.boolean(),
+  dailyRateOverride: z.number().nonnegative().optional().nullable(),
+  quantity: z.number().nonnegative().optional().nullable(),
+  rate: z.number().nonnegative().optional().nullable(),
+  cropBatchId: z.string().uuid().optional().nullable(),
+  livestockBatchId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const wagePaymentCreateSchema = z.object({
+  workerId: z.string().uuid(),
+  amount: z.number().positive(),
+  paidAt: z.string(),
+  isBonus: z.boolean().optional().default(false),
+  isAdvance: z.boolean().optional().default(false),
+  notes: z.string().trim().max(500).optional(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+});
+
+export const wageSettlementSettleSchema = z.object({
+  paymentAccountId: z.string().uuid().optional().nullable(),
+  paymentCardId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(200).optional(),
+});
+
+const loanSourceEnum = z.enum(["BANK", "HAND_FORMAL", "CARD_EMI"]);
+const loanKindEnum = z.enum([
+  "PERSONAL",
+  "HOME",
+  "CAR",
+  "GOLD",
+  "BUSINESS",
+  "EDUCATION",
+  "OTHER",
+]);
+
+const loanFieldsSchema = z.object({
+  kind: loanKindEnum.optional().default("PERSONAL"),
+  source: loanSourceEnum,
+  lender: z.string().trim().min(1).max(120),
+  borrower: z.string().trim().max(120).optional().nullable(),
+  principal: z.number().positive(),
+  outstanding: z.number().nonnegative().optional(),
+  interestRate: z.number().nonnegative().optional().nullable(),
+  gstOnInterest: z.number().nonnegative().optional().nullable(),
+  emiAmount: z.number().positive().optional().nullable(),
+  tenure: z.number().int().positive().optional().nullable(),
+  frequency: z.string().optional(),
+  charges: z.number().nonnegative().optional().nullable(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  isExisting: z.boolean().optional().default(false),
+  startedAt: z.string(),
+  maturityAt: z.string().optional().nullable(),
+  nextDueDate: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const loanCreateSchema = loanFieldsSchema.refine(
+  (d) => d.source !== "CARD_EMI" || !!d.cardId,
+  { message: "Card EMI needs a card", path: ["cardId"] }
+);
+
+export const loanUpdateSchema = loanFieldsSchema.partial().extend({
+  active: z.boolean().optional(),
+});
+
+export const loanPaymentSchema = z.object({
+  amount: z.number().positive(),
+  paidAt: z.string(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  principalPortion: z.number().nonnegative().optional().nullable(),
+  interestPortion: z.number().nonnegative().optional().nullable(),
+  gstPortion: z.number().nonnegative().optional().nullable(),
+  notes: z.string().trim().max(200).optional(),
+});
+
+export const handLoanMemberCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  email: z.string().trim().email().optional().or(z.literal("")),
+  phone: z.string().trim().max(20).optional(),
+  familyMemberId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const handLoanMemberUpdateSchema = handLoanMemberCreateSchema.partial().extend({
+  active: z.boolean().optional(),
+});
+
+export const handLoanEntryCreateSchema = z.object({
+  memberId: z.string().uuid(),
+  direction: z.enum(["GIVEN", "RECEIVED"]),
+  amount: z.number().positive(),
+  date: z.string(),
+  notes: z.string().trim().max(500).optional(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+});
+
+const leaseFieldsSchema = z.object({
+  direction: z.enum(["LEASED_OUT", "LEASED_IN"]),
+  lessorMemberId: z.string().uuid().optional().nullable(),
+  lessorName: z.string().trim().max(120).optional().nullable(),
+  lesseeMemberId: z.string().uuid().optional().nullable(),
+  lesseeName: z.string().trim().max(120).optional().nullable(),
+  assetType: z.enum(["CROP_BATCH", "LIVESTOCK_BATCH"]),
+  cropBatchId: z.string().uuid().optional().nullable(),
+  livestockBatchId: z.string().uuid().optional().nullable(),
+  amount: z.number().positive(),
+  frequency: z.enum(["ONE_TIME", "YEARLY", "CUSTOM_MONTHS"]),
+  customMonths: z.number().int().positive().optional().nullable(),
+  startDate: z.string(),
+  endDate: z.string(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const leaseCreateSchema = leaseFieldsSchema
+  .refine(
+    (d) =>
+      (d.assetType === "CROP_BATCH" && !!d.cropBatchId) ||
+      (d.assetType === "LIVESTOCK_BATCH" && !!d.livestockBatchId),
+    { message: "Asset must match the chosen type", path: ["cropBatchId"] }
+  )
+  .refine(
+    (d) => d.frequency !== "CUSTOM_MONTHS" || !!d.customMonths,
+    { message: "Custom months required", path: ["customMonths"] }
+  )
+  .refine((d) => new Date(d.endDate) >= new Date(d.startDate), {
+    message: "End date must be after start",
+    path: ["endDate"],
+  });
+
+export const leaseUpdateSchema = leaseFieldsSchema.partial().extend({
+  active: z.boolean().optional(),
+});
+
+export const leasePaymentConfirmSchema = z.object({
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  date: z.string().optional(),
+  amount: z.number().positive().optional(),
+  notes: z.string().trim().max(200).optional(),
+});

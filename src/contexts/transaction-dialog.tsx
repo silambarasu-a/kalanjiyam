@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
-export type TransactionDefault = "INCOME" | "EXPENSE" | "TRANSFER";
+export type TransactionDefault = "INCOME" | "EXPENSE" | "TRANSFER" | "HAND_LOAN";
 
 type Ctx = {
   open: boolean;
