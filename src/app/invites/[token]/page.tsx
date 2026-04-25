@@ -16,11 +16,12 @@ export default async function InvitePage({
   const nowMs = Date.now();
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-neutral-50 px-4">
-      <div className="w-full max-w-md bg-white border border-neutral-200 rounded-lg p-6 shadow-sm">
+    <main className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md bg-card border border-border rounded-lg p-6 shadow-sm">
         <div className="mb-5 text-center">
-          <div className="text-xs font-bold tracking-widest text-[var(--brand-navy)]">
-            KALANJIYAM
+          <div className="flex items-center justify-center gap-1.5 text-sm font-semibold tracking-tight text-foreground">
+            <span className="h-4 w-1 bg-primary rounded-full" />
+            Kalanjiyam
           </div>
           <h1 className="mt-2 text-xl font-semibold">Workspace invite</h1>
         </div>
@@ -38,12 +39,12 @@ export default async function InvitePage({
           />
         ) : (
           <div className="space-y-4">
-            <div className="rounded border border-neutral-200 bg-neutral-50 p-4 text-sm">
+            <div className="rounded border border-neutral-200 bg-background p-4 text-sm">
               <div className="text-muted-foreground">
                 <strong>{invite.invitedByUser.name}</strong> has invited you to join
               </div>
               <div className="mt-1 text-lg font-semibold">{invite.workspace.name}</div>
-              <div className="mt-1 text-xs uppercase tracking-widest text-[var(--brand-orange)]">
+              <div className="mt-1 text-xs uppercase tracking-widest text-primary">
                 as {invite.role}
               </div>
               <div className="mt-2 text-xs text-muted-foreground">
@@ -59,13 +60,13 @@ export default async function InvitePage({
                 <div className="flex gap-2">
                   <Link
                     href={`/login?callbackUrl=${encodeURIComponent(`/invites/${token}`)}`}
-                    className="flex-1 text-center rounded-md bg-neutral-900 text-white py-2"
+                    className="flex-1 text-center rounded-md bg-primary text-primary-foreground py-2"
                   >
                     Sign in
                   </Link>
                   <Link
                     href={`/signup?callbackUrl=${encodeURIComponent(`/invites/${token}`)}`}
-                    className="flex-1 text-center rounded-md border border-neutral-300 py-2"
+                    className="flex-1 text-center rounded-md border border-input py-2"
                   >
                     Create account
                   </Link>
@@ -93,7 +94,7 @@ function Message({ title, body }: { title: string; body: string }) {
       <p className="mt-1 text-sm text-muted-foreground">{body}</p>
       <Link
         href="/login"
-        className="mt-4 inline-block rounded-md bg-neutral-900 text-white px-4 py-2 text-sm"
+        className="mt-4 inline-block rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm"
       >
         Go to login
       </Link>

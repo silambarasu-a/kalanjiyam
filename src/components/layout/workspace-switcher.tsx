@@ -49,14 +49,14 @@ export function WorkspaceSwitcher() {
       <PopoverTrigger
         className={cn(
           "w-full flex items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm",
-          "bg-[var(--sidebar-accent)] text-white/90 hover:bg-white/10"
+          "bg-secondary text-foreground hover:bg-accent transition-colors"
         )}
       >
         <span className="flex items-center gap-2 min-w-0">
-          <Building2 className="h-4 w-4 shrink-0" />
-          <span className="truncate">{active?.name ?? "No workspace"}</span>
+          <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="truncate font-medium">{active?.name ?? "No workspace"}</span>
         </span>
-        <ChevronsUpDown className="h-4 w-4 text-white/60 shrink-0" />
+        <ChevronsUpDown className="h-4 w-4 text-muted-foreground shrink-0" />
       </PopoverTrigger>
       <PopoverContent className="w-64 p-1" align="start">
         <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -70,7 +70,7 @@ export function WorkspaceSwitcher() {
             disabled={switching !== null}
             className={cn(
               "w-full flex items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm",
-              "hover:bg-accent/50 disabled:opacity-50"
+              "hover:bg-accent disabled:opacity-50"
             )}
           >
             <span className="flex items-center gap-2 min-w-0">
@@ -80,13 +80,11 @@ export function WorkspaceSwitcher() {
                 {w.role}
               </span>
             </span>
-            {w.id === activeId && <Check className="h-4 w-4 text-[var(--brand-orange)]" />}
+            {w.id === activeId && <Check className="h-4 w-4 text-primary" />}
           </button>
         ))}
         {workspaces.length === 0 && (
-          <div className="px-2 py-2 text-sm text-muted-foreground">
-            No workspaces yet.
-          </div>
+          <div className="px-2 py-2 text-sm text-muted-foreground">No workspaces yet.</div>
         )}
       </PopoverContent>
     </Popover>

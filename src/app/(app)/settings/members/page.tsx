@@ -177,10 +177,10 @@ export default function MembersPage() {
 function RoleBadge({ role }: { role: string }) {
   const color =
     role === "OWNER"
-      ? "bg-[var(--brand-maroon)] text-white"
+      ? "bg-primary text-primary-foreground"
       : role === "ADMIN"
-        ? "bg-[var(--brand-navy)] text-white"
-        : "bg-neutral-200 text-neutral-700";
+        ? "bg-secondary text-secondary-foreground"
+        : "bg-muted text-muted-foreground";
   return (
     <span className={`rounded px-2 py-0.5 text-[10px] uppercase tracking-widest ${color}`}>
       {role}

@@ -15,11 +15,11 @@ export function Sidebar() {
   const { data: session } = useSession();
 
   return (
-    <aside className="hidden md:flex h-screen w-64 shrink-0 flex-col bg-[var(--sidebar)] text-white">
-      <div className="px-5 pt-6 pb-4">
+    <aside className="hidden md:flex sticky top-3 self-start h-[calc(100vh-1.5rem)] w-64 shrink-0 flex-col bg-sidebar border border-sidebar-border rounded-2xl shadow-[var(--shadow-soft)] overflow-hidden text-sidebar-foreground">
+      <div className="px-5 pt-5 pb-3">
         <div className="flex items-center gap-2">
-          <span className="h-7 w-1 bg-[var(--brand-orange)] rounded-full" />
-          <span className="text-lg font-bold tracking-widest">KALANJIYAM</span>
+          <span className="h-7 w-1.5 bg-primary rounded-full" />
+          <span className="text-base font-semibold tracking-tight">Kalanjiyam</span>
         </div>
       </div>
 
@@ -34,8 +34,8 @@ export function Sidebar() {
           );
           if (visibleItems.length === 0) return null;
           return (
-            <div key={group.label} className="mb-4">
-              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-white/40">
+            <div key={group.label} className="mb-3">
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                 {group.label}
               </div>
               <ul className="space-y-0.5">
@@ -47,13 +47,17 @@ export function Sidebar() {
                       <Link
                         href={item.href}
                         className={cn(
-                          "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                          "hover:bg-[var(--sidebar-accent)]",
-                          active &&
-                            "bg-[var(--sidebar-accent)] border-l-2 border-[var(--brand-orange)] pl-[10px]"
+                          "flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm transition-colors",
+                          "hover:bg-accent",
+                          active
+                            ? "bg-accent text-primary font-medium"
+                            : "text-foreground"
                         )}
                       >
-                        <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                        <NavIcon
+                          name={item.icon}
+                          className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted-foreground")}
+                        />
                         <span className="truncate">{item.label}</span>
                       </Link>
                     </li>
@@ -65,7 +69,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-white/10 p-3">
+      <div className="border-t border-sidebar-border p-3">
         <UserMenu />
       </div>
     </aside>

@@ -1,46 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, Pencil, Trash2, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CardForm, type CardSnapshot } from "@/components/cards/card-form";
 import { formatINR } from "@/lib/utils";
 
-type Card = {
-  id: string;
-  name: string;
-  kind: "DEBIT" | "CREDIT";
-  network: "VISA" | "MASTERCARD" | "RUPAY" | "AMEX" | "DINERS" | "OTHER";
-  supportsUpi: boolean;
-  last4: string | null;
-  limitMode: "SOLO" | "SHARED";
+type Card = CardSnapshot & {
   active: boolean;
   ownerUser: { id: string; name: string } | null;
   ownerMember: { id: string; name: string } | null;
-  parentAccount: { id: string; name: string } | null;
   accountId: string | null;
-  creditLimit: number | null;
   availableLimit: number | null;
   sharedWithUserIds: string[];
 };
 
-type BankAccountRow = { id: string; name: string; kind: string };
-
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
-const NETWORKS = ["VISA", "MASTERCARD", "RUPAY", "AMEX", "DINERS", "OTHER"] as const;
 
 export default function CardsPage() {
   const { data, isLoading } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
-  const { data: accounts } = useSWR<{ accounts: BankAccountRow[] }>("/api/accounts", fetcher);
   const [editOpen, setEditOpen] = useState<Card | "new" | null>(null);
 
   return (
@@ -127,233 +113,18 @@ export default function CardsPage() {
         )}
       </div>
 
-      <CardDialog
-        card={editOpen === "new" ? null : (editOpen as Card | null)}
-        accounts={(accounts?.accounts ?? []).filter((a) => a.kind === "BANK")}
-        open={editOpen !== null}
-        onClose={() => setEditOpen(null)}
-      />
+      <Dialog open={editOpen !== null} onOpenChange={(o) => !o && setEditOpen(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editOpen && editOpen !== "new" ? "Edit card" : "New card"}</DialogTitle>
+          </DialogHeader>
+          <CardForm
+            card={editOpen === "new" || editOpen === null ? null : (editOpen as Card)}
+            onSaved={() => setEditOpen(null)}
+            onCancel={() => setEditOpen(null)}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
-  );
-}
-
-function CardDialog({
-  card,
-  accounts,
-  open,
-  onClose,
-}: {
-  card: Card | null;
-  accounts: BankAccountRow[];
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState<"DEBIT" | "CREDIT">("CREDIT");
-  const [network, setNetwork] = useState<Card["network"]>("VISA");
-  const [supportsUpi, setSupportsUpi] = useState(false);
-  const [last4, setLast4] = useState("");
-  const [parentAccountId, setParentAccountId] = useState<string>("");
-  const [creditLimit, setCreditLimit] = useState("");
-  const [statementDate, setStatementDate] = useState("");
-  const [gracePeriod, setGracePeriod] = useState("");
-  const [limitMode, setLimitMode] = useState<"SOLO" | "SHARED">("SOLO");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset form state on dialog open. */
-    setName(card?.name ?? "");
-    setKind(card?.kind ?? "CREDIT");
-    setNetwork(card?.network ?? "VISA");
-    setSupportsUpi(card?.supportsUpi ?? false);
-    setLast4(card?.last4 ?? "");
-    setParentAccountId(card?.parentAccount?.id ?? "");
-    setCreditLimit(card?.creditLimit != null ? String(card.creditLimit) : "");
-    setStatementDate("");
-    setGracePeriod("");
-    setLimitMode(card?.limitMode ?? "SOLO");
-    setError(null);
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, card]);
-
-  async function submit() {
-    setError(null);
-    setSubmitting(true);
-    try {
-      const payload: Record<string, unknown> = {
-        name,
-        kind,
-        network,
-        supportsUpi,
-        last4: last4 ? last4.slice(-4) : null,
-        parentAccountId: kind === "DEBIT" ? parentAccountId || null : null,
-        limitMode,
-      };
-      if (kind === "CREDIT") {
-        payload.creditLimit = creditLimit ? Number(creditLimit) : null;
-        payload.statementDate = statementDate ? Number(statementDate) : null;
-        payload.gracePeriod = gracePeriod ? Number(gracePeriod) : null;
-      }
-      const res = await fetch(card ? `/api/cards/${card.id}` : "/api/cards", {
-        method: card ? "PATCH" : "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json();
-      if (!res.ok) setError(body.error ?? "Failed");
-      else {
-        globalMutate("/api/cards");
-        globalMutate("/api/accounts");
-        onClose();
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{card ? "Edit card" : "New card"}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <label className="block">
-            <span className="text-xs font-medium">Name</span>
-            <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={80} />
-          </label>
-          <div>
-            <span className="text-xs font-medium block mb-2">Kind</span>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={kind === "CREDIT" ? "default" : "outline"}
-                onClick={() => setKind("CREDIT")}
-              >
-                Credit
-              </Button>
-              <Button
-                type="button"
-                variant={kind === "DEBIT" ? "default" : "outline"}
-                onClick={() => setKind("DEBIT")}
-              >
-                Debit
-              </Button>
-            </div>
-          </div>
-          <label className="block">
-            <span className="text-xs font-medium">Network</span>
-            <select
-              className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-              value={network}
-              onChange={(e) => setNetwork(e.target.value as Card["network"])}
-            >
-              {NETWORKS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={supportsUpi}
-              onChange={(e) => setSupportsUpi(e.target.checked)}
-            />
-            <span className="text-sm">Supports UPI (typical for Rupay credit cards)</span>
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium">Last 4 digits</span>
-            <Input
-              value={last4}
-              onChange={(e) => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              maxLength={4}
-            />
-          </label>
-          {kind === "DEBIT" ? (
-            <label className="block">
-              <span className="text-xs font-medium">Linked bank account</span>
-              <select
-                className="w-full rounded border border-input bg-background px-2 py-2 text-sm mt-1"
-                value={parentAccountId}
-                onChange={(e) => setParentAccountId(e.target.value)}
-              >
-                <option value="">— choose —</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <>
-              <label className="block">
-                <span className="text-xs font-medium">Credit limit (₹)</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={creditLimit}
-                  onChange={(e) => setCreditLimit(e.target.value)}
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs font-medium">Statement day</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={31}
-                    value={statementDate}
-                    onChange={(e) => setStatementDate(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">Grace (days)</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={gracePeriod}
-                    onChange={(e) => setGracePeriod(e.target.value)}
-                  />
-                </label>
-              </div>
-              <div>
-                <span className="text-xs font-medium block mb-2">Limit mode</span>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant={limitMode === "SOLO" ? "default" : "outline"}
-                    onClick={() => setLimitMode("SOLO")}
-                  >
-                    Solo
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={limitMode === "SHARED" ? "default" : "outline"}
-                    onClick={() => setLimitMode("SHARED")}
-                  >
-                    Shared
-                  </Button>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Shared = sub-card that draws on a parent card&apos;s limit.
-                </p>
-              </div>
-            </>
-          )}
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !name.trim()}>
-            {card ? "Save" : "Create"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

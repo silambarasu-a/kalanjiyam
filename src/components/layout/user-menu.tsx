@@ -22,15 +22,15 @@ export function UserMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="w-full flex items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-white/5">
+      <DropdownMenuTrigger className="w-full flex items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent transition-colors">
         <Avatar className="h-8 w-8">
-          <AvatarFallback className="bg-[var(--brand-orange)] text-white text-xs">
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
             {initials}
           </AvatarFallback>
         </Avatar>
         <div className="flex-1 min-w-0">
-          <div className="truncate text-white/90">{session?.user.name}</div>
-          <div className="truncate text-xs text-white/50">{session?.user.email}</div>
+          <div className="truncate font-medium">{session?.user.name}</div>
+          <div className="truncate text-xs text-muted-foreground">{session?.user.email}</div>
         </div>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">

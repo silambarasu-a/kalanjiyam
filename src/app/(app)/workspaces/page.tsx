@@ -117,7 +117,7 @@ export default function WorkspacesPage() {
               <div className="flex items-center gap-2">
                 <h3 className="truncate font-semibold">{w.name}</h3>
                 {w.id === activeId && (
-                  <span className="text-[10px] uppercase tracking-widest text-[var(--brand-orange)]">
+                  <span className="text-[10px] uppercase tracking-widest text-primary">
                     active
                   </span>
                 )}

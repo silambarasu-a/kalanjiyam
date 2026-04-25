@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CardForm } from "@/components/cards/card-form";
 import { formatINR } from "@/lib/utils";
 
 type Account = {
@@ -30,6 +31,8 @@ type Account = {
   sharedWithUserIds: string[];
 };
 
+type DialogMode = null | { kind: "new" } | { kind: "newCard" } | { kind: "edit"; account: Account };
+
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_META = {
@@ -41,7 +44,7 @@ const KIND_META = {
 
 export default function AccountsPage() {
   const { data, isLoading } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const [editOpen, setEditOpen] = useState<Account | "new" | null>(null);
+  const [dialog, setDialog] = useState<DialogMode>(null);
 
   return (
     <div className="space-y-6">
@@ -53,7 +56,7 @@ export default function AccountsPage() {
             transactions.
           </p>
         </div>
-        <Button onClick={() => setEditOpen("new")} className="gap-2">
+        <Button onClick={() => setDialog({ kind: "new" })} className="gap-2">
           <Plus className="h-4 w-4" /> New account
         </Button>
       </div>
@@ -77,14 +80,16 @@ export default function AccountsPage() {
                   </div>
                 </Link>
                 <div className="flex gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setEditOpen(a)}
-                    aria-label="Edit"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
+                  {a.kind !== "CARD" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDialog({ kind: "edit", account: a })}
+                      aria-label="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -104,12 +109,17 @@ export default function AccountsPage() {
                 </div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Balance</div>
+                <div className="text-xs text-muted-foreground">
+                  {a.kind === "CARD" ? "Outstanding" : "Balance"}
+                </div>
                 <div className="text-2xl font-semibold">{formatINR(a.balance)}</div>
               </div>
               {a.kind === "CARD" && a.creditLimit != null && (
                 <div className="text-xs text-muted-foreground">
-                  Credit limit: {formatINR(a.creditLimit)}
+                  Credit limit: {formatINR(a.creditLimit)} ·{" "}
+                  <Link href="/cards" className="text-primary hover:underline">
+                    manage card →
+                  </Link>
                 </div>
               )}
             </div>
@@ -123,59 +133,47 @@ export default function AccountsPage() {
       </div>
 
       <AccountDialog
-        account={editOpen === "new" ? null : (editOpen as Account | null)}
-        open={editOpen !== null}
-        onClose={() => setEditOpen(null)}
+        mode={dialog}
+        onClose={() => setDialog(null)}
+        onSwitchToCard={() => setDialog({ kind: "newCard" })}
       />
     </div>
   );
 }
 
 function AccountDialog({
-  account,
-  open,
+  mode,
   onClose,
+  onSwitchToCard,
 }: {
-  account: Account | null;
-  open: boolean;
+  mode: DialogMode;
   onClose: () => void;
+  onSwitchToCard: () => void;
 }) {
+  const account = mode?.kind === "edit" ? mode.account : null;
+  const showCardForm = mode?.kind === "newCard";
+
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<Account["kind"]>("BANK");
+  const [kind, setKind] = useState<"BANK" | "CASH" | "WALLET">("BANK");
   const [opening, setOpening] = useState("0");
-  const [creditLimit, setCreditLimit] = useState("");
-  const [statementDate, setStatementDate] = useState("");
-  const [gracePeriod, setGracePeriod] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset form state on dialog open. */
+    if (!mode) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reset on dialog open */
     setName(account?.name ?? "");
-    setKind(account?.kind ?? "BANK");
+    setKind((account?.kind === "CARD" ? "BANK" : account?.kind) ?? "BANK");
     setOpening(String(account?.openingBalance ?? 0));
-    setCreditLimit(account?.creditLimit != null ? String(account.creditLimit) : "");
-    setStatementDate(account?.statementDate != null ? String(account.statementDate) : "");
-    setGracePeriod(account?.gracePeriod != null ? String(account.gracePeriod) : "");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, account]);
+  }, [mode, account]);
 
   async function submit() {
     setError(null);
     setSubmitting(true);
     try {
-      const payload: Record<string, unknown> = {
-        name,
-        kind,
-        openingBalance: Number(opening) || 0,
-      };
-      if (kind === "CARD") {
-        payload.creditLimit = creditLimit ? Number(creditLimit) : null;
-        payload.statementDate = statementDate ? Number(statementDate) : null;
-        payload.gracePeriod = gracePeriod ? Number(gracePeriod) : null;
-      }
+      const payload = { name, kind, openingBalance: Number(opening) || 0 };
       const res = await fetch(account ? `/api/accounts/${account.id}` : "/api/accounts", {
         method: account ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
@@ -193,82 +191,75 @@ function AccountDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={mode !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{account ? "Edit account" : "New account"}</DialogTitle>
+          <DialogTitle>
+            {showCardForm ? "New card" : account ? "Edit account" : "New account"}
+          </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
-          <label className="block">
-            <span className="text-xs font-medium">Name</span>
-            <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={80} />
-          </label>
-          <div>
-            <span className="text-xs font-medium block mb-2">Kind</span>
-            <div className="flex flex-wrap gap-2">
-              {(["BANK", "CASH", "CARD", "WALLET"] as const).map((k) => (
-                <Button
-                  key={k}
-                  type="button"
-                  variant={kind === k ? "default" : "outline"}
-                  onClick={() => setKind(k)}
-                >
-                  {KIND_META[k].label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <label className="block">
-            <span className="text-xs font-medium">Opening balance (₹)</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={opening}
-              onChange={(e) => setOpening(e.target.value)}
-            />
-          </label>
-          {kind === "CARD" && (
-            <>
+
+        {showCardForm ? (
+          <CardForm card={null} onSaved={onClose} onCancel={onClose} />
+        ) : (
+          <>
+            <div className="space-y-3">
               <label className="block">
-                <span className="text-xs font-medium">Credit limit (₹)</span>
+                <span className="text-xs font-medium">Name</span>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoFocus
+                  maxLength={80}
+                  placeholder="e.g. SBI Savings"
+                />
+              </label>
+              <div>
+                <span className="text-xs font-medium block mb-2">Kind</span>
+                <div className="flex flex-wrap gap-2">
+                  {(["BANK", "CASH", "WALLET"] as const).map((k) => (
+                    <Button
+                      key={k}
+                      type="button"
+                      variant={kind === k ? "default" : "outline"}
+                      onClick={() => setKind(k)}
+                    >
+                      {KIND_META[k].label}
+                    </Button>
+                  ))}
+                  {!account && (
+                    <Button type="button" variant="outline" onClick={onSwitchToCard}>
+                      <CreditCard className="h-4 w-4" /> Card…
+                    </Button>
+                  )}
+                </div>
+                {!account && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Adding a card opens the full card form (network, UPI, limit, statement day).
+                  </p>
+                )}
+              </div>
+              <label className="block">
+                <span className="text-xs font-medium">Opening balance (₹)</span>
                 <Input
                   type="number"
                   inputMode="decimal"
-                  value={creditLimit}
-                  onChange={(e) => setCreditLimit(e.target.value)}
+                  value={opening}
+                  onChange={(e) => setOpening(e.target.value)}
                 />
               </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs font-medium">Statement day (1-31)</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={31}
-                    value={statementDate}
-                    onChange={(e) => setStatementDate(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">Grace period (days)</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={gracePeriod}
-                    onChange={(e) => setGracePeriod(e.target.value)}
-                  />
-                </label>
-              </div>
-            </>
-          )}
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !name.trim()}>
-            {account ? "Save" : "Create"}
-          </Button>
-        </DialogFooter>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={submit} disabled={submitting || !name.trim()}>
+                {account ? "Save" : "Create"}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

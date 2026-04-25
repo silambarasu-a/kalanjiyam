@@ -50,7 +50,7 @@ export default function LivestockPage() {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.livestock ?? []).map((l) => (
           <div key={l.id} className="rounded-lg border bg-card p-5 flex items-start gap-3">
-            <PawPrint className="h-5 w-5 mt-0.5 text-[var(--brand-orange)] shrink-0" />
+            <PawPrint className="h-5 w-5 mt-0.5 text-primary shrink-0" />
             <Link href={`/livestock/${l.id}`} className="min-w-0 flex-1">
               <h3 className="font-semibold truncate">{l.name}</h3>
               <div className="mt-0.5 text-xs text-muted-foreground truncate">

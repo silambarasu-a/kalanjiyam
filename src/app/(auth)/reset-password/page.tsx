@@ -62,7 +62,7 @@ function ResetPasswordForm() {
           </div>
           <Link
             href="/login"
-            className="inline-block w-full text-center rounded-md bg-neutral-900 text-white py-2 text-sm font-medium"
+            className="inline-block w-full text-center rounded-md bg-primary text-primary-foreground py-2 text-sm font-medium"
           >
             Go to login
           </Link>
@@ -99,7 +99,7 @@ function ResetPasswordForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-md bg-neutral-900 text-white py-2 text-sm font-medium disabled:opacity-50"
+            className="w-full rounded-md bg-primary text-primary-foreground py-2 text-sm font-medium disabled:opacity-50"
           >
             {submitting ? "Resetting..." : "Reset password"}
           </button>
