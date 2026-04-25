@@ -1,4 +1,4 @@
-import { escapeHtml, renderButton, renderLayout, renderSoftPanel } from "./_layout";
+import { COLORS, escapeHtml, renderButton, renderLayout, renderSoftPanel } from "./_layout";
 
 type Args = {
   name: string;
@@ -24,10 +24,10 @@ export function passwordResetRequestTemplate({
     ${renderSoftPanel(`
       <p style="margin:0 0 12px 0;">Click the button below to choose a new password.</p>
       ${renderButton("Reset Password", resetUrl)}
-      <p style="margin:12px 0 0 0;font-size:13px;color:#64748B;text-align:center;">This link will expire in ${ttlMinutes} minutes and can be used only once.</p>
+      <p style="margin:12px 0 0 0;font-size:13px;color:${COLORS.textMuted};text-align:center;">This link will expire in ${ttlMinutes} minutes and can be used only once.</p>
     `)}
-    <p style="margin:20px 0 8px 0;font-size:13px;color:#64748B;">If you did NOT request a password reset, you can ignore this email — your password will stay the same.</p>
-    <p style="margin:24px 0 0 0;font-size:12px;color:#64748B;line-height:1.7;">
+    <p style="margin:20px 0 8px 0;font-size:13px;color:${COLORS.textMuted};">If you did NOT request a password reset, you can ignore this email — your password will stay the same.</p>
+    <p style="margin:24px 0 0 0;font-size:12px;color:${COLORS.textMuted};line-height:1.7;">
       <strong>Request details</strong><br />
       Requested at: ${escapeHtml(requestedAt)}<br />
       Account: ${escapeHtml(maskedEmail)}
