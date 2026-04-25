@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import { mutateBalances } from "@/lib/mutate-balances";
 
 export type CardSnapshot = {
@@ -190,11 +191,7 @@ export function CardForm({
         <>
           <label className="block">
             <span className="text-xs font-medium">Credit limit (₹)</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={creditLimit}
-              onChange={(e) => setCreditLimit(e.target.value)}
+            <AmountInput value={creditLimit} onChange={setCreditLimit}
             />
           </label>
           <div className="grid grid-cols-2 gap-3">

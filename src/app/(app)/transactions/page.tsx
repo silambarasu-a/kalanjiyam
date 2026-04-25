@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useState } from "react";
 import useSWR from "swr";
@@ -103,7 +104,7 @@ export default function TransactionsPage() {
                     const res = await fetch(`/api/transactions/${t.id}`, { method: "DELETE" });
                     if (!res.ok) {
                       const body = await res.json();
-                      alert(body.error ?? "Failed");
+                      toast.error(body.error ?? "Failed");
                     }
                     mutateBalances();
                   }}

@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
@@ -84,7 +85,7 @@ export default function CropDetailPage() {
               const res = await fetch(`/api/crop-batches/${b.id}`, { method: "DELETE" });
               if (!res.ok) {
                 const body = await res.json();
-                alert(body.error ?? "Failed");
+                toast.error(body.error ?? "Failed");
               }
               globalMutate(`/api/crop-batches?cropId=${id}&active=false`);
             }}

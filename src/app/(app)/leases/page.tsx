@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Plus, FileSignature } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -361,11 +362,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Total lease amount (₹)</span>
-              <Input
-                type="number"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+              <AmountInput value={amount} onChange={setAmount}
               />
             </label>
             <label className="block">

@@ -136,6 +136,22 @@
     @apply font-sans text-base antialiased;
   }
 
+  /* Tailwind v4 dropped the default cursor:pointer on buttons. Restore it on
+     every interactive element so links and buttons feel right. Disabled and
+     summary-style elements keep their natural cursor. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a:not([aria-disabled="true"]),
+  summary,
+  label[for],
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: #D1D5DB transparent;

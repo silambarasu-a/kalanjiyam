@@ -384,3 +384,64 @@ export const leasePaymentConfirmSchema = z.object({
   amount: z.number().positive().optional(),
   notes: z.string().trim().max(200).optional(),
 });
+
+const investmentKindEnum = z.enum(["STOCK", "FD", "MUTUAL_FUND", "SIP", "INSURANCE", "OTHER"]);
+const premiumFreqEnum = z.enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"]);
+
+export const investmentCreateSchema = z.object({
+  kind: investmentKindEnum,
+  name: z.string().trim().min(1).max(120),
+  institution: z.string().trim().max(120).optional(),
+  amount: z.number().positive(),
+  currentValue: z.number().nonnegative().optional().nullable(),
+  interestRate: z.number().nonnegative().optional().nullable(),
+  startedAt: z.string(),
+  maturityAt: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+  symbol: z.string().trim().max(40).optional(),
+  quantity: z.number().nonnegative().optional().nullable(),
+  purchasePrice: z.number().nonnegative().optional().nullable(),
+  exchange: z.string().trim().max(20).optional(),
+  policyNumber: z.string().trim().max(80).optional(),
+  policyType: z
+    .enum([
+      "LIFE",
+      "HEALTH",
+      "VEHICLE",
+      "HOME",
+      "TRAVEL",
+      "TERM",
+      "ULIP",
+      "ENDOWMENT",
+      "OTHER",
+    ])
+    .optional(),
+  premiumAmount: z.number().positive().optional().nullable(),
+  premiumFrequency: premiumFreqEnum.optional(),
+  sumAssured: z.number().positive().optional().nullable(),
+  nextDueDate: z.string().optional().nullable(),
+  nominee: z.string().trim().max(120).optional(),
+  accountId: z.string().uuid().optional().nullable(),
+  isExisting: z.boolean().optional().default(false),
+});
+
+export const investmentUpdateSchema = investmentCreateSchema.partial().extend({
+  active: z.boolean().optional(),
+});
+
+export const investmentTradeSchema = z.object({
+  amount: z.number().positive(),
+  quantity: z.number().positive().optional().nullable(),
+  pricePerUnit: z.number().positive().optional().nullable(),
+  date: z.string(),
+  accountId: z.string().uuid(),
+  notes: z.string().trim().max(200).optional(),
+});
+
+export const reminderConfirmSchema = z.object({
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  amount: z.number().positive().optional(),
+  date: z.string().optional(),
+  notes: z.string().trim().max(200).optional(),
+});

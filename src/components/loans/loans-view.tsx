@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import {
   Dialog,
   DialogContent,
@@ -269,11 +270,7 @@ function PayDialog({
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Total paid (₹)</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                <AmountInput value={amount} onChange={setAmount}
                   placeholder={loan.emiAmount != null ? String(loan.emiAmount) : "EMI amount"}
                   autoFocus
                 />
@@ -286,31 +283,19 @@ function PayDialog({
             <div className="grid grid-cols-3 gap-2">
               <label className="block">
                 <span className="text-xs font-medium">Principal</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={principalPortion}
-                  onChange={(e) => setPrincipalPortion(e.target.value)}
+                <AmountInput value={principalPortion} onChange={setPrincipalPortion}
                   placeholder="Optional"
                 />
               </label>
               <label className="block">
                 <span className="text-xs font-medium">Interest</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={interestPortion}
-                  onChange={(e) => setInterestPortion(e.target.value)}
+                <AmountInput value={interestPortion} onChange={setInterestPortion}
                   placeholder="Optional"
                 />
               </label>
               <label className="block">
                 <span className="text-xs font-medium">GST</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={gstPortion}
-                  onChange={(e) => setGstPortion(e.target.value)}
+                <AmountInput value={gstPortion} onChange={setGstPortion}
                   placeholder="Optional"
                 />
               </label>

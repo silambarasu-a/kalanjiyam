@@ -69,7 +69,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-sidebar-border p-3">
+      <div className="p-3">
         <UserMenu />
       </div>
     </aside>

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import { mutateBalances } from "@/lib/mutate-balances";
 
 type Account = { id: string; name: string; kind: string };
@@ -156,11 +157,7 @@ export function LoanForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Principal (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={principal}
-            onChange={(e) => setPrincipal(e.target.value)}
+          <AmountInput value={principal} onChange={setPrincipal}
           />
         </label>
         <label className="block">
@@ -172,22 +169,14 @@ export function LoanForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Interest rate (% p.a.)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={interestRate}
-            onChange={(e) => setInterestRate(e.target.value)}
+          <AmountInput value={interestRate} onChange={setInterestRate}
             placeholder="e.g. 14"
           />
         </label>
         {source === "CARD_EMI" && (
           <label className="block">
             <span className="text-xs font-medium">GST on interest (%)</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={gstOnInterest}
-              onChange={(e) => setGstOnInterest(e.target.value)}
+            <AmountInput value={gstOnInterest} onChange={setGstOnInterest}
               placeholder="18"
             />
           </label>
@@ -197,11 +186,7 @@ export function LoanForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">EMI amount (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={emiAmount}
-            onChange={(e) => setEmiAmount(e.target.value)}
+          <AmountInput value={emiAmount} onChange={setEmiAmount}
           />
         </label>
         <label className="block">

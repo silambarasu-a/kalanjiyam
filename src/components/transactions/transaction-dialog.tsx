@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AmountInput } from "@/components/ui/amount-input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn, formatINR } from "@/lib/utils";
@@ -288,11 +289,7 @@ function IncomeExpenseForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+          <AmountInput value={amount} onChange={setAmount}
             placeholder="0"
             autoFocus
           />
@@ -530,11 +527,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+          <AmountInput value={amount} onChange={setAmount}
             placeholder="0"
           />
         </label>
@@ -699,11 +692,7 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+          <AmountInput value={amount} onChange={setAmount}
           />
         </label>
         <label className="block">
