@@ -36,6 +36,10 @@ async function loadWorkspaceContext(userId: string, workspaceIdHint?: string | n
 
 export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
   session: { strategy: "jwt", maxAge: 15 * 60 },
+  // Trust the proxy Host header (Vercel / any reverse proxy). Without this
+  // NextAuth v5 rejects the credentials callback on Vercel deployments and
+  // the session cookie never gets set.
+  trustHost: true,
   pages: { signIn: "/login" },
   providers: [
     Credentials({
