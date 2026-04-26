@@ -13,6 +13,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
 import { formatINR, buildAccountOption } from "@/lib/utils";
+import type { LoanKind } from "@/generated/prisma/client";
 
 type ChargeRow = { label: string; amount: string };
 const DEFAULT_CHARGE_ROWS: ChargeRow[] = [
@@ -51,14 +52,6 @@ type Account = {
   availableLimit: number | null;
 };
 type Card = { id: string; name: string; kind: "CREDIT" | "DEBIT" };
-type LoanKind =
-  | "PERSONAL"
-  | "HOME"
-  | "CAR"
-  | "GOLD"
-  | "BUSINESS"
-  | "EDUCATION"
-  | "OTHER";
 
 const KIND_OPTIONS: LoanKind[] = [
   "PERSONAL",
@@ -77,40 +70,116 @@ export type LoanFormHandle = {
   submit: () => void;
 };
 
+export type EditingLoan = {
+  id: string;
+  kind: LoanKind;
+  source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  lender: string;
+  principal: number;
+  outstanding: number;
+  interestRate: number | null;
+  gstOnInterest: number | null;
+  emiAmount: number | null;
+  tenure: number | null;
+  frequency: LoanFrequency | null;
+  charges: number | null;
+  chargeBreakdown: { label: string; amount: number }[] | null;
+  accountId: string | null;
+  cardId: string | null;
+  isExisting: boolean;
+  startedAt: string;
+  notes: string | null;
+  goldItems: {
+    name: string;
+    quantity: number;
+    weightGrams: number;
+    purity: number | null;
+    notes: string | null;
+  }[];
+};
+
 type LoanFormProps = {
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   onSaved: () => void;
   /** Mirrors internal `submitting` state up so a parent button can disable. */
   onSubmittingChange?: (submitting: boolean) => void;
   lockedCardId?: string;
+  /** When provided, the form prefills from this loan and submits via PATCH. */
+  editingLoan?: EditingLoan;
 };
 
 export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanForm(
-  { source, onSaved, onSubmittingChange, lockedCardId },
+  { source, onSaved, onSubmittingChange, lockedCardId, editingLoan },
   ref
 ) {
+  const editing = !!editingLoan;
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
   const creditCards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT");
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [kind, setKind] = useState<LoanKind>("PERSONAL");
-  const [lender, setLender] = useState("");
-  const [principal, setPrincipal] = useState("");
-  const [outstanding, setOutstanding] = useState("");
-  const [interestRate, setInterestRate] = useState("");
-  const [gstOnInterest, setGstOnInterest] = useState(source === "CARD_EMI" ? "18" : "");
-  const [emiAmount, setEmiAmount] = useState("");
-  const [tenure, setTenure] = useState("");
-  const [frequency, setFrequency] = useState<LoanFrequency>("MONTHLY");
-  const [goldItems, setGoldItems] = useState<GoldItemRow[]>([NEW_GOLD_ROW()]);
-  const [accountId, setAccountId] = useState("");
-  const [cardId, setCardId] = useState(lockedCardId ?? "");
-  const [isExisting, setIsExisting] = useState(source === "CARD_EMI" ? true : false);
-  const [startedAt, setStartedAt] = useState(today);
-  const [notes, setNotes] = useState("");
-  const [chargeRows, setChargeRows] = useState<ChargeRow[]>(DEFAULT_CHARGE_ROWS);
+  const numStr = (n: number | null | undefined) =>
+    n == null || !Number.isFinite(n) ? "" : String(n);
+  const [kind, setKind] = useState<LoanKind>(
+    (editingLoan?.kind as LoanKind) ?? "PERSONAL"
+  );
+  const [lender, setLender] = useState(editingLoan?.lender ?? "");
+  const [principal, setPrincipal] = useState(numStr(editingLoan?.principal));
+  const [outstanding, setOutstanding] = useState(
+    editingLoan ? numStr(editingLoan.outstanding) : ""
+  );
+  const [interestRate, setInterestRate] = useState(
+    numStr(editingLoan?.interestRate)
+  );
+  const [gstOnInterest, setGstOnInterest] = useState(
+    editingLoan
+      ? numStr(editingLoan.gstOnInterest)
+      : source === "CARD_EMI"
+        ? "18"
+        : ""
+  );
+  const [emiAmount, setEmiAmount] = useState(numStr(editingLoan?.emiAmount));
+  const [tenure, setTenure] = useState(numStr(editingLoan?.tenure));
+  const [frequency, setFrequency] = useState<LoanFrequency>(
+    (editingLoan?.frequency as LoanFrequency | null) ?? "MONTHLY"
+  );
+  const [goldItems, setGoldItems] = useState<GoldItemRow[]>(
+    editingLoan && editingLoan.goldItems.length > 0
+      ? editingLoan.goldItems.map((g) => ({
+          name: g.name,
+          quantity: String(g.quantity ?? 1),
+          weightGrams: String(g.weightGrams),
+          purity: g.purity != null ? String(g.purity) : "",
+          notes: g.notes ?? "",
+        }))
+      : [NEW_GOLD_ROW()]
+  );
+  const [accountId, setAccountId] = useState(editingLoan?.accountId ?? "");
+  const [cardId, setCardId] = useState(
+    editingLoan?.cardId ?? lockedCardId ?? ""
+  );
+  const [isExisting, setIsExisting] = useState(
+    editingLoan
+      ? editingLoan.isExisting
+      : source === "CARD_EMI"
+        ? true
+        : false
+  );
+  const [startedAt, setStartedAt] = useState(
+    editingLoan ? editingLoan.startedAt.slice(0, 10) : today
+  );
+  const [notes, setNotes] = useState(editingLoan?.notes ?? "");
+  const [chargeRows, setChargeRows] = useState<ChargeRow[]>(
+    editingLoan
+      ? editingLoan.chargeBreakdown && editingLoan.chargeBreakdown.length > 0
+        ? editingLoan.chargeBreakdown.map((c) => ({
+            label: c.label,
+            amount: String(c.amount),
+          }))
+        : [{ label: "", amount: "" }]
+      : DEFAULT_CHARGE_ROWS
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -198,43 +267,63 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     }
     setSubmitting(true);
     try {
-      const res = await fetch("/api/loans", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind,
-          source,
-          lender: lender.trim(),
-          principal: principalNum,
-          // Only send outstanding when the user is entering an existing
-          // loan and explicitly typed a value — otherwise the API defaults
-          // outstanding to principal.
-          outstanding:
-            isExisting && outstanding !== "" ? Number(outstanding) : undefined,
-          interestRate: interestRate ? Number(interestRate) : null,
-          gstOnInterest: gstOnInterest ? Number(gstOnInterest) : null,
-          emiAmount: effectiveEmi ?? null,
-          tenure: tenure ? Number(tenure) : null,
-          frequency,
-          accountId: source === "BANK" ? accountId || null : null,
-          cardId: source === "CARD_EMI" ? cardId : null,
-          isExisting,
-          startedAt,
-          chargeBreakdown: breakdown.length ? breakdown : null,
-          charges: breakdown.length ? chargesTotal : null,
-          notes: notes.trim() || undefined,
-          goldItems: kind === "GOLD" && goldItemsPayload.length ? goldItemsPayload : undefined,
-        }),
-      });
+      // Edit mode always sends outstanding (so the user can correct it
+      // independently of principal). Create mode only sends it when the
+      // user ticked "isExisting" and typed a value.
+      const outstandingPayload = editing
+        ? outstanding !== ""
+          ? Number(outstanding)
+          : principalNum
+        : isExisting && outstanding !== ""
+          ? Number(outstanding)
+          : undefined;
+
+      const payload = {
+        kind,
+        ...(editing ? {} : { source }),
+        lender: lender.trim(),
+        principal: principalNum,
+        outstanding: outstandingPayload,
+        interestRate: interestRate ? Number(interestRate) : null,
+        gstOnInterest: gstOnInterest ? Number(gstOnInterest) : null,
+        emiAmount: effectiveEmi ?? null,
+        tenure: tenure ? Number(tenure) : null,
+        frequency,
+        accountId: source === "BANK" ? accountId || null : null,
+        cardId: source === "CARD_EMI" ? cardId : null,
+        // isExisting is locked at creation; never reuploaded on edit.
+        ...(editing ? {} : { isExisting }),
+        startedAt,
+        chargeBreakdown: breakdown.length ? breakdown : null,
+        charges: breakdown.length ? chargesTotal : null,
+        notes: notes.trim() || undefined,
+        goldItems:
+          kind === "GOLD"
+            ? goldItemsPayload
+            : editing
+              ? []
+              : undefined,
+      };
+
+      const res = await fetch(
+        editing ? `/api/loans/${editingLoan!.id}` : "/api/loans",
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
       const body = await res.json();
       if (!res.ok) {
         setError(body.error ?? "Failed");
         return;
       }
       toast.success(
-        source === "CARD_EMI"
-          ? "EMI plan created — card limit updated"
-          : "Loan created"
+        editing
+          ? "Loan updated"
+          : source === "CARD_EMI"
+            ? "EMI plan created — card limit updated"
+            : "Loan created"
       );
       globalMutate((k) => typeof k === "string" && k.startsWith("/api/loans"));
       await mutateBalances();
@@ -585,9 +674,11 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               </div>
             )}
           </div>
-          {!isExisting && (
+          {(!isExisting || editing) && (
             <label className="block">
-              <span className="text-xs font-medium">Disbursed into (bank account)</span>
+              <span className="text-xs font-medium">
+                {editing ? "Linked bank account" : "Disbursed into (bank account)"}
+              </span>
               <div className="mt-1">
                 <NativeSelect
                   value={accountId}
@@ -595,12 +686,18 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   options={bankAccounts.map((a) => buildAccountOption(a, 0))}
                 />
               </div>
+              {editing && !isExisting && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Disbursement and any upfront charges already posted to the
+                  current account will move with this change.
+                </p>
+              )}
             </label>
           )}
         </>
       )}
 
-      {source !== "CARD_EMI" && (
+      {source !== "CARD_EMI" && !editing && (
         <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
           <label className="flex items-center gap-2">
             <input
@@ -631,6 +728,21 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             </label>
           )}
         </div>
+      )}
+
+      {editing && (
+        <label className="block">
+          <span className="text-xs font-medium">Current outstanding (₹)</span>
+          <AmountInput
+            value={outstanding}
+            onChange={setOutstanding}
+            placeholder={principalNum > 0 ? String(principalNum) : ""}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Editing this overrides the running balance — repayments already
+            recorded won&apos;t be touched.
+          </p>
+        </label>
       )}
 
       <label className="block">
