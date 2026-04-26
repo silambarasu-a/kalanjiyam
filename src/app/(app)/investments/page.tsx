@@ -400,7 +400,7 @@ function CreateInvestmentDialog({
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Name</span>
               <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
@@ -415,7 +415,7 @@ function CreateInvestmentDialog({
               />
             </label>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">
                 {kind === "FD" ? "Principal (₹)" : "Amount invested (₹)"}
@@ -432,7 +432,7 @@ function CreateInvestmentDialog({
             </label>
           </div>
           {(kind === "FD" || kind === "RD" || kind === "SIP" || kind === "OTHER") && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Interest rate (% p.a.)</span>
                 <AmountInput value={interestRate} onChange={setInterestRate}
@@ -448,7 +448,7 @@ function CreateInvestmentDialog({
             </div>
           )}
           {showQty && (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Symbol</span>
                 <Input value={symbol} onChange={(e) => setSymbol(e.target.value)} maxLength={40} />
@@ -467,7 +467,7 @@ function CreateInvestmentDialog({
           )}
           {kind === "GOLD" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Type</span>
                   <div className="mt-1">
@@ -502,7 +502,7 @@ function CreateInvestmentDialog({
                   </div>
                 </label>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Weight (g)</span>
                   <AmountInput value={quantity} onChange={setQuantity} placeholder="0" />
@@ -527,7 +527,7 @@ function CreateInvestmentDialog({
                 return (
                   <>
                     {goldType === "ORNAMENTS" ? (
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <label className="block">
                           <span className="text-xs font-medium">Wastage</span>
                           <PercentOrRupeeInput
@@ -591,7 +591,7 @@ function CreateInvestmentDialog({
           )}
           {kind === "INSURANCE" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Policy type</span>
                   <div className="mt-1">
@@ -622,7 +622,7 @@ function CreateInvestmentDialog({
                   />
                 </label>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Policy number</span>
                   <Input
@@ -640,7 +640,7 @@ function CreateInvestmentDialog({
             </>
           )}
           {showPremium && (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Premium (₹)</span>
                 <AmountInput value={premiumAmount} onChange={setPremiumAmount}

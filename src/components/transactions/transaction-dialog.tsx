@@ -400,7 +400,7 @@ function IncomeExpenseForm({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
           <AmountInput value={amount} onChange={setAmount}
@@ -414,7 +414,7 @@ function IncomeExpenseForm({
         </label>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">
             {type === "INCOME" ? "To account" : "Pay from"}
@@ -767,7 +767,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           />
         </div>
       </label>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
           <AmountInput value={amount} onChange={setAmount}
@@ -935,7 +935,7 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         </label>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
           <AmountInput value={amount} onChange={setAmount}
@@ -1532,7 +1532,7 @@ function InvestmentForm({
           )}
 
           {(newKind === "FD" || newKind === "RD") && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Interest rate (%)</span>
                 <Input
@@ -1556,7 +1556,7 @@ function InvestmentForm({
 
           {newKind === "INSURANCE" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Policy type</span>
                   <div className="mt-1">
@@ -1586,7 +1586,7 @@ function InvestmentForm({
                   />
                 </label>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Policy number</span>
                   <Input
@@ -1612,7 +1612,7 @@ function InvestmentForm({
 
           {newKind === "GOLD" && (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Type</span>
                   <div className="mt-1">
@@ -1647,7 +1647,7 @@ function InvestmentForm({
                   </div>
                 </label>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Weight (g)</span>
                   <Input
@@ -1682,7 +1682,7 @@ function InvestmentForm({
                 return (
                   <>
                     {newGoldType === "ORNAMENTS" ? (
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <label className="block">
                           <span className="text-xs font-medium">Wastage</span>
                           <PercentOrRupeeInput
@@ -1810,7 +1810,7 @@ function InvestmentForm({
         </>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">
                 Amount {isForeignCurrency ? "(₹ equivalent)" : "(₹)"}
@@ -1824,7 +1824,7 @@ function InvestmentForm({
           </div>
 
           {isQtyBased && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">
                   {activeKind === "STOCK"
