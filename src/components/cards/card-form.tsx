@@ -72,6 +72,7 @@ export function CardForm({
   const [parentAccountId, setParentAccountId] = useState("");
   const [parentCardId, setParentCardId] = useState("");
   const [creditLimit, setCreditLimit] = useState("");
+  const [openingBalance, setOpeningBalance] = useState("");
   const [statementDate, setStatementDate] = useState("");
   const [gracePeriod, setGracePeriod] = useState("");
   const [limitMode, setLimitMode] = useState<"SOLO" | "SHARED">("SOLO");
@@ -101,6 +102,7 @@ export function CardForm({
     setParentAccountId(card?.parentAccount?.id ?? "");
     setParentCardId(card?.parentCard?.id ?? "");
     setCreditLimit(card?.creditLimit != null ? String(card.creditLimit) : "");
+    setOpeningBalance("");
     setStatementDate("");
     setGracePeriod("");
     setLimitMode(card?.limitMode ?? "SOLO");
@@ -149,6 +151,10 @@ export function CardForm({
         }
         payload.statementDate = statementDate ? Number(statementDate) : null;
         payload.gracePeriod = gracePeriod ? Number(gracePeriod) : null;
+        // Opening outstanding only applies when creating a new card.
+        if (!card && openingBalance) {
+          payload.openingBalance = Number(openingBalance);
+        }
       }
       const res = await fetch(card ? `/api/cards/${card.id}` : "/api/cards", {
         method: card ? "PATCH" : "POST",
@@ -296,6 +302,24 @@ export function CardForm({
               />
             </label>
           </div>
+          {!card && (
+            <label className="block">
+              <span className="text-xs font-medium">
+                Existing outstanding (₹){" "}
+                <span className="text-muted-foreground font-normal">(optional)</span>
+              </span>
+              <AmountInput
+                value={openingBalance}
+                onChange={setOpeningBalance}
+                placeholder="0"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {limitMode === "SHARED"
+                  ? "Existing spend on this sub-card. It rolls up to the parent's pool, reducing the shared available limit."
+                  : "If you already owe a balance on this card, enter it here. It seeds the opening balance so your statement and available limit start correctly."}
+              </p>
+            </label>
+          )}
           <div>
             <span className="text-xs font-medium block mb-2">Limit mode</span>
             <div className="flex gap-2">

@@ -142,7 +142,7 @@ export function BankPicker({
       </div>
 
       {open && (
-        <div className="absolute left-0 right-0 z-50 mt-1 rounded-lg border bg-popover shadow-[var(--shadow-popover)] max-h-72 overflow-y-auto">
+        <div className="absolute left-0 right-0 z-50 mt-1 rounded-lg border bg-popover shadow-(--shadow-popover) max-h-72 overflow-y-auto">
           {flatFiltered.length === 0 ? (
             <div className="px-3 py-3 text-xs text-muted-foreground">
               {isFreeText ? (

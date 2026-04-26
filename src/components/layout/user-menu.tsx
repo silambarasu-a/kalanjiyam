@@ -26,7 +26,7 @@ export function UserMenu() {
       .join("") ?? "?";
 
   return (
-    <div className="flex items-center gap-1 rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)] px-1.5 py-1.5">
+    <div className="flex items-center gap-1 rounded-2xl border border-border bg-card shadow-(--shadow-soft) px-1.5 py-1.5">
       <DropdownMenu>
         <DropdownMenuTrigger className="flex flex-1 min-w-0 items-center gap-2.5 rounded-xl px-1.5 py-1 text-left text-sm hover:bg-accent transition-colors">
           <Avatar className="h-8 w-8 shrink-0">

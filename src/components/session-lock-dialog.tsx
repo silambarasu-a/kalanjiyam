@@ -64,7 +64,7 @@ export function SessionLockDialog() {
           is bg-black/10 backdrop-blur-xs, which feels too light for a lock. */}
       <div
         aria-hidden
-        className="fixed inset-0 z-[49] bg-background/30 backdrop-blur-3xl pointer-events-none"
+        className="fixed inset-0 z-49 bg-background/30 backdrop-blur-3xl pointer-events-none"
       />
       <Dialog open={true} modal={true} disablePointerDismissal>
         <DialogContent

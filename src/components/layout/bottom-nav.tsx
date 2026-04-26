@@ -26,6 +26,20 @@ export function BottomNav() {
   const { openDialog } = useTransactionDialog();
   const [moreOpen, setMoreOpen] = useState(false);
 
+  // Longest-match active href across the full nav so e.g. /settings/members
+  // doesn't also light up /settings (Profile) — same logic as the sidebar.
+  const moreActiveHref = (() => {
+    let best: string | null = null;
+    for (const g of NAV_GROUPS) {
+      for (const i of g.items) {
+        if (pathname === i.href || pathname.startsWith(i.href + "/")) {
+          if (!best || i.href.length > best.length) best = i.href;
+        }
+      }
+    }
+    return best;
+  })();
+
   return (
     <>
       <nav
@@ -56,7 +70,7 @@ export function BottomNav() {
               type="button"
               onClick={() => openDialog("EXPENSE")}
               aria-label="New transaction"
-              className="h-11 w-11 rounded-full bg-primary text-primary-foreground shadow-lg shadow-black/20 flex items-center justify-center -mt-5 hover:bg-[var(--brand-primary-soft)] transition-colors"
+              className="h-11 w-11 rounded-full bg-primary text-primary-foreground shadow-lg shadow-black/20 flex items-center justify-center -mt-5 hover:bg-brand-primary-soft transition-colors"
             >
               <Plus className="h-5 w-5" />
             </button>
@@ -103,9 +117,7 @@ export function BottomNav() {
                         </div>
                         <ul className="space-y-0.5">
                           {visible.map((item) => {
-                            const active =
-                              pathname === item.href ||
-                              pathname.startsWith(item.href + "/");
+                            const active = item.href === moreActiveHref;
                             return (
                               <li key={item.href}>
                                 <Link

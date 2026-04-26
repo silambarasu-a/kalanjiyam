@@ -22,6 +22,7 @@ type Card = CardSnapshot & {
   ownerMember: { id: string; name: string } | null;
   accountId: string | null;
   availableLimit: number | null;
+  linkedBalance: number | null;
   sharedWithUserIds: string[];
 };
 
@@ -139,8 +140,23 @@ export default function CardsPage() {
               </div>
             )}
             {c.kind === "DEBIT" && c.parentAccount && (
-              <div className="text-xs text-muted-foreground">
-                Linked to {c.parentAccount.name}
+              <div>
+                <div className="text-xs text-muted-foreground">Available balance</div>
+                <MoneyValue
+                  tone={
+                    c.linkedBalance == null
+                      ? "neutral"
+                      : c.linkedBalance > 0
+                        ? "gain"
+                        : "loss"
+                  }
+                  value={c.linkedBalance == null ? "—" : formatINR(c.linkedBalance)}
+                  className="text-2xl font-semibold mt-1"
+                  icon={false}
+                />
+                <div className="mt-1 text-xs text-muted-foreground">
+                  via {c.parentAccount.name}
+                </div>
               </div>
             )}
           </div>

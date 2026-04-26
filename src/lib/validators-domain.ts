@@ -61,6 +61,8 @@ export const cardCreateSchema = z.object({
   creditLimit: z.number().finite().optional().nullable(),
   statementDate: z.number().int().min(1).max(31).optional().nullable(),
   gracePeriod: z.number().int().min(0).max(60).optional().nullable(),
+  /** Existing outstanding on a CREDIT card at the time of creation. */
+  openingBalance: z.number().nonnegative().optional().nullable(),
 });
 
 export const cardUpdateSchema = cardCreateSchema.partial().extend({
