@@ -31,7 +31,8 @@ type Batch = {
   notes: string | null;
   active: boolean;
   livestock: { id: string; name: string };
-  land: { id: string; name: string } | null;
+  // land removed for now — backend still returns it, ignored here.
+  // land: { id: string; name: string } | null;
 };
 
 type Account = {
@@ -90,7 +91,7 @@ export default function LivestockDetailPage() {
                 <div className="text-xs text-muted-foreground">
                   Started {formatDate(b.startDate)}
                   {b.expectedCycleDays ? ` · ~${b.expectedCycleDays}d cycle` : ""}
-                  {b.land ? ` · ${b.land.name}` : ""}
+                  {/* {b.land ? ` · ${b.land.name}` : ""} */}
                 </div>
               </div>
               <div className="text-right">

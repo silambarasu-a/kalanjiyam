@@ -30,9 +30,10 @@ type Batch = {
   notes: string | null;
   active: boolean;
   crop: { id: string; name: string };
-  land: { id: string; name: string } | null;
+  // land removed for now — backend still returns it, ignored on the client.
+  // land: { id: string; name: string } | null;
 };
-type Land = { id: string; name: string };
+// type Land = { id: string; name: string };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -47,7 +48,7 @@ export default function CropDetailPage() {
     id ? `/api/crop-batches?cropId=${id}&active=false` : null,
     fetcher
   );
-  const { data: landsData } = useSWR<{ lands: Land[] }>("/api/land", fetcher);
+  // const { data: landsData } = useSWR<{ lands: Land[] }>("/api/land", fetcher);
   const [editOpen, setEditOpen] = useState<Batch | "new" | null>(null);
 
   const crop = (cropsData?.crops ?? []).find((c) => c.id === id);
@@ -103,7 +104,6 @@ export default function CropDetailPage() {
       <BatchDialog
         cropId={id ?? ""}
         batch={editOpen === "new" ? null : (editOpen as Batch | null)}
-        lands={landsData?.lands ?? []}
         open={editOpen !== null}
         onClose={() => setEditOpen(null)}
       />
@@ -137,7 +137,7 @@ function BatchRow({
         <div className="text-xs text-muted-foreground">
           {batch.startDate ? `Started ${formatDate(batch.startDate)}` : "No start date"}
           {batch.expectedCycleDays ? ` · ~${batch.expectedCycleDays}d cycle` : ""}
-          {batch.land ? ` · ${batch.land.name}` : ""}
+          {/* {batch.land ? ` · ${batch.land.name}` : ""} */}
           {data?.summary ? ` · ${data.summary.transactions} txns` : ""}
         </div>
       </div>
@@ -165,13 +165,11 @@ function BatchRow({
 function BatchDialog({
   cropId,
   batch,
-  lands,
   open,
   onClose,
 }: {
   cropId: string;
   batch: Batch | null;
-  lands: Land[];
   open: boolean;
   onClose: () => void;
 }) {
@@ -181,7 +179,7 @@ function BatchDialog({
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState("");
   const [expectedCycleDays, setExpectedCycleDays] = useState("");
-  const [landId, setLandId] = useState("");
+  // const [landId, setLandId] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -196,7 +194,7 @@ function BatchDialog({
     setExpectedCycleDays(
       batch?.expectedCycleDays != null ? String(batch.expectedCycleDays) : ""
     );
-    setLandId(batch?.land?.id ?? "");
+    // setLandId(batch?.land?.id ?? "");
     setNotes(batch?.notes ?? "");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -212,7 +210,7 @@ function BatchDialog({
         startDate: startDate || null,
         endDate: endDate || null,
         expectedCycleDays: expectedCycleDays ? Number(expectedCycleDays) : null,
-        landId: landId || null,
+        // landId: landId || null,
         notes: notes.trim() || undefined,
       };
       if (!batch) payload.cropId = cropId;
@@ -285,6 +283,8 @@ function BatchDialog({
               placeholder="e.g. 50 for coconut, 365 for mango"
             />
           </label>
+          {/* Land / plot picker disabled for now — backend still accepts a
+              landId on crop-batches if it's ever sent.
           <label className="block">
             <span className="text-xs font-medium">Land / plot (optional)</span>
             <div className="mt-1">
@@ -299,6 +299,7 @@ function BatchDialog({
               Manage land plots from Settings (coming soon).
             </p>
           </label>
+          */}
           <label className="block">
             <span className="text-xs font-medium">Notes</span>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
