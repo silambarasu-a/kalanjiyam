@@ -4,10 +4,11 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { loanCreateSchema } from "@/lib/validators-domain";
-import { calculateEMI, countPaidEmis } from "@/lib/loan-math";
+import { calculateEMI, countPaidEmis, monthsPerCycle, advanceByCycle } from "@/lib/loan-math";
 import {
   LoanKind,
   LoanSource,
+  LoanFrequency,
   TransactionType,
   TransactionKind,
 } from "@/generated/prisma/client";
@@ -43,6 +44,17 @@ export async function GET(request: Request) {
         ownerUser: { select: { id: true, name: true } },
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
+        goldItems: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            name: true,
+            quantity: true,
+            weightGrams: true,
+            purity: true,
+            notes: true,
+          },
+        },
       },
     });
     return NextResponse.json({
@@ -71,6 +83,14 @@ export async function GET(request: Request) {
         notes: l.notes,
         active: l.active,
         ownerUser: l.ownerUser,
+        goldItems: l.goldItems.map((g) => ({
+          id: g.id,
+          name: g.name,
+          quantity: g.quantity,
+          weightGrams: Number(g.weightGrams),
+          purity: g.purity,
+          notes: g.notes,
+        })),
       })),
     });
   } catch (e) {
@@ -109,40 +129,42 @@ export async function POST(request: Request) {
       }
     }
 
+    // tenure is the number of payment cycles (months for MONTHLY,
+    // quarters for QUARTERLY, etc.). Convert to total months for the
+    // maturity date math.
+    const frequency = data.frequency ?? "MONTHLY";
+    const tenureCycles = data.tenure ?? null;
+    const totalMonths =
+      tenureCycles != null ? tenureCycles * monthsPerCycle(frequency) : null;
+
     // Server-side fallback: if the client didn't send an explicit emiAmount
     // but we have principal + rate + tenure, compute the standard
     // reducing-balance EMI so every loan has a numeric EMI on file.
-    const tenureMonths =
-      data.tenure != null
-        ? data.frequency === "YEARLY"
-          ? data.tenure * 12
-          : data.tenure
-        : null;
     const computedEmi =
       data.emiAmount ??
-      (data.interestRate != null && tenureMonths
-        ? calculateEMI(data.principal, data.interestRate, tenureMonths) || null
+      (data.interestRate != null && tenureCycles
+        ? calculateEMI(data.principal, data.interestRate, tenureCycles, frequency) || null
         : null);
 
-    // Maturity falls out of startedAt + tenure when the client hasn't
-    // overridden it.
+    // Maturity falls out of startedAt + total months when the client
+    // hasn't overridden it.
     const computedMaturity =
       data.maturityAt
         ? new Date(data.maturityAt)
-        : tenureMonths
+        : totalMonths
           ? (() => {
               const m = new Date(data.startedAt);
-              m.setMonth(m.getMonth() + tenureMonths);
+              m.setMonth(m.getMonth() + totalMonths);
               return m;
             })()
           : null;
 
     // First due date: startedAt + 1 cycle, advanced past any already-paid
-    // EMIs for `isExisting` loans.
+    // cycles for `isExisting` loans.
     const computedNextDueDate =
       data.nextDueDate
         ? new Date(data.nextDueDate)
-        : computedEmi && tenureMonths
+        : computedEmi && tenureCycles
           ? (() => {
               const start = new Date(data.startedAt);
               let advance = 1;
@@ -156,18 +178,13 @@ export async function POST(request: Request) {
                   data.principal,
                   data.interestRate,
                   computedEmi,
-                  tenureMonths,
+                  tenureCycles,
+                  frequency,
                   data.outstanding
                 );
-                advance = (data.frequency === "YEARLY" ? Math.floor(paid / 12) : paid) + 1;
+                advance = paid + 1;
               }
-              const next = new Date(start);
-              if (data.frequency === "YEARLY") {
-                next.setFullYear(next.getFullYear() + advance);
-              } else {
-                next.setMonth(next.getMonth() + advance);
-              }
-              return next;
+              return advanceByCycle(start, frequency, advance);
             })()
           : null;
 
@@ -178,6 +195,11 @@ export async function POST(request: Request) {
     const chargesTotal = breakdown.length
       ? Math.round(breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100) / 100
       : data.charges ?? 0;
+
+    // Gold items are only meaningful for GOLD-kind loans; ignore on other
+    // kinds even if the client mistakenly sent them.
+    const goldItems =
+      data.kind === "GOLD" && data.goldItems?.length ? data.goldItems : [];
 
     const result = await prisma.$transaction(async (tx) => {
       const loan = await tx.loan.create({
@@ -194,7 +216,7 @@ export async function POST(request: Request) {
           gstOnInterest: data.gstOnInterest ?? null,
           emiAmount: computedEmi,
           tenure: data.tenure ?? null,
-          frequency: data.frequency ?? "MONTHLY",
+          frequency: frequency as LoanFrequency,
           charges: chargesTotal > 0 ? chargesTotal : null,
           chargeBreakdown: breakdown.length ? breakdown : undefined,
           accountId: data.accountId ?? null,
@@ -204,6 +226,17 @@ export async function POST(request: Request) {
           maturityAt: computedMaturity,
           nextDueDate: computedNextDueDate,
           notes: data.notes,
+          goldItems: goldItems.length
+            ? {
+                create: goldItems.map((g) => ({
+                  name: g.name,
+                  quantity: g.quantity ?? 1,
+                  weightGrams: g.weightGrams,
+                  purity: g.purity ?? null,
+                  notes: g.notes ?? null,
+                })),
+              }
+            : undefined,
         },
       });
 

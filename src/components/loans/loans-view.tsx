@@ -19,8 +19,17 @@ import {
 import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
-import { splitPayment } from "@/lib/loan-math";
+import { splitPayment, cyclesPerYear, type LoanFrequency } from "@/lib/loan-math";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
+
+type GoldItem = {
+  id: string;
+  name: string;
+  quantity: number;
+  weightGrams: number;
+  purity: number | null;
+  notes: string | null;
+};
 
 type Loan = {
   id: string;
@@ -33,11 +42,20 @@ type Loan = {
   gstOnInterest: number | null;
   emiAmount: number | null;
   tenure: number | null;
+  frequency: LoanFrequency | null;
   startedAt: string;
   nextDueDate: string | null;
   active: boolean;
   card: { id: string; name: string } | null;
   account: { id: string; name: string } | null;
+  goldItems?: GoldItem[];
+};
+
+const FREQUENCY_LABEL: Record<LoanFrequency, { tenureUnit: string; emi: string }> = {
+  MONTHLY: { tenureUnit: "mo", emi: "monthly" },
+  QUARTERLY: { tenureUnit: "qtr", emi: "quarterly" },
+  HALF_YEARLY: { tenureUnit: "half-yr", emi: "half-yearly" },
+  YEARLY: { tenureUnit: "yr", emi: "yearly" },
 };
 
 type Account = {
@@ -119,8 +137,19 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
                   <div className="mt-0.5 text-xs text-muted-foreground">
                     {l.kind} · started {formatDate(l.startedAt)}
                     {l.card ? ` · on ${l.card.name}` : ""}
-                    {l.tenure ? ` · ${l.tenure}mo` : ""}
+                    {l.tenure
+                      ? ` · ${l.tenure}${FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].tenureUnit}`
+                      : ""}
                   </div>
+                  {l.kind === "GOLD" && l.goldItems && l.goldItems.length > 0 && (
+                    <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                      {l.goldItems.reduce((s, g) => s + g.quantity, 0)} gold item(s) ·{" "}
+                      {l.goldItems
+                        .reduce((s, g) => s + g.weightGrams * g.quantity, 0)
+                        .toFixed(3)}{" "}
+                      g pledged
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-1">
                   {l.active && (
@@ -174,6 +203,8 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
               </div>
               {l.emiAmount != null && (
                 <div className="text-xs text-muted-foreground">
+                  {FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi[0].toUpperCase() +
+                    FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi.slice(1)}{" "}
                   EMI {formatINR(l.emiAmount)}
                   {l.interestRate ? ` · ${l.interestRate}% p.a.` : ""}
                 </div>
@@ -246,14 +277,16 @@ function PayDialog({
   const [error, setError] = useState<string | null>(null);
 
   // Suggested split using standard reducing-balance: interest = outstanding
-  // × monthlyRate, GST (card EMI) on top, remainder is principal.
+  // × periodicRate, GST (card EMI) on top, remainder is principal.
   const amt = Number(amount) || (loan?.emiAmount ?? 0);
+  const freq: LoanFrequency = loan?.frequency ?? "MONTHLY";
   const suggestion =
     loan && amt > 0
       ? splitPayment(
           loan.outstanding,
           loan.interestRate ?? 0,
           Math.min(loan.emiAmount ?? amt, amt),
+          freq,
           loan.gstOnInterest ?? null
         )
       : { interest: 0, principal: 0, gst: 0 };
@@ -359,7 +392,7 @@ function PayDialog({
                 )}
                 <p className="text-[10px] text-muted-foreground pt-1">
                   Interest = outstanding ×{" "}
-                  {((loan.interestRate ?? 0) / 12).toFixed(3)}%
+                  {((loan.interestRate ?? 0) / cyclesPerYear(freq)).toFixed(3)}%
                   {suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""}.
                   Remaining is principal.
                 </p>
