@@ -82,12 +82,22 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const r = await fetch(url);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error ?? `Request failed (${r.status})`);
+  }
+  return r.json();
+};
 
 export default function WorkerDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
-  const { data } = useSWR<WorkerDetail>(id ? `/api/workers/${id}` : null, fetcher);
+  const { data, error } = useSWR<WorkerDetail>(
+    id ? `/api/workers/${id}` : null,
+    fetcher,
+  );
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const accounts = accountsData?.accounts ?? [];
 
@@ -95,7 +105,17 @@ export default function WorkerDetailPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState<Settlement | null>(null);
 
-  if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error) {
+    return (
+      <div className="space-y-2">
+        <Link href="/workers" className="text-xs text-muted-foreground">
+          ← Workers
+        </Link>
+        <p className="text-sm text-destructive">{error.message}</p>
+      </div>
+    );
+  }
+  if (!data?.worker) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
     <div className="space-y-6">
