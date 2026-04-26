@@ -308,6 +308,20 @@ const loanKindEnum = z.enum([
   "EDUCATION",
   "OTHER",
 ]);
+const loanFrequencyEnum = z.enum([
+  "MONTHLY",
+  "QUARTERLY",
+  "HALF_YEARLY",
+  "YEARLY",
+]);
+
+export const goldLoanItemSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  quantity: z.number().int().positive().default(1),
+  weightGrams: z.number().positive(),
+  purity: z.number().int().min(1).max(24).optional().nullable(),
+  notes: z.string().trim().max(200).optional().nullable(),
+});
 
 const loanFieldsSchema = z.object({
   kind: loanKindEnum.optional().default("PERSONAL"),
@@ -320,7 +334,7 @@ const loanFieldsSchema = z.object({
   gstOnInterest: z.number().nonnegative().optional().nullable(),
   emiAmount: z.number().positive().optional().nullable(),
   tenure: z.number().int().positive().optional().nullable(),
-  frequency: z.string().optional(),
+  frequency: loanFrequencyEnum.optional().default("MONTHLY"),
   charges: z.number().nonnegative().optional().nullable(),
   chargeBreakdown: z
     .array(
@@ -338,6 +352,7 @@ const loanFieldsSchema = z.object({
   maturityAt: z.string().optional().nullable(),
   nextDueDate: z.string().optional().nullable(),
   notes: z.string().trim().max(500).optional(),
+  goldItems: z.array(goldLoanItemSchema).optional(),
 });
 
 export const loanCreateSchema = loanFieldsSchema.refine(

@@ -27,6 +27,17 @@ export async function GET(
       include: {
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
+        goldItems: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            name: true,
+            quantity: true,
+            weightGrams: true,
+            purity: true,
+            notes: true,
+          },
+        },
       },
     });
     if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -66,6 +77,14 @@ export async function GET(
         foreclosedAt: loan.foreclosedAt?.toISOString() ?? null,
         notes: loan.notes,
         active: loan.active,
+        goldItems: loan.goldItems.map((g) => ({
+          id: g.id,
+          name: g.name,
+          quantity: g.quantity,
+          weightGrams: Number(g.weightGrams),
+          purity: g.purity,
+          notes: g.notes,
+        })),
       },
       payments: payments.map((p) => ({
         id: p.id,
