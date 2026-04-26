@@ -11,6 +11,15 @@ import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import {
+  PercentOrRupeeInput,
+  resolveAmount,
+} from "@/components/ui/percent-or-rupee-input";
+import { GoldBreakdown } from "@/components/investments/gold-breakdown";
+import { HoldingPicker } from "@/components/investments/holding-picker";
+import { SymbolSearch } from "@/components/investments/symbol-search";
+import { InsurancePremiumBreakdown } from "@/components/investments/insurance-premium-breakdown";
+import { BankPicker } from "@/components/ui/bank-picker";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -143,10 +152,15 @@ function DialogBody({
     type === "EXPENSE" ? "/api/workers" : null,
     fetcher,
   );
+  const { data: investmentCategoriesData } = useSWR<{ categories: Category[] }>(
+    type === "INVESTMENT" ? "/api/categories?type=INVESTMENT" : null,
+    fetcher,
+  );
 
   const accounts = accountsData?.accounts ?? [];
   const cards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT" && c.accountId);
   const categories = categoriesData?.categories ?? [];
+  const investmentCategories = investmentCategoriesData?.categories ?? [];
   const family = familyData?.members ?? [];
   const cropBatches = cropBatchesData?.batches ?? [];
   const livestockBatches = livestockBatchesData?.batches ?? [];
@@ -183,7 +197,11 @@ function DialogBody({
       ) : type === "HAND_LOAN" ? (
         <HandLoanForm accounts={accounts} onClose={onClose} />
       ) : type === "INVESTMENT" ? (
-        <InvestmentForm accounts={accounts} onClose={onClose} />
+        <InvestmentForm
+          accounts={accounts}
+          categories={investmentCategories}
+          onClose={onClose}
+        />
       ) : (
         <IncomeExpenseForm
           type={type}
@@ -490,32 +508,26 @@ function IncomeExpenseForm({
               options={family.map((m) => ({ value: m.id, label: m.name }))}
             />
             {beneficiaryMemberId && (
-              <div className="flex gap-2 flex-wrap">
-                {(
-                  [
-                    { v: "NONE", l: "Shared cost" },
-                    { v: "RECOVERABLE", l: "Recover later" },
-                    { v: "GIFT", l: "Gift" },
-                  ] as { v: ChargeFlag; l: string }[]
-                ).map((opt) => (
-                  <Button
-                    key={opt.v}
-                    type="button"
-                    size="sm"
-                    variant={chargeFlag === opt.v ? "default" : "outline"}
-                    onClick={() => setChargeFlag(opt.v)}
-                  >
-                    {opt.l}
-                  </Button>
-                ))}
-                <p className="w-full text-xs text-muted-foreground">
-                  {chargeFlag === "RECOVERABLE"
-                    ? "Adds to that member's owed balance — settle later in the Member Ledger."
-                    : chargeFlag === "GIFT"
-                      ? "Tagged as a gift — stays in expenses, no balance change."
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={chargeFlag === "RECOVERABLE"}
+                  onChange={(e) =>
+                    setChargeFlag(e.target.checked ? "RECOVERABLE" : "NONE")
+                  }
+                  className="mt-0.5 h-4 w-4 accent-primary"
+                />
+                <div className="space-y-0.5">
+                  <span className="text-sm font-medium block">
+                    Recover this from {family.find((m) => m.id === beneficiaryMemberId)?.name ?? "them"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {chargeFlag === "RECOVERABLE"
+                      ? "Adds to their owed balance — settle later in the Member Ledger."
                       : "Just tagged for reporting; no balance impact."}
-                </p>
-              </div>
+                  </span>
+                </div>
+              </label>
             )}
           </div>
         </details>
@@ -973,6 +985,23 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
   );
 }
 
+/**
+ * Map an investment category name (from the seeded "Investment" group) to
+ * the canonical InvestmentKind enum value. Names that don't match any
+ * mapping default to "OTHER".
+ */
+function categoryNameToKind(name: string): string {
+  const n = name.trim().toUpperCase();
+  if (n === "STOCK" || n === "STOCKS") return "STOCK";
+  if (n === "MUTUAL FUND" || n === "MUTUAL FUNDS" || n === "MF") return "MUTUAL_FUND";
+  if (n === "FD" || n === "FIXED DEPOSIT") return "FD";
+  if (n === "RD" || n === "RECURRING DEPOSIT") return "RD";
+  if (n === "SIP") return "SIP";
+  if (n === "INSURANCE") return "INSURANCE";
+  if (n === "GOLD") return "GOLD";
+  return "OTHER";
+}
+
 type InvestmentHolding = {
   id: string;
   kind: string;
@@ -983,13 +1012,20 @@ type InvestmentHolding = {
   quantity: number | null;
   amount: number;
   active: boolean;
+  // Optional fields used by InsurancePremiumBreakdown.
+  institution?: string | null;
+  premiumAmount?: number | null;
+  premiumFrequency?: string | null;
+  nextDueDate?: string | null;
 };
 
 function InvestmentForm({
   accounts,
+  categories,
   onClose,
 }: {
   accounts: Account[];
+  categories: Category[];
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1012,21 +1048,100 @@ function InvestmentForm({
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [livePrice, setLivePrice] = useState<{ price: number; currency: string } | null>(null);
 
-  const selected = investments.find((i) => i.id === investmentId) ?? null;
-  const isStock = selected?.kind === "STOCK" && !!selected?.symbol;
+  // Create-new-holding mode (BUY only). When on, the picker is replaced by
+  // kind/name/symbol fields and submit posts to /api/investments which
+  // creates the holding + initial BUY transaction in one shot.
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newKind, setNewKind] = useState<
+    "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
+  >("STOCK");
+  const [newName, setNewName] = useState("");
+  const [newSymbol, setNewSymbol] = useState("");
+  const [newExchange, setNewExchange] = useState("");
+  // FD-specific
+  const [newInstitution, setNewInstitution] = useState("");
+  const [newInterestRate, setNewInterestRate] = useState("");
+  const [newMaturityAt, setNewMaturityAt] = useState("");
+  // INSURANCE-specific
+  const [newPolicyNumber, setNewPolicyNumber] = useState("");
+  const [newPremium, setNewPremium] = useState("");
+  const [newPolicyType, setNewPolicyType] = useState("LIFE");
+  const [newNominee, setNewNominee] = useState("");
+  // GOLD-specific
+  const [newGoldType, setNewGoldType] = useState<
+    "ORNAMENTS" | "BAR" | "COIN" | "SGB" | "DIGITAL" | "ETF"
+  >("ORNAMENTS");
+  const [newGoldPurity, setNewGoldPurity] = useState("22K");
+  const [newGoldWastage, setNewGoldWastage] = useState("");
+  const [newGoldWastageMode, setNewGoldWastageMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  const [newGoldMaking, setNewGoldMaking] = useState("");
+  const [newGoldMakingMode, setNewGoldMakingMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  const [newGoldGst, setNewGoldGst] = useState("");
+  const [newGoldGstMode, setNewGoldGstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  // Category chip
+  const [categoryId, setCategoryId] = useState("");
+  // Foreign-currency support (set automatically when a USD stock is picked).
+  const [investmentCurrency, setInvestmentCurrency] = useState<"INR" | "USD">("INR");
+  const [exchangeRate, setExchangeRate] = useState("");
+  const [fetchingRate, setFetchingRate] = useState(false);
 
-  // When a stock holding is selected, fetch its live price.
+  const selected = investments.find((i) => i.id === investmentId) ?? null;
+  const isStock =
+    creatingNew ? newKind === "STOCK" : selected?.kind === "STOCK" && !!selected?.symbol;
+
+  // Active symbol = picked holding's symbol OR (when creating new STOCK) the
+  // symbol entered in the SymbolSearch.
+  const activeSymbol = creatingNew
+    ? newKind === "STOCK"
+      ? newSymbol
+      : null
+    : (selected?.symbol ?? null);
+
+  // Active kind drives chip highlight + USD label + button labels.
+  // Picked holding wins; otherwise fall back to the kind set by the chip
+  // selection (defaults to "STOCK" when nothing has been picked yet).
+  const activeKind = selected?.kind ?? newKind;
+  // Quantity × price only makes sense for unitised investments.
+  const isQtyBased = activeKind === "STOCK" || activeKind === "MUTUAL_FUND" || activeKind === "SIP";
+
+  // Holdings filtered to the active kind — drives the picker contents and
+  // the auto-flip into create-new mode when nothing exists for that kind.
+  const filteredHoldings = useMemo(
+    () => investments.filter((i) => i.kind === activeKind),
+    [investments, activeKind],
+  );
+
+  // Auto-flip to create-new mode when the user picks a kind chip that has
+  // no existing holdings (typical for GOLD purchases, new FDs, new RDs).
+  useEffect(() => {
+    if (action !== "BUY") return;
+    if (creatingNew) return;
+    if (investmentId) return;
+    if (filteredHoldings.length === 0 && newKind !== "STOCK") {
+      // STOCK is excluded so opening the dialog with the default kind
+      // doesn't immediately push the user into create-new before they
+      // can react.
+      setCreatingNew(true);
+    }
+  }, [action, creatingNew, investmentId, filteredHoldings.length, newKind]);
+
+  // Live-price fetch — fires for both selected-holding and new-stock flows.
+  // Also auto-flips currency to USD when the quote comes back in USD.
   useEffect(() => {
     setLivePrice(null);
-    if (!isStock || !selected?.symbol) return;
+    if (!isStock || !activeSymbol) return;
     let cancelled = false;
     setFetchingPrice(true);
-    fetch(`/api/market/quote?symbols=${encodeURIComponent(selected.symbol)}`)
+    fetch(`/api/market/quote?symbols=${encodeURIComponent(activeSymbol)}`)
       .then((r) => r.json())
       .then((data: StockQuote[]) => {
         if (cancelled) return;
         const q = data?.[0];
-        if (q && q.price > 0) setLivePrice({ price: q.price, currency: q.currency || "INR" });
+        if (q && q.price > 0) {
+          const cur = (q.currency || "INR") as "INR" | "USD";
+          setLivePrice({ price: q.price, currency: cur });
+          setInvestmentCurrency(cur === "USD" ? "USD" : "INR");
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -1035,16 +1150,57 @@ function InvestmentForm({
     return () => {
       cancelled = true;
     };
-  }, [isStock, selected?.symbol]);
+  }, [isStock, activeSymbol]);
 
-  // Auto-compute amount when qty + price are entered.
+  // Auto-fetch USD → INR rate whenever foreign-currency mode is on.
+  const isForeignCurrency = investmentCurrency !== "INR";
+  useEffect(() => {
+    if (!isForeignCurrency) {
+      setExchangeRate("");
+      return;
+    }
+    let cancelled = false;
+    setFetchingRate(true);
+    fetch(`/api/market/rate?from=${investmentCurrency}&to=INR&date=${date}`)
+      .then((r) => r.json())
+      .then((data: { rate?: number }) => {
+        if (cancelled) return;
+        if (data.rate && data.rate > 0) setExchangeRate(data.rate.toFixed(2));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setFetchingRate(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isForeignCurrency, investmentCurrency, date]);
+
+  // When the user picks an existing holding, sync currency from it.
+  useEffect(() => {
+    if (!selected) return;
+    setInvestmentCurrency((selected.currency as "INR" | "USD") === "USD" ? "USD" : "INR");
+  }, [selected]);
+
+  // Sync the category chip to the active kind on first load.
+  useEffect(() => {
+    if (categoryId) return;
+    const match = categories.find(
+      (c) => categoryNameToKind(c.name) === activeKind,
+    );
+    if (match) setCategoryId(match.id);
+  }, [categories, activeKind, categoryId]);
+
+  // Auto-compute amount when qty + price are entered. For foreign-currency
+  // (e.g. USD stock), multiply by the exchange rate so `amount` stays in INR.
   useEffect(() => {
     const q = parseFloat(quantity);
     const p = parseFloat(price);
-    if (q > 0 && p > 0) {
-      setAmount(String(Number((q * p).toFixed(2))));
+    const r = isForeignCurrency ? parseFloat(exchangeRate) : 1;
+    if (q > 0 && p > 0 && r > 0) {
+      setAmount(String(Number((q * p * r).toFixed(2))));
     }
-  }, [quantity, price]);
+  }, [quantity, price, isForeignCurrency, exchangeRate]);
 
   function applyLivePrice() {
     if (livePrice) setPrice(livePrice.price.toFixed(2));
@@ -1057,16 +1213,116 @@ function InvestmentForm({
       setError("Enter an amount");
       return;
     }
-    if (!investmentId) {
-      setError("Pick a holding");
-      return;
-    }
     if (!accountId) {
       setError("Pick an account");
       return;
     }
+    if (creatingNew) {
+      if (!newName.trim()) {
+        setError("Enter a name for the new holding");
+        return;
+      }
+      if (newKind === "STOCK" && !newSymbol.trim()) {
+        setError("Enter a symbol for the new stock holding");
+        return;
+      }
+    } else if (!investmentId) {
+      setError("Pick a holding");
+      return;
+    }
     setSubmitting(true);
     try {
+      if (creatingNew) {
+        // Create the holding — the API also posts the initial BUY txn.
+        const res = await fetch("/api/investments", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: newKind,
+            name: newName.trim(),
+            symbol: newKind === "STOCK" ? newSymbol.trim().toUpperCase() : undefined,
+            exchange: newKind === "STOCK" ? newExchange || undefined : undefined,
+            institution:
+              newKind === "FD" ||
+              newKind === "RD" ||
+              newKind === "MUTUAL_FUND" ||
+              newKind === "SIP"
+                ? newInstitution.trim() || undefined
+                : undefined,
+            interestRate:
+              (newKind === "FD" || newKind === "RD") && newInterestRate
+                ? Number(newInterestRate)
+                : undefined,
+            maturityAt:
+              (newKind === "FD" || newKind === "RD") && newMaturityAt
+                ? newMaturityAt
+                : undefined,
+            policyNumber:
+              newKind === "INSURANCE" && newPolicyNumber.trim()
+                ? newPolicyNumber.trim()
+                : undefined,
+            policyType: newKind === "INSURANCE" ? newPolicyType : undefined,
+            nominee:
+              newKind === "INSURANCE" && newNominee.trim()
+                ? newNominee.trim()
+                : undefined,
+            premiumAmount:
+              newKind === "INSURANCE" && newPremium ? Number(newPremium) : undefined,
+            metadata:
+              newKind === "GOLD"
+                ? (() => {
+                    const w = parseFloat(quantity) || 0;
+                    const r = parseFloat(price) || 0;
+                    const goldValue = w * r;
+                    const wastageAmt = resolveAmount(
+                      newGoldWastage,
+                      newGoldWastageMode,
+                      goldValue,
+                    );
+                    const makingAmt = resolveAmount(
+                      newGoldMaking,
+                      newGoldMakingMode,
+                      goldValue,
+                    );
+                    const gstAmt = resolveAmount(
+                      newGoldGst,
+                      newGoldGstMode,
+                      goldValue + wastageAmt + makingAmt,
+                    );
+                    return {
+                      goldType: newGoldType,
+                      purity: newGoldPurity,
+                      wastage: wastageAmt || null,
+                      wastageInput: newGoldWastage || null,
+                      wastageMode: newGoldWastageMode,
+                      making: makingAmt || null,
+                      makingInput: newGoldMaking || null,
+                      makingMode: newGoldMakingMode,
+                      gst: gstAmt || null,
+                      gstInput: newGoldGst || null,
+                      gstMode: newGoldGstMode,
+                    };
+                  })()
+                : undefined,
+            currency: investmentCurrency,
+            amount: amt,
+            quantity: quantity ? Number(quantity) : undefined,
+            purchasePrice: price ? Number(price) : undefined,
+            startedAt: date,
+            accountId,
+            isExisting: false,
+          }),
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          setError(body.error ?? "Failed");
+          return;
+        }
+        toast.success("Holding created and purchase recorded");
+        await mutateBalances();
+        onClose();
+        return;
+      }
       const payload: Record<string, unknown> = {
         type: "INVESTMENT",
         amount: amt,
@@ -1075,10 +1331,13 @@ function InvestmentForm({
           `${action === "BUY" ? "Buy" : "Sell"} · ${selected?.name ?? "Investment"}`,
         date,
         accountId,
+        categoryId: categoryId || null,
         investmentId,
         investmentAction: action,
         investmentQty: quantity ? Number(quantity) : null,
         investmentPrice: price ? Number(price) : null,
+        exchangeRate:
+          isForeignCurrency && exchangeRate ? Number(exchangeRate) : null,
       };
       const res = await fetch("/api/transactions", {
         method: "POST",
@@ -1098,8 +1357,60 @@ function InvestmentForm({
     }
   }
 
+  // Pick action labels per active kind so the buttons read naturally for FDs
+  // / insurance (e.g. "Premium" instead of "Buy", "Mature" instead of "Sell").
+  const buyLabel =
+    activeKind === "FD" || activeKind === "RD"
+      ? "Open"
+      : activeKind === "INSURANCE"
+        ? "Pay premium"
+        : activeKind === "SIP"
+          ? "SIP installment"
+          : activeKind === "GOLD"
+            ? "Buy gold"
+            : "Buy";
+  const sellLabel =
+    activeKind === "FD" || activeKind === "RD"
+      ? "Mature / redeem"
+      : activeKind === "INSURANCE"
+        ? "Claim / surrender"
+        : activeKind === "GOLD"
+          ? "Sell gold"
+          : "Sell";
+
   return (
     <div className="space-y-3">
+      {categories.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {categories.map((cat) => {
+            const k = categoryNameToKind(cat.name);
+            const active = categoryId === cat.id;
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => {
+                  setCategoryId(cat.id);
+                  // Picking a chip drives the kind. If the user is in
+                  // create-new mode we update newKind, otherwise we clear
+                  // the selection so the picker filters down.
+                  setNewKind(k as typeof newKind);
+                  if (!creatingNew) setInvestmentId("");
+                }}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider transition-colors",
+                  active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:border-foreground/40",
+                )}
+              >
+                {cat.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <Button
           type="button"
@@ -1107,100 +1418,518 @@ function InvestmentForm({
           onClick={() => setAction("BUY")}
           className="gap-1.5"
         >
-          <ArrowUpRight className="h-4 w-4" /> Buy
+          <ArrowUpRight className="h-4 w-4" /> {buyLabel}
         </Button>
         <Button
           type="button"
           variant={action === "SELL" ? "default" : "outline"}
-          onClick={() => setAction("SELL")}
+          onClick={() => {
+            setAction("SELL");
+            setCreatingNew(false);
+          }}
           className="gap-1.5"
         >
-          <ArrowDownLeft className="h-4 w-4" /> Sell
+          <ArrowDownLeft className="h-4 w-4" /> {sellLabel}
         </Button>
       </div>
 
-      <label className="block">
-        <span className="text-xs font-medium">Holding</span>
-        <div className="mt-1">
-          <NativeSelect
-            value={investmentId}
-            onChange={setInvestmentId}
-            options={investments.map((i) => ({
-              value: i.id,
-              label:
-                `${i.kind} · ${i.name}` +
-                (i.symbol ? ` (${i.symbol})` : "") +
-                (i.quantity != null ? ` · ${i.quantity} units` : ""),
-            }))}
-          />
-        </div>
-        {investments.length === 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            No active holdings yet. Create one in Investments first.
-          </p>
-        )}
-      </label>
-
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="text-xs font-medium">Amount (₹)</span>
-          <AmountInput value={amount} onChange={setAmount} placeholder="0" />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium">Date</span>
-          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="text-xs font-medium">Quantity</span>
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder={isStock ? "Shares" : "Optional"}
-            min="0"
-            step="any"
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium">
-            Price per unit {selected?.currency === "USD" ? "($)" : "(₹)"}
-          </span>
-          <div className="relative">
-            <Input
-              type="number"
-              inputMode="decimal"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder={fetchingPrice ? "Fetching live price…" : "Optional"}
-              min="0"
-              step="any"
-              className="pr-8"
-            />
-            {fetchingPrice && (
-              <RefreshCw className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            )}
+      {creatingNew ? (
+        <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              New holding
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatingNew(false);
+                setNewName("");
+                setNewSymbol("");
+                setNewExchange("");
+                setNewInstitution("");
+                setNewInterestRate("");
+                setNewMaturityAt("");
+                setNewPolicyNumber("");
+                setNewPremium("");
+              }}
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              ← Use existing
+            </button>
           </div>
-        </label>
-      </div>
+          <label className="block">
+            <span className="text-xs font-medium">Kind</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={newKind}
+                onChange={(v) => setNewKind(v as typeof newKind)}
+                options={[
+                  { value: "STOCK", label: "Stock" },
+                  { value: "MUTUAL_FUND", label: "Mutual fund" },
+                  { value: "FD", label: "Fixed deposit" },
+                  { value: "RD", label: "Recurring deposit" },
+                  { value: "SIP", label: "SIP" },
+                  { value: "INSURANCE", label: "Insurance" },
+                  { value: "GOLD", label: "Gold" },
+                  { value: "OTHER", label: "Other" },
+                ]}
+              />
+            </div>
+          </label>
 
-      {isStock && livePrice && (
-        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-xs">
-          <span>
-            Live price for <span className="font-mono font-semibold">{selected?.symbol}</span>:{" "}
-            {livePrice.currency === "USD" ? "$" : "₹"}
-            {livePrice.price.toLocaleString("en-IN", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </span>
-          <Button type="button" size="xs" variant="outline" onClick={applyLivePrice}>
-            Use live price
-          </Button>
+          {newKind === "STOCK" ? (
+            <label className="block">
+              <span className="text-xs font-medium">Search stock</span>
+              <div className="mt-1">
+                <SymbolSearch
+                  value={newSymbol}
+                  name={newName}
+                  showHint={false}
+                  onChange={(sym, n, ex) => {
+                    setNewSymbol(sym);
+                    setNewName(n);
+                    setNewExchange(ex);
+                  }}
+                />
+              </div>
+            </label>
+          ) : (
+            <label className="block">
+              <span className="text-xs font-medium">Name</span>
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder={
+                  newKind === "FD"
+                    ? "e.g. SBI 1Y FD"
+                    : newKind === "RD"
+                      ? "e.g. HDFC 12-mo RD"
+                      : newKind === "MUTUAL_FUND"
+                        ? "e.g. HDFC Top 100"
+                        : newKind === "SIP"
+                          ? "e.g. Axis Bluechip SIP"
+                          : newKind === "INSURANCE"
+                            ? "e.g. LIC Jeevan Anand"
+                            : newKind === "GOLD"
+                              ? "e.g. 24K Gold coin / Sovereign Gold Bond"
+                              : "Holding name"
+                }
+                autoFocus
+              />
+            </label>
+          )}
+
+          {(newKind === "FD" ||
+            newKind === "RD" ||
+            newKind === "MUTUAL_FUND" ||
+            newKind === "SIP") && (
+            <label className="block">
+              <span className="text-xs font-medium">
+                {newKind === "FD" || newKind === "RD" ? "Bank / institution" : "Fund house"}
+              </span>
+              <BankPicker value={newInstitution} onChange={setNewInstitution} />
+            </label>
+          )}
+
+          {(newKind === "FD" || newKind === "RD") && (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs font-medium">Interest rate (%)</span>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={newInterestRate}
+                  onChange={(e) => setNewInterestRate(e.target.value)}
+                  placeholder="e.g. 7.25"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium">Maturity date</span>
+                <DateInput
+                  value={newMaturityAt}
+                  onChange={(e) => setNewMaturityAt(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+
+          {newKind === "INSURANCE" && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Policy type</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={newPolicyType}
+                      onChange={setNewPolicyType}
+                      options={[
+                        { value: "LIFE", label: "Life" },
+                        { value: "TERM", label: "Term" },
+                        { value: "HEALTH", label: "Health" },
+                        { value: "ENDOWMENT", label: "Endowment" },
+                        { value: "ULIP", label: "ULIP" },
+                        { value: "VEHICLE", label: "Vehicle" },
+                        { value: "HOME", label: "Home" },
+                        { value: "TRAVEL", label: "Travel" },
+                        { value: "OTHER", label: "Other" },
+                      ]}
+                    />
+                  </div>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Nominee</span>
+                  <Input
+                    value={newNominee}
+                    onChange={(e) => setNewNominee(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Policy number</span>
+                  <Input
+                    value={newPolicyNumber}
+                    onChange={(e) => setNewPolicyNumber(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Premium (₹)</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newPremium}
+                    onChange={(e) => setNewPremium(e.target.value)}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+            </>
+          )}
+
+          {newKind === "GOLD" && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Type</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={newGoldType}
+                      onChange={(v) => setNewGoldType(v as typeof newGoldType)}
+                      options={[
+                        { value: "ORNAMENTS", label: "Ornaments / Jewellery" },
+                        { value: "BAR", label: "Bar / Bullion" },
+                        { value: "COIN", label: "Coin" },
+                        { value: "SGB", label: "Sovereign Gold Bond" },
+                        { value: "DIGITAL", label: "Digital gold" },
+                        { value: "ETF", label: "Gold ETF" },
+                      ]}
+                    />
+                  </div>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Purity</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={newGoldPurity}
+                      onChange={setNewGoldPurity}
+                      options={[
+                        { value: "24K", label: "24K (999.9)" },
+                        { value: "22K", label: "22K (916)" },
+                        { value: "18K", label: "18K (750)" },
+                        { value: "14K", label: "14K (585)" },
+                        { value: "OTHER", label: "Other" },
+                      ]}
+                    />
+                  </div>
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Weight (g)</span>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder="0"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Rate per gram (₹)</span>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+              {(() => {
+                const w = parseFloat(quantity);
+                const r = parseFloat(price);
+                const goldValue = w > 0 && r > 0 ? w * r : 0;
+                const ws = resolveAmount(newGoldWastage, newGoldWastageMode, goldValue);
+                const mk = resolveAmount(newGoldMaking, newGoldMakingMode, goldValue);
+                const gstBase = goldValue + ws + mk;
+                const gst = resolveAmount(newGoldGst, newGoldGstMode, gstBase);
+                return (
+                  <>
+                    {newGoldType === "ORNAMENTS" ? (
+                      <div className="grid grid-cols-3 gap-3">
+                        <label className="block">
+                          <span className="text-xs font-medium">Wastage</span>
+                          <PercentOrRupeeInput
+                            value={newGoldWastage}
+                            onValueChange={setNewGoldWastage}
+                            mode={newGoldWastageMode}
+                            onModeChange={setNewGoldWastageMode}
+                            baseAmount={goldValue}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium">Making</span>
+                          <PercentOrRupeeInput
+                            value={newGoldMaking}
+                            onValueChange={setNewGoldMaking}
+                            mode={newGoldMakingMode}
+                            onModeChange={setNewGoldMakingMode}
+                            baseAmount={goldValue}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium">GST</span>
+                          <PercentOrRupeeInput
+                            value={newGoldGst}
+                            onValueChange={setNewGoldGst}
+                            mode={newGoldGstMode}
+                            onModeChange={setNewGoldGstMode}
+                            baseAmount={gstBase}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="block">
+                        <span className="text-xs font-medium">GST</span>
+                        <PercentOrRupeeInput
+                          value={newGoldGst}
+                          onValueChange={setNewGoldGst}
+                          mode={newGoldGstMode}
+                          onModeChange={setNewGoldGstMode}
+                          baseAmount={gstBase}
+                        />
+                      </label>
+                    )}
+                    {goldValue > 0 && (
+                      <GoldBreakdown
+                        weight={w}
+                        ratePerGram={r}
+                        goldValue={goldValue}
+                        wastage={ws}
+                        making={mk}
+                        gst={gst}
+                        showWastage={newGoldType === "ORNAMENTS"}
+                        showMaking={newGoldType === "ORNAMENTS"}
+                        onUseTotal={(total) => setAmount(String(Math.round(total)))}
+                      />
+                    )}
+                  </>
+                );
+              })()}
+            </>
+          )}
         </div>
+      ) : (
+        <label className="block">
+          <span className="text-xs font-medium">Holding</span>
+          <div className="mt-1">
+            <HoldingPicker
+              value={investmentId}
+              onChange={setInvestmentId}
+              holdings={filteredHoldings.map((i) => ({
+                id: i.id,
+                kind: i.kind,
+                name: i.name,
+                symbol: i.symbol,
+                exchange: i.exchange,
+                quantity: i.quantity,
+                amount: i.amount,
+              }))}
+              onAddNew={action === "BUY" ? () => setCreatingNew(true) : undefined}
+            />
+          </div>
+          {filteredHoldings.length === 0 && action === "BUY" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No {activeKind.toLowerCase().replace("_", " ")} holdings yet — use{" "}
+              <button
+                type="button"
+                onClick={() => setCreatingNew(true)}
+                className="font-medium text-primary hover:underline"
+              >
+                Add new holding
+              </button>{" "}
+              to create one.
+            </p>
+          )}
+          {filteredHoldings.length === 0 && action === "SELL" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No active {activeKind.toLowerCase().replace("_", " ")} holdings to sell.
+            </p>
+          )}
+        </label>
+      )}
+
+      {/* Insurance: when an existing INSURANCE holding with a known premium
+          is being paid, show the premium-breakdown widget INSTEAD of the
+          generic Amount/Qty/Price fields. */}
+      {action === "BUY" &&
+      !creatingNew &&
+      selected?.kind === "INSURANCE" &&
+      selected.premiumAmount &&
+      Number(selected.premiumAmount) > 0 ? (
+        <>
+          <InsurancePremiumBreakdown
+            policyName={selected.name}
+            institution={selected.institution ?? null}
+            premiumAmount={Number(selected.premiumAmount)}
+            nextDueDate={selected.nextDueDate ?? null}
+            frequency={selected.premiumFrequency ?? null}
+            onTotalChange={(total) => setAmount(String(total))}
+            onNotesChange={(n) => setDescription(n)}
+          />
+          <label className="block">
+            <span className="text-xs font-medium">Date</span>
+            <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">
+                Amount {isForeignCurrency ? "(₹ equivalent)" : "(₹)"}
+              </span>
+              <AmountInput value={amount} onChange={setAmount} placeholder="0" />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">Date</span>
+              <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+          </div>
+
+          {isQtyBased && (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs font-medium">
+                  {activeKind === "STOCK"
+                    ? "Shares"
+                    : activeKind === "MUTUAL_FUND"
+                      ? "Units"
+                      : "Quantity"}
+                </span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  placeholder="0"
+                  min="0"
+                  step="any"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium">
+                  {activeKind === "MUTUAL_FUND" ? "NAV" : "Price per unit"}{" "}
+                  {isForeignCurrency ? "($)" : "(₹)"}
+                </span>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder={fetchingPrice ? "Fetching live price…" : "Optional"}
+                    min="0"
+                    step="any"
+                    className="pr-8"
+                  />
+                  {fetchingPrice && (
+                    <RefreshCw className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+              </label>
+            </div>
+          )}
+
+          {isStock && livePrice && activeSymbol && (
+            <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+              <span>
+                Live price for{" "}
+                <span className="font-mono font-semibold">{activeSymbol}</span>:{" "}
+                {livePrice.currency === "USD" ? "$" : "₹"}
+                {livePrice.price.toLocaleString("en-IN", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+              <Button type="button" size="xs" variant="outline" onClick={applyLivePrice}>
+                Use live price
+              </Button>
+            </div>
+          )}
+
+          {isForeignCurrency && (
+            <div className="rounded-md border border-amber-200 bg-amber-50/50 dark:border-amber-900/40 dark:bg-amber-950/20 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">
+                  Exchange rate ({investmentCurrency} → INR)
+                </span>
+                {fetchingRate && (
+                  <span className="text-[10px] text-amber-700 dark:text-amber-300 animate-pulse">
+                    Fetching rate…
+                  </span>
+                )}
+              </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                  1 {investmentCurrency} =
+                </span>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0.0001"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(e.target.value)}
+                  placeholder="0.0000"
+                  className="pl-20"
+                />
+              </div>
+              {(() => {
+                const q = parseFloat(quantity);
+                const p = parseFloat(price);
+                const r = parseFloat(exchangeRate);
+                if (q > 0 && p > 0 && r > 0) {
+                  const inr = q * p * r;
+                  return (
+                    <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                      INR equivalent:{" "}
+                      <span className="tabular-nums font-semibold">
+                        ₹{inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                      </span>
+                    </p>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+          )}
+        </>
       )}
 
       <label className="block">
@@ -1211,18 +1940,9 @@ function InvestmentForm({
           <NativeSelect
             value={accountId}
             onChange={setAccountId}
-            options={accounts
-              .filter((a) => a.kind !== "CARD")
-              .map((a) => {
-                const amtNum = parseFloat(amount) || 0;
-                const insufficient = action === "BUY" && amtNum > 0 && amtNum > a.balance;
-                return {
-                  value: a.id,
-                  label: a.name,
-                  hint: `${a.kind} · ${formatINR(a.balance)}`,
-                  disabled: insufficient,
-                };
-              })}
+            options={accounts.map((a) =>
+              buildAccountOption(a, action === "BUY" ? Number(amount) || 0 : 0),
+            )}
           />
         </div>
       </label>

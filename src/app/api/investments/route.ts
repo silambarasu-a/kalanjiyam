@@ -13,6 +13,7 @@ import {
   InvestmentAction,
   ReminderKind,
   ReminderStatus,
+  Prisma,
 } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -64,6 +65,7 @@ export async function GET(request: Request) {
         sumAssured: i.sumAssured == null ? null : Number(i.sumAssured),
         nextDueDate: i.nextDueDate?.toISOString() ?? null,
         nominee: i.nominee,
+        metadata: i.metadata ?? null,
         ownerUser: i.ownerUser,
       })),
     });
@@ -120,6 +122,7 @@ export async function POST(request: Request) {
           sumAssured: data.sumAssured ?? null,
           nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : null,
           nominee: data.nominee,
+          metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined,
         },
       });
 

@@ -195,6 +195,7 @@ export async function POST(request: Request) {
           investmentAction: data.investmentAction ?? null,
           investmentQty: data.investmentQty ?? null,
           investmentPrice: data.investmentPrice ?? null,
+          exchangeRate: data.exchangeRate ?? null,
           beneficiaryMemberId: data.beneficiaryMemberId ?? null,
           memberChargeType: (data.memberChargeType as MemberChargeType) ?? "NONE",
           memberChargeId,

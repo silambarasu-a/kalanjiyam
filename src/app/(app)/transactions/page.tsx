@@ -88,7 +88,6 @@ export default function TransactionsPage() {
                   {t.category ? ` · ${t.category.name}` : ""}
                   {t.beneficiary ? ` · for ${t.beneficiary.name}` : ""}
                   {t.memberChargeType === "RECOVERABLE" ? " (recover)" : ""}
-                  {t.memberChargeType === "GIFT" ? " (gift)" : ""}
                 </div>
               </div>
               <div className={`font-semibold ${color}`}>

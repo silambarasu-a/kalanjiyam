@@ -111,9 +111,11 @@ enum HandLoanKind {
 enum InvestmentKind {
   STOCK
   FD
+  RD
   MUTUAL_FUND
   SIP
   INSURANCE
+  GOLD
   OTHER
 }
 
@@ -986,6 +988,8 @@ model Investment {
   nextDueDate          DateTime?
   nominee              String?
   riders               String?
+  /** Kind-specific structured extras (e.g. for GOLD: { type, purity, wastage, making, gst }). */
+  metadata             Json?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 

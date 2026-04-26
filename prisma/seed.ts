@@ -36,8 +36,11 @@ const DEFAULT_CATEGORIES: CategoryDef[] = [
   // Investment
   { name: "SIP", types: [TransactionType.INVESTMENT], group: "Investment" },
   { name: "FD", types: [TransactionType.INVESTMENT], group: "Investment" },
+  { name: "RD", types: [TransactionType.INVESTMENT], group: "Investment" },
   { name: "Insurance", types: [TransactionType.INVESTMENT], group: "Investment" },
   { name: "Stock", types: [TransactionType.INVESTMENT], group: "Investment" },
+  { name: "Mutual Fund", types: [TransactionType.INVESTMENT], group: "Investment" },
+  { name: "Gold", types: [TransactionType.INVESTMENT], group: "Investment" },
 ];
 
 async function seedDefaultCategories() {

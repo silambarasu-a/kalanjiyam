@@ -9,7 +9,7 @@ Predecessor repo for reference only: `../kanakkan` — do not modify. See `/User
 ## Commands
 
 ```bash
-npm run dev          # Start dev server (localhost:3000)
+npm run dev          # Start dev server (localhost:3003)
 npm run build        # prisma generate + next build
 npm run lint         # ESLint
 npm run db:generate  # Regenerate Prisma client (after schema edits)
