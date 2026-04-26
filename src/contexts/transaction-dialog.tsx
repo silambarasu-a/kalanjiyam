@@ -6,7 +6,7 @@ export type TransactionDefault =
   | "INCOME"
   | "EXPENSE"
   | "TRANSFER"
-  | "HAND_LOAN"
+  | "LOAN"
   | "INVESTMENT";
 
 type Ctx = {

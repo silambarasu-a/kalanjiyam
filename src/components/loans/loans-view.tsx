@@ -1,15 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { DateInput } from "@/components/ui/date-input";
-import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -18,9 +14,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
-import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
-import { splitPayment, cyclesPerYear, type LoanFrequency } from "@/lib/loan-math";
+import { LoanPayDialog } from "@/components/loans/loan-pay-dialog";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
+import { formatINR, formatDate } from "@/lib/utils";
+import {
+  countPaidEmis,
+  monthsPerCycle,
+  type LoanFrequency,
+} from "@/lib/loan-math";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type GoldItem = {
@@ -59,15 +60,26 @@ const FREQUENCY_LABEL: Record<LoanFrequency, { tenureUnit: string; emi: string }
   YEARLY: { tenureUnit: "yr", emi: "yearly" },
 };
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
-
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+function computeEmiProgress(
+  l: Pick<
+    Loan,
+    "principal" | "outstanding" | "tenure" | "emiAmount" | "interestRate" | "frequency"
+  >,
+): { paid: number; total: number; left: number } | null {
+  if (!l.tenure || !l.emiAmount || l.emiAmount <= 0) return null;
+  const rate = l.interestRate ?? 0;
+  const freq = l.frequency ?? "MONTHLY";
+  const paid =
+    rate > 0
+      ? countPaidEmis(l.principal, rate, l.emiAmount, l.tenure, freq, l.outstanding)
+      : Math.min(
+          l.tenure,
+          Math.max(0, Math.floor((l.principal - l.outstanding) / l.emiAmount)),
+        );
+  return { paid, total: l.tenure, left: Math.max(0, l.tenure - paid) };
+}
 
 const SOURCE_META = {
   BANK: { label: "Bank loans", Icon: Landmark, emptyHint: "Add your first bank loan." },
@@ -95,9 +107,20 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
   const loanFormRef = useRef<LoanFormHandle>(null);
   const [loanFormBusy, setLoanFormBusy] = useState(false);
 
-  const activeOutstanding = (data?.loans ?? [])
-    .filter((l) => l.active)
-    .reduce((s, l) => s + l.outstanding, 0);
+  const allLoans = data?.loans ?? [];
+  const activeLoans = allLoans.filter((l) => l.active);
+  const closedCount = allLoans.length - activeLoans.length;
+
+  const activeOutstanding = activeLoans.reduce((s, l) => s + l.outstanding, 0);
+  const activePrincipal = activeLoans.reduce((s, l) => s + l.principal, 0);
+  const activeRepaid = Math.max(0, activePrincipal - activeOutstanding);
+  // Normalise EMIs to a monthly figure so loans with mixed frequencies
+  // can be compared on a single line.
+  const monthlyCommitment = activeLoans.reduce((s, l) => {
+    if (l.emiAmount == null) return s;
+    const months = monthsPerCycle(l.frequency ?? "MONTHLY");
+    return s + l.emiAmount / months;
+  }, 0);
 
   return (
     <div className="space-y-6">
@@ -116,12 +139,58 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
         </Button>
       </div>
 
+      {allLoans.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard
+            label="Outstanding"
+            value={formatINR(activeOutstanding)}
+            hint={
+              activePrincipal > 0
+                ? `of ${formatINR(activePrincipal)} principal`
+                : undefined
+            }
+            tone={activeOutstanding > 0 ? "outstanding" : "settled"}
+          />
+          <StatCard
+            label="Monthly EMI"
+            value={monthlyCommitment > 0 ? formatINR(Math.round(monthlyCommitment)) : "—"}
+            hint={
+              monthlyCommitment > 0
+                ? `across ${activeLoans.length} loan${activeLoans.length === 1 ? "" : "s"}`
+                : "No EMI on file"
+            }
+          />
+          <StatCard
+            label="Repaid"
+            value={formatINR(activeRepaid)}
+            hint={
+              activePrincipal > 0
+                ? `${Math.round((activeRepaid / activePrincipal) * 100)}% of active principal`
+                : undefined
+            }
+            tone="settled"
+          />
+          <StatCard
+            label="Active loans"
+            value={String(activeLoans.length)}
+            hint={
+              closedCount > 0
+                ? `${closedCount} closed`
+                : allLoans.length > 0
+                  ? "All open"
+                  : undefined
+            }
+          />
+        </div>
+      )}
+
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.loans ?? []).map((l) => {
           const paid = l.principal - l.outstanding;
           const pct = l.principal > 0 ? Math.min(100, (paid / l.principal) * 100) : 0;
+          const emiProgress = computeEmiProgress(l);
           return (
             <div
               key={l.id}
@@ -168,22 +237,29 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
                       Pay
                     </Button>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={async () => {
-                      if (!confirm(`Delete loan "${l.lender}"?`)) return;
-                      const res = await fetch(`/api/loans/${l.id}`, { method: "DELETE" });
+                  <ConfirmPopover
+                    title={`Delete "${l.lender}"?`}
+                    description="The loan and its payment history will be removed. This cannot be undone."
+                    confirmLabel="Delete"
+                    busyLabel="Deleting…"
+                    onConfirm={async () => {
+                      const res = await fetch(`/api/loans/${l.id}`, {
+                        method: "DELETE",
+                      });
                       if (!res.ok) {
-                        const body = await res.json();
-                        alert(body.error ?? "Failed");
+                        const body = await res.json().catch(() => ({}));
+                        toast.error(body.error ?? "Failed");
+                        throw new Error(body.error ?? "Failed");
                       }
+                      toast.success("Loan deleted");
                       globalMutate(`/api/loans?source=${source}`);
                     }}
-                    aria-label="Delete"
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                    trigger={
+                      <Button variant="ghost" size="icon" aria-label="Delete">
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    }
+                  />
                 </div>
               </div>
               <div>
@@ -220,6 +296,14 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
                   {l.interestRate ? ` · ${l.interestRate}% p.a.` : ""}
                 </div>
               )}
+              {emiProgress && (
+                <div className="text-[11px] text-muted-foreground tabular-nums">
+                  {emiProgress.paid} of {emiProgress.total} EMIs paid
+                  {l.active && emiProgress.left > 0
+                    ? ` · ${emiProgress.left} left`
+                    : ""}
+                </div>
+              )}
             </div>
           );
         })}
@@ -254,242 +338,43 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
         </DialogContent>
       </Dialog>
 
-      <PayDialog
+      <LoanPayDialog
         loan={payLoan}
-        source={source}
         onClose={() => setPayLoan(null)}
+        onPaid={() => globalMutate(`/api/loans?source=${source}`)}
       />
     </div>
   );
 }
 
-function PayDialog({
-  loan,
-  source,
-  onClose,
+function StatCard({
+  label,
+  value,
+  hint,
+  tone = "muted",
 }: {
-  loan: Loan | null;
-  source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
-  onClose: () => void;
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "muted" | "outstanding" | "settled";
 }) {
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
-
-  const today = new Date().toISOString().slice(0, 10);
-  const [amount, setAmount] = useState("");
-  const [overrideSplit, setOverrideSplit] = useState(false);
-  const [principalPortion, setPrincipalPortion] = useState("");
-  const [interestPortion, setInterestPortion] = useState("");
-  const [gstPortion, setGstPortion] = useState("");
-  const [paidAt, setPaidAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
-  const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Pre-fill the amount when the dialog opens so a one-tap "Confirm"
-  // posts the standard EMI. Capped at outstanding so the last (smaller)
-  // EMI doesn't overpay.
-  const loanId = loan?.id;
-  useEffect(() => {
-    if (!loanId || !loan) return;
-    const suggested =
-      loan.emiAmount != null
-        ? Math.min(loan.emiAmount, loan.outstanding)
-        : loan.outstanding;
-    setAmount(suggested > 0 ? String(suggested) : "");
-    setOverrideSplit(false);
-    setPrincipalPortion("");
-    setInterestPortion("");
-    setGstPortion("");
-    setNotes("");
-    setError(null);
-    setPaidAt(today);
-    // Re-run only when a different loan is opened.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loanId]);
-
-  // Suggested split using standard reducing-balance: interest = outstanding
-  // × periodicRate, GST (card EMI) on top, remainder is principal.
-  const amt = Number(amount) || (loan?.emiAmount ?? 0);
-  const freq: LoanFrequency = loan?.frequency ?? "MONTHLY";
-  const suggestion =
-    loan && amt > 0
-      ? splitPayment(
-          loan.outstanding,
-          loan.interestRate ?? 0,
-          Math.min(loan.emiAmount ?? amt, amt),
-          freq,
-          loan.gstOnInterest ?? null
-        )
-      : { interest: 0, principal: 0, gst: 0 };
-  const suggestedPrincipal = Math.max(
-    0,
-    Math.round((amt - suggestion.interest - suggestion.gst) * 100) / 100
-  );
-
-  async function submit() {
-    if (!loan) return;
-    setError(null);
-    const amt = Number(amount);
-    if (!amt || amt <= 0) {
-      setError("Enter an amount");
-      return;
-    }
-    if (!accountId) {
-      setError("Pick an account");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetch(`/api/loans/${loan.id}/pay`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          amount: amt,
-          paidAt,
-          accountId,
-          // Send overrides only when the user explicitly opted in. Otherwise
-          // the server auto-splits using the standard reducing-balance rule.
-          principalPortion:
-            overrideSplit && principalPortion ? Number(principalPortion) : null,
-          interestPortion:
-            overrideSplit && interestPortion ? Number(interestPortion) : null,
-          gstPortion:
-            overrideSplit && gstPortion ? Number(gstPortion) : null,
-          notes: notes.trim() || undefined,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) setError(body.error ?? "Failed");
-      else {
-        toast.success("EMI paid");
-        globalMutate(`/api/loans?source=${source}`);
-        await mutateBalances();
-        onClose();
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
+  const valueClass =
+    tone === "outstanding"
+      ? "text-foreground"
+      : tone === "settled"
+        ? "text-emerald-700 dark:text-emerald-400"
+        : "";
   return (
-    <Dialog open={loan !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
-        <DialogHeader>
-          <DialogTitle>Record EMI payment</DialogTitle>
-        </DialogHeader>
-        {loan && (
-          <div className="space-y-3">
-            <div className="text-sm text-muted-foreground">
-              Outstanding on <strong>{loan.lender}</strong>: {formatINR(loan.outstanding)}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-xs font-medium">Total paid (₹)</span>
-                <AmountInput value={amount} onChange={setAmount}
-                  placeholder={loan.emiAmount != null ? String(loan.emiAmount) : "EMI amount"}
-                  autoFocus
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium">Date</span>
-                <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-              </label>
-            </div>
-            {amt > 0 && (
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5">
-                <div className="flex items-center justify-between font-medium text-foreground">
-                  <span>Auto-split (reducing balance)</span>
-                  <button
-                    type="button"
-                    className="text-[11px] font-normal underline text-muted-foreground"
-                    onClick={() => setOverrideSplit((v) => !v)}
-                  >
-                    {overrideSplit ? "Use auto-split" : "Override"}
-                  </button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Principal</span>
-                  <span className="tabular-nums">{formatINR(suggestedPrincipal)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Interest</span>
-                  <span className="tabular-nums">{formatINR(suggestion.interest)}</span>
-                </div>
-                {suggestion.gst > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">GST on interest</span>
-                    <span className="tabular-nums">{formatINR(suggestion.gst)}</span>
-                  </div>
-                )}
-                <p className="text-[10px] text-muted-foreground pt-1">
-                  Interest = outstanding ×{" "}
-                  {((loan.interestRate ?? 0) / cyclesPerYear(freq)).toFixed(3)}%
-                  {suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""}.
-                  Remaining is principal.
-                </p>
-              </div>
-            )}
-
-            {overrideSplit && (
-              <div className="grid grid-cols-3 gap-2">
-                <label className="block">
-                  <span className="text-xs font-medium">Principal</span>
-                  <AmountInput
-                    value={principalPortion}
-                    onChange={setPrincipalPortion}
-                    placeholder={String(suggestedPrincipal)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">Interest</span>
-                  <AmountInput
-                    value={interestPortion}
-                    onChange={setInterestPortion}
-                    placeholder={String(suggestion.interest)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">GST</span>
-                  <AmountInput
-                    value={gstPortion}
-                    onChange={setGstPortion}
-                    placeholder={String(suggestion.gst)}
-                  />
-                </label>
-              </div>
-            )}
-            <label className="block">
-              <span className="text-xs font-medium">Pay from</span>
-              <div className="mt-1">
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={accounts.map((a) => buildAccountOption(a, amt))}
-                />
-              </div>
-            </label>
-            <label className="block">
-              <span className="text-xs font-medium">Notes</span>
-              <Input
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                maxLength={200}
-              />
-            </label>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={submitting}>
-            Confirm
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}
+      </div>
+      <div className={`mt-1 text-xl font-semibold tabular-nums ${valueClass}`}>
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>
+      )}
+    </div>
   );
 }
