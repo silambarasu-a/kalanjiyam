@@ -9,7 +9,11 @@ import {
   MemberChargeStatus,
   ReminderStatus,
 } from "@/generated/prisma/client";
-import { reverseLoanPaymentPrincipal, type LoanFrequency } from "@/lib/loan-math";
+import {
+  reverseLoanPaymentPrincipal,
+  splitPayment,
+  type LoanFrequency,
+} from "@/lib/loan-math";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -58,27 +62,176 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const t = loaded.transaction;
-    const updated = await prisma.transaction.update({
-      where: { id },
-      data: {
-        amount: parsed.data.amount ?? t.amount,
-        description: parsed.data.description ?? t.description,
-        date: parsed.data.date ? new Date(parsed.data.date) : t.date,
-        categoryId: parsed.data.categoryId === undefined ? t.categoryId : parsed.data.categoryId,
-        beneficiaryMemberId:
-          parsed.data.beneficiaryMemberId === undefined
-            ? t.beneficiaryMemberId
-            : parsed.data.beneficiaryMemberId,
-        memberChargeType:
-          parsed.data.memberChargeType !== undefined
-            ? (parsed.data.memberChargeType as MemberChargeType)
-            : t.memberChargeType,
-        editNote: parsed.data.editNote ?? null,
-        editedAt: new Date(),
-        editedByUserId: ctx.userId,
-      },
+
+    // Transfer legs are immutable — they're book-kept by the Transfer
+    // record itself. Editing one leg in isolation would desync the pair.
+    if (t.transferId) {
+      return NextResponse.json(
+        { error: "Edit the transfer instead, not its leg." },
+        { status: 400 },
+      );
+    }
+    // Loan disbursements were created together with the loan; let the
+    // user adjust them through the loan record, not here.
+    if (t.loanId && t.type === "INCOME" && t.kind === "LOAN_PAYMENT") {
+      return NextResponse.json(
+        { error: "Edit the loan to change its disbursement." },
+        { status: 400 },
+      );
+    }
+
+    const oldAmount = Number(t.amount);
+    const newAmount =
+      parsed.data.amount != null ? Number(parsed.data.amount) : oldAmount;
+    const amountChanged = newAmount !== oldAmount;
+
+    // Pull every relation that needs rebalancing in one round-trip.
+    const full = amountChanged
+      ? await prisma.transaction.findUniqueOrThrow({
+          where: { id },
+          include: {
+            loan: true,
+            investment: true,
+            wagePayment: true,
+            handLoanEntry: true,
+            livestockEvent: true,
+            feedLog: true,
+            vaccinationLog: true,
+          },
+        })
+      : null;
+
+    await prisma.$transaction(async (tx) => {
+      if (amountChanged && full) {
+        // ── Loan EMI: reverse the old payment's principal portion, then
+        // apply the new one against the post-reversal balance. Mirrors
+        // the delete-then-recreate semantics so foreclose/reopen flags
+        // stay consistent.
+        if (
+          full.loanId &&
+          full.loan &&
+          full.type === "EXPENSE" &&
+          full.kind === "LOAN_PAYMENT"
+        ) {
+          const rate = full.loan.interestRate
+            ? Number(full.loan.interestRate)
+            : 0;
+          const gst = full.loan.gstOnInterest
+            ? Number(full.loan.gstOnInterest)
+            : null;
+          const freq = (full.loan.frequency ?? "MONTHLY") as LoanFrequency;
+          const principal = Number(full.loan.principal);
+
+          const oldPrincipalAddBack = reverseLoanPaymentPrincipal(
+            Number(full.loan.outstanding),
+            oldAmount,
+            rate,
+            freq,
+          );
+          const balanceBeforeNew = Math.min(
+            principal,
+            Number(full.loan.outstanding) + oldPrincipalAddBack,
+          );
+
+          const newSplit = splitPayment(balanceBeforeNew, rate, newAmount, freq, gst);
+          const finalOutstanding = Math.max(0, balanceBeforeNew - newSplit.principal);
+
+          const wasForeclosed =
+            !full.loan.active && full.loan.foreclosedAt != null;
+          const willClose = finalOutstanding === 0;
+          await tx.loan.update({
+            where: { id: full.loan.id },
+            data: {
+              outstanding: finalOutstanding,
+              active: !willClose,
+              foreclosedAt:
+                willClose && full.loan.active
+                  ? new Date()
+                  : !willClose && wasForeclosed
+                    ? null
+                    : full.loan.foreclosedAt,
+            },
+          });
+        }
+
+        // ── Investment BUY/SELL: shift holdings by the amount delta.
+        // BUY adds → positive delta grows the holding; SELL subtracts →
+        // positive delta shrinks it. Quantity isn't part of this PATCH
+        // surface, so we leave it unchanged.
+        if (full.investmentId && full.investment && full.investmentAction) {
+          const sign = full.investmentAction === "BUY" ? 1 : -1;
+          const delta = newAmount - oldAmount;
+          const newInvAmount = Math.max(
+            0,
+            Number(full.investment.amount) + sign * delta,
+          );
+          await tx.investment.update({
+            where: { id: full.investment.id },
+            data: { amount: newInvAmount },
+          });
+        }
+
+        // ── Linked logs store their own amount. Keep them in sync so
+        // worker/livestock reports don't diverge from the ledger.
+        if (full.wagePayment) {
+          await tx.wagePayment.update({
+            where: { id: full.wagePayment.id },
+            data: { amount: newAmount },
+          });
+        }
+        if (full.handLoanEntry) {
+          await tx.handLoanEntry.update({
+            where: { id: full.handLoanEntry.id },
+            data: { amount: newAmount },
+          });
+        }
+        if (full.feedLog) {
+          await tx.feedLog.update({
+            where: { id: full.feedLog.id },
+            data: { amount: newAmount },
+          });
+        }
+        if (full.vaccinationLog) {
+          await tx.vaccinationLog.update({
+            where: { id: full.vaccinationLog.id },
+            data: { cost: newAmount },
+          });
+        }
+        if (full.livestockEvent && full.livestockEvent.count > 0) {
+          // unitValue is per-head; spread the new amount evenly.
+          await tx.livestockEvent.update({
+            where: { id: full.livestockEvent.id },
+            data: { unitValue: newAmount / full.livestockEvent.count },
+          });
+        }
+      }
+
+      await tx.transaction.update({
+        where: { id },
+        data: {
+          amount: newAmount,
+          description: parsed.data.description ?? t.description,
+          date: parsed.data.date ? new Date(parsed.data.date) : t.date,
+          categoryId:
+            parsed.data.categoryId === undefined
+              ? t.categoryId
+              : parsed.data.categoryId,
+          beneficiaryMemberId:
+            parsed.data.beneficiaryMemberId === undefined
+              ? t.beneficiaryMemberId
+              : parsed.data.beneficiaryMemberId,
+          memberChargeType:
+            parsed.data.memberChargeType !== undefined
+              ? (parsed.data.memberChargeType as MemberChargeType)
+              : t.memberChargeType,
+          editNote: parsed.data.editNote ?? null,
+          editedAt: new Date(),
+          editedByUserId: ctx.userId,
+        },
+      });
     });
-    return NextResponse.json({ id: updated.id });
+
+    return NextResponse.json({ id });
   } catch (e) {
     return err(e);
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw } from "lucide-react";
 import type { StockQuote } from "@/app/api/market/quote/route";
@@ -76,7 +76,7 @@ const TABS: { value: TransactionDefault; label: string; icon: React.ElementType;
   { value: "INCOME", label: "Income", icon: ArrowDownLeft },
   { value: "EXPENSE", label: "Expense", icon: ArrowUpRight },
   { value: "TRANSFER", label: "Transfer", icon: ArrowLeftRight },
-  { value: "HAND_LOAN", label: "Hand loan", icon: HandCoins },
+  { value: "LOAN", label: "Loan", icon: HandCoins },
   { value: "INVESTMENT", label: "Invest", icon: LineChart },
 ];
 
@@ -194,8 +194,8 @@ function DialogBody({
 
       {type === "TRANSFER" ? (
         <TransferForm accounts={accounts} onClose={onClose} />
-      ) : type === "HAND_LOAN" ? (
-        <HandLoanForm accounts={accounts} onClose={onClose} />
+      ) : type === "LOAN" ? (
+        <LoanForm accounts={accounts} onClose={onClose} />
       ) : type === "INVESTMENT" ? (
         <InvestmentForm
           accounts={accounts}
@@ -979,6 +979,258 @@ function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
         </Button>
         <Button onClick={submit} disabled={submitting}>
           {submitting ? "Saving…" : "Save"}
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+/**
+ * Loan tab — combines informal hand loans (give/receive against a person)
+ * with EMI payments against a formal Loan record. Mode is picked at the
+ * top; each mode renders its own self-contained sub-form.
+ */
+function LoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
+  const [mode, setMode] = useState<"HAND" | "EMI">("HAND");
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-1 rounded-md bg-muted p-1">
+        <button
+          type="button"
+          onClick={() => setMode("HAND")}
+          className={cn(
+            "flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors",
+            mode === "HAND" ? "bg-white shadow text-foreground" : "text-muted-foreground"
+          )}
+        >
+          Hand loan
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("EMI")}
+          className={cn(
+            "flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors",
+            mode === "EMI" ? "bg-white shadow text-foreground" : "text-muted-foreground"
+          )}
+        >
+          Pay EMI
+        </button>
+      </div>
+      {mode === "HAND" ? (
+        <HandLoanForm accounts={accounts} onClose={onClose} />
+      ) : (
+        <LoanEmiForm accounts={accounts} onClose={onClose} />
+      )}
+    </div>
+  );
+}
+
+type EmiLoan = {
+  id: string;
+  source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  lender: string;
+  outstanding: number;
+  emiAmount: number | null;
+  active: boolean;
+};
+
+const EMI_SOURCE_LABEL: Record<EmiLoan["source"], string> = {
+  BANK: "Bank",
+  HAND_FORMAL: "Hand",
+  CARD_EMI: "Card EMI",
+};
+
+function LoanEmiForm({
+  accounts,
+  onClose,
+}: {
+  accounts: Account[];
+  onClose: () => void;
+}) {
+  // Loans are read-permission-gated per source, so fetch each source
+  // separately — a no-source query falls back to the BANK feature check
+  // and would silently filter out hand/card-EMI loans for users with
+  // narrower permissions.
+  const { data: bankData } = useSWR<{ loans: EmiLoan[] }>(
+    "/api/loans?source=BANK",
+    fetcher,
+  );
+  const { data: handData } = useSWR<{ loans: EmiLoan[] }>(
+    "/api/loans?source=HAND_FORMAL",
+    fetcher,
+  );
+  const { data: cardData } = useSWR<{ loans: EmiLoan[] }>(
+    "/api/loans?source=CARD_EMI",
+    fetcher,
+  );
+  const activeLoans = useMemo(
+    () =>
+      [
+        ...(bankData?.loans ?? []),
+        ...(handData?.loans ?? []),
+        ...(cardData?.loans ?? []),
+      ].filter((l) => l.active && l.outstanding > 0),
+    [bankData, handData, cardData],
+  );
+
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [loanId, setLoanId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [paidAt, setPaidAt] = useState(today);
+  const [accountId, setAccountId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selected = activeLoans.find((l) => l.id === loanId) ?? null;
+
+  // Auto-prefill the amount with the standard EMI when a loan is picked
+  // (or with the outstanding when no EMI is on file). Capped at
+  // outstanding so the final smaller EMI doesn't overpay.
+  useEffect(() => {
+    if (!selected) return;
+    const suggested = Math.round(
+      selected.emiAmount != null
+        ? Math.min(selected.emiAmount, selected.outstanding)
+        : selected.outstanding,
+    );
+    setAmount(suggested > 0 ? String(suggested) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loanId]);
+
+  const payable = accounts.filter((a) => a.kind !== "CARD");
+
+  async function submit() {
+    setError(null);
+    if (!loanId) {
+      setError("Pick a loan");
+      return;
+    }
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter an amount");
+      return;
+    }
+    if (!accountId) {
+      setError("Pick an account");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/loans/${loanId}/pay`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          amount: amt,
+          paidAt,
+          accountId,
+          notes: notes.trim() || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error ?? "Failed");
+        return;
+      }
+      toast.success("EMI paid");
+      // Refresh every loans-list cache and the account balances.
+      globalMutate(
+        (k) => typeof k === "string" && k.startsWith("/api/loans"),
+      );
+      await mutateBalances();
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <label className="block">
+        <span className="text-xs font-medium">Loan</span>
+        <div className="mt-1">
+          <NativeSelect
+            value={loanId}
+            onChange={setLoanId}
+            options={
+              activeLoans.length === 0
+                ? [{ value: "", label: "No active loans" }]
+                : [
+                    { value: "", label: "Pick a loan…" },
+                    ...activeLoans.map((l) => ({
+                      value: l.id,
+                      label: `${l.lender} · ${EMI_SOURCE_LABEL[l.source]} · ${formatINR(l.outstanding)} due`,
+                    })),
+                  ]
+            }
+          />
+        </div>
+      </label>
+
+      {selected && (
+        <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Outstanding{" "}
+          <span className="font-medium text-foreground tabular-nums">
+            {formatINR(selected.outstanding)}
+          </span>
+          {selected.emiAmount != null && (
+            <>
+              {" · "}EMI{" "}
+              <span className="tabular-nums">{formatINR(selected.emiAmount)}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">Amount (₹)</span>
+          <AmountInput
+            value={amount}
+            onChange={setAmount}
+            placeholder={
+              selected?.emiAmount
+                ? String(Math.round(selected.emiAmount))
+                : "EMI amount"
+            }
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">Date</span>
+          <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+        </label>
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium">Pay from</span>
+        <div className="mt-1">
+          <NativeSelect
+            value={accountId}
+            onChange={setAccountId}
+            options={payable.map((a) => buildAccountOption(a, Number(amount) || 0))}
+          />
+        </div>
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium">Notes</span>
+        <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={200} />
+      </label>
+
+      <p className="text-xs text-muted-foreground">
+        Server splits the payment into principal/interest using the standard
+        reducing-balance rule. Tweak the split on the loan&rsquo;s detail page
+        if you need to override.
+      </p>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={submit} disabled={submitting}>
+          {submitting ? "Saving…" : "Pay"}
         </Button>
       </DialogFooter>
     </div>

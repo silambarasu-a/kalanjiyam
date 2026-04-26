@@ -17,6 +17,11 @@ import {
   LoanBalanceChart,
   type BalancePoint,
 } from "@/components/loans/loan-balance-chart";
+import {
+  LoanPaymentHistory,
+  type LoanPaymentRow,
+} from "@/components/loans/loan-payment-history";
+import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
 
 const SOURCE_PATH = {
   BANK: "/loans/bank",
@@ -168,22 +173,39 @@ export default async function LoanDetailPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link href={SOURCE_PATH[sourceKey]} className="text-xs text-muted-foreground">
-          ← {SOURCE_LABEL[sourceKey]}
-        </Link>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">{loan.lender}</h1>
-          <span
-            className={`text-[10px] font-semibold uppercase tracking-widest ${status.tone}`}
-          >
-            {status.label}
-          </span>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link href={SOURCE_PATH[sourceKey]} className="text-xs text-muted-foreground">
+            ← {SOURCE_LABEL[sourceKey]}
+          </Link>
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{loan.lender}</h1>
+            <span
+              className={`text-[10px] font-semibold uppercase tracking-widest ${status.tone}`}
+            >
+              {status.label}
+            </span>
+          </div>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">
+            {loan.kind} · {SOURCE_LABEL[sourceKey]}
+            {loan.borrower ? ` · for ${loan.borrower}` : ""}
+          </p>
         </div>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground">
-          {loan.kind} · {SOURCE_LABEL[sourceKey]}
-          {loan.borrower ? ` · for ${loan.borrower}` : ""}
-        </p>
+        {loan.active && outstanding > 0 && (
+          <LoanPayButton
+            loan={{
+              id: loan.id,
+              lender: loan.lender,
+              outstanding,
+              emiAmount: loan.emiAmount != null ? Number(loan.emiAmount) : null,
+              interestRate:
+                loan.interestRate != null ? Number(loan.interestRate) : null,
+              gstOnInterest:
+                loan.gstOnInterest != null ? Number(loan.gstOnInterest) : null,
+              frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
+            }}
+          />
+        )}
       </div>
 
       <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-5 sm:p-6">
@@ -203,6 +225,12 @@ export default async function LoanDetailPage({
               <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                 {formatINR(paid)} paid of {formatINR(principal)}
               </div>
+              {hasSchedule && (
+                <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                  {cyclesPaid} of {tenure} EMIs paid
+                  {cyclesRemaining > 0 ? ` · ${cyclesRemaining} left` : ""}
+                </div>
+              )}
             </div>
             <div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -497,55 +525,17 @@ export default async function LoanDetailPage({
         </section>
       )}
 
-      <section className="rounded-lg border bg-card">
-        <header className="px-5 py-3 border-b">
-          <h2 className="text-sm font-semibold">Payment history</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {payments.length} {payments.length === 1 ? "entry" : "entries"} ·{" "}
-            {formatINR(totalRepaid)} repaid
-          </p>
-        </header>
-        {payments.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-            No payments recorded yet.
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
-                <th className="px-5 py-2">Date</th>
-                <th className="px-5 py-2">Description</th>
-                <th className="px-5 py-2 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((p) => {
-                const isIncome = p.type === "INCOME";
-                return (
-                  <tr key={p.id} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
-                      {formatDate(p.date)}
-                    </td>
-                    <td className="px-5 py-2.5">
-                      <div className="font-medium truncate">{p.description}</div>
-                    </td>
-                    <td
-                      className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
-                        isIncome
-                          ? "text-emerald-700 dark:text-emerald-400"
-                          : "text-destructive"
-                      }`}
-                    >
-                      {isIncome ? "+" : "−"}
-                      {formatINR(Number(p.amount))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <LoanPaymentHistory
+        payments={payments.map<LoanPaymentRow>((p) => ({
+          id: p.id,
+          type: p.type,
+          kind: p.kind,
+          amount: Number(p.amount),
+          date: p.date.toISOString(),
+          description: p.description,
+        }))}
+        totalRepaid={totalRepaid}
+      />
     </div>
   );
 }

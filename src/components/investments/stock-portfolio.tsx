@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -354,7 +355,6 @@ export function StockPortfolio() {
   }
 
   async function deleteHolding(id: string) {
-    if (!confirm("Remove this holding?")) return;
     const res = await fetch(`/api/investments/${id}`, { method: "DELETE" });
     if (res.ok) {
       toast.success("Holding removed");
@@ -363,6 +363,7 @@ export function StockPortfolio() {
     } else {
       const d = await res.json().catch(() => ({}));
       toast.error(d.error || "Failed");
+      throw new Error(d.error || "Failed");
     }
   }
 
@@ -397,18 +398,20 @@ export function StockPortfolio() {
   }
 
   async function deleteWishlist(id: string) {
-    if (!confirm("Remove from watchlist?")) return;
     const res = await fetch(`/api/market/wishlist/${id}`, { method: "DELETE" });
     if (res.ok) {
       toast.success("Removed from watchlist");
       mutateWishlist();
     } else {
       toast.error("Failed");
+      throw new Error("Failed");
     }
   }
 
   function moveToPortfolio(w: WishlistItem) {
-    deleteWishlist(w.id);
+    // Fire-and-forget; deleteWishlist now throws on error so swallow
+    // the rejection — the toast.error inside already informs the user.
+    deleteWishlist(w.id).catch(() => {});
     startCreateHolding({
       symbol: w.symbol,
       name: w.name ?? w.symbol,
@@ -911,14 +914,22 @@ export function StockPortfolio() {
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </Button>
-                                <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  onClick={() => deleteHolding(h.id)}
-                                  aria-label="Delete"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                                <ConfirmPopover
+                                  title="Remove this holding?"
+                                  description="The investment record and any linked transactions will be removed."
+                                  confirmLabel="Remove"
+                                  busyLabel="Removing…"
+                                  onConfirm={() => deleteHolding(h.id)}
+                                  trigger={
+                                    <Button
+                                      size="icon-sm"
+                                      variant="ghost"
+                                      aria-label="Delete"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  }
+                                />
                               </div>
                             </td>
                           </tr>
@@ -1184,14 +1195,21 @@ export function StockPortfolio() {
                                   <Plus className="h-3 w-3 mr-1" />
                                   Buy
                                 </Button>
-                                <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  onClick={() => deleteWishlist(w.id)}
-                                  aria-label="Delete"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                                <ConfirmPopover
+                                  title="Remove from watchlist?"
+                                  confirmLabel="Remove"
+                                  busyLabel="Removing…"
+                                  onConfirm={() => deleteWishlist(w.id)}
+                                  trigger={
+                                    <Button
+                                      size="icon-sm"
+                                      variant="ghost"
+                                      aria-label="Delete"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  }
+                                />
                               </div>
                             </td>
                           </tr>

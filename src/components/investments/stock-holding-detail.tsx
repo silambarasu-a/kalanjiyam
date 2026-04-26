@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
@@ -13,9 +14,14 @@ import {
   TrendingDown,
   ArrowUpRight,
   Trash2,
+  Pencil,
   BarChart2,
 } from "lucide-react";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
+import {
+  EditTransactionDialog,
+  type EditableTransaction,
+} from "@/components/transactions/edit-transaction-dialog";
 import { formatINR, formatDate, cn } from "@/lib/utils";
 
 interface HoldingData {
@@ -66,6 +72,8 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   const { mutate: globalMutate } = useSWRConfig();
   const { openDialog } = useTransactionDialog();
   const [deletingTxnId, setDeletingTxnId] = useState<string | null>(null);
+  const [editingTxn, setEditingTxn] = useState<EditableTransaction | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
 
   const { data, isLoading, mutate: mutateDetail } = useSWR<DetailResponse>(
     `/api/investments/${holdingId}`,
@@ -76,25 +84,28 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   const transactions = data?.transactions ?? [];
 
   async function handleDeleteTransaction(txnId: string) {
-    if (!confirm("Delete this transaction? Holdings will be recalculated.")) return;
     setDeletingTxnId(txnId);
-    const res = await fetch(`/api/transactions/${txnId}`, { method: "DELETE" });
-    setDeletingTxnId(null);
-    if (res.ok) {
-      toast.success("Transaction deleted");
-      mutateDetail();
-      globalMutate(
-        (k) =>
-          typeof k === "string" &&
-          (k.startsWith("/api/investments") ||
-            k.startsWith("/api/dashboard") ||
-            k === "/api/accounts"),
-        undefined,
-        { revalidate: true }
-      );
-    } else {
-      const d = await res.json().catch(() => ({}));
-      toast.error(d.error || "Failed to delete");
+    try {
+      const res = await fetch(`/api/transactions/${txnId}`, { method: "DELETE" });
+      if (res.ok) {
+        toast.success("Transaction deleted");
+        mutateDetail();
+        globalMutate(
+          (k) =>
+            typeof k === "string" &&
+            (k.startsWith("/api/investments") ||
+              k.startsWith("/api/dashboard") ||
+              k === "/api/accounts"),
+          undefined,
+          { revalidate: true },
+        );
+      } else {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || "Failed to delete");
+        throw new Error(d.error || "Failed");
+      }
+    } finally {
+      setDeletingTxnId(null);
     }
   }
 
@@ -160,6 +171,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
         : "bg-muted text-muted-foreground";
 
   return (
+    <>
     <div className="space-y-6 max-w-5xl">
       <div>
         <Link
@@ -391,17 +403,42 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                             <Button
                               size="icon-sm"
                               variant="ghost"
-                              aria-label="Delete"
-                              onClick={() => handleDeleteTransaction(t.id)}
-                              disabled={deletingTxnId === t.id}
+                              aria-label="Edit"
+                              onClick={() => {
+                                setEditingTxn({
+                                  id: t.id,
+                                  amount: t.amount,
+                                  date: t.date,
+                                  description: t.description,
+                                });
+                                setEditOpen(true);
+                              }}
                             >
-                              <Trash2
-                                className={cn(
-                                  "h-3.5 w-3.5",
-                                  deletingTxnId === t.id && "animate-spin"
-                                )}
-                              />
+                              <Pencil className="h-3.5 w-3.5" />
                             </Button>
+                            <ConfirmPopover
+                              title="Delete this transaction?"
+                              description="Holdings and the linked account balance will be recalculated."
+                              confirmLabel="Delete"
+                              busyLabel="Deleting…"
+                              busy={deletingTxnId === t.id}
+                              onConfirm={() => handleDeleteTransaction(t.id)}
+                              trigger={
+                                <Button
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  aria-label="Delete"
+                                  disabled={deletingTxnId === t.id}
+                                >
+                                  <Trash2
+                                    className={cn(
+                                      "h-3.5 w-3.5",
+                                      deletingTxnId === t.id && "animate-spin",
+                                    )}
+                                  />
+                                </Button>
+                              }
+                            />
                           </div>
                         </td>
                       </tr>
@@ -427,5 +464,26 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
         </CardContent>
       </Card>
     </div>
+    <EditTransactionDialog
+      transaction={editingTxn}
+      open={editOpen}
+      onOpenChange={(o) => {
+        setEditOpen(o);
+        if (!o) setEditingTxn(null);
+      }}
+      onSaved={() => {
+        mutateDetail();
+        globalMutate(
+          (k) =>
+            typeof k === "string" &&
+            (k.startsWith("/api/investments") ||
+              k.startsWith("/api/dashboard") ||
+              k === "/api/accounts"),
+          undefined,
+          { revalidate: true },
+        );
+      }}
+    />
+    </>
   );
 }

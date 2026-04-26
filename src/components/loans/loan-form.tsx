@@ -317,7 +317,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           <AmountInput
             value={emiAmount}
             onChange={setEmiAmount}
-            placeholder={preview?.emi ? String(preview.emi) : "Auto"}
+            placeholder={preview?.emi ? String(Math.round(preview.emi)) : "Auto"}
           />
         </label>
       </div>
