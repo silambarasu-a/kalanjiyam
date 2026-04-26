@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
@@ -122,8 +123,18 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
           const paid = l.principal - l.outstanding;
           const pct = l.principal > 0 ? Math.min(100, (paid / l.principal) * 100) : 0;
           return (
-            <div key={l.id} className="rounded-xl border bg-card p-5 space-y-3">
-              <div className="flex items-start justify-between gap-3">
+            <div
+              key={l.id}
+              className="relative rounded-xl border bg-card p-5 space-y-3 transition-colors hover:bg-muted/30"
+            >
+              {/* Stretched link covers the full card. Action buttons opt back
+                  in via relative+z-10 so they stay clickable. */}
+              <Link
+                href={`/loans/${l.id}`}
+                aria-label={`View ${l.lender}`}
+                className="absolute inset-0 z-0 rounded-xl focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+              />
+              <div className="relative flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <meta.Icon className="h-4 w-4 text-primary shrink-0" />
@@ -151,7 +162,7 @@ export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_E
                     </div>
                   )}
                 </div>
-                <div className="flex gap-1">
+                <div className="relative z-10 flex gap-1">
                   {l.active && (
                     <Button size="sm" variant="outline" onClick={() => setPayLoan(l)}>
                       Pay
@@ -275,6 +286,28 @@ function PayDialog({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Pre-fill the amount when the dialog opens so a one-tap "Confirm"
+  // posts the standard EMI. Capped at outstanding so the last (smaller)
+  // EMI doesn't overpay.
+  const loanId = loan?.id;
+  useEffect(() => {
+    if (!loanId || !loan) return;
+    const suggested =
+      loan.emiAmount != null
+        ? Math.min(loan.emiAmount, loan.outstanding)
+        : loan.outstanding;
+    setAmount(suggested > 0 ? String(suggested) : "");
+    setOverrideSplit(false);
+    setPrincipalPortion("");
+    setInterestPortion("");
+    setGstPortion("");
+    setNotes("");
+    setError(null);
+    setPaidAt(today);
+    // Re-run only when a different loan is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loanId]);
 
   // Suggested split using standard reducing-balance: interest = outstanding
   // × periodicRate, GST (card EMI) on top, remainder is principal.

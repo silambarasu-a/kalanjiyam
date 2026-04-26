@@ -4,7 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canModifyRecord } from "@/lib/permissions";
 import { transactionUpdateSchema } from "@/lib/validators-domain";
-import { MemberChargeType, MemberChargeStatus } from "@/generated/prisma/client";
+import {
+  MemberChargeType,
+  MemberChargeStatus,
+  ReminderStatus,
+} from "@/generated/prisma/client";
+import { reverseLoanPaymentPrincipal, type LoanFrequency } from "@/lib/loan-math";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -100,23 +105,150 @@ export async function DELETE(
         { status: 400 }
       );
     }
+    // A loan disbursement INCOME is created together with its Loan
+    // record. Removing it in isolation leaves the loan dangling without
+    // funds — make the user delete the loan instead.
+    if (
+      loaded.transaction.loanId &&
+      loaded.transaction.type === "INCOME" &&
+      loaded.transaction.kind === "LOAN_PAYMENT"
+    ) {
+      return NextResponse.json(
+        { error: "Delete the loan to remove its disbursement." },
+        { status: 400 }
+      );
+    }
+
+    // Pull every side-effect relation in one round-trip so the reversal
+    // block below has the data it needs without follow-up queries.
+    const t = await prisma.transaction.findUniqueOrThrow({
+      where: { id },
+      include: {
+        loan: true,
+        investment: true,
+        leaseSchedule: true,
+        wagePayment: true,
+        handLoanEntry: true,
+        livestockEvent: true,
+        feedLog: true,
+        vaccinationLog: true,
+        reminderConfirmation: true,
+      },
+    });
+
     await prisma.$transaction(async (tx) => {
-      // If linked to a MemberCharge that has no settlements, drop it too.
-      if (loaded.transaction.memberChargeId) {
+      // ── Loan EMI repayment: add the principal portion back to the
+      // loan's outstanding and re-open it if this payment had foreclosed
+      // it. Closed-form inverse of splitPayment — accurate for the
+      // common case where the original split wasn't manually overridden.
+      if (
+        t.loanId &&
+        t.loan &&
+        t.type === "EXPENSE" &&
+        t.kind === "LOAN_PAYMENT"
+      ) {
+        const principalAddBack = reverseLoanPaymentPrincipal(
+          Number(t.loan.outstanding),
+          Number(t.amount),
+          t.loan.interestRate ? Number(t.loan.interestRate) : 0,
+          (t.loan.frequency ?? "MONTHLY") as LoanFrequency
+        );
+        const newOutstanding = Math.min(
+          Number(t.loan.principal),
+          Number(t.loan.outstanding) + principalAddBack
+        );
+        const wasForeclosedByThis =
+          !t.loan.active && t.loan.foreclosedAt != null;
+        await tx.loan.update({
+          where: { id: t.loan.id },
+          data: {
+            outstanding: newOutstanding,
+            ...(wasForeclosedByThis && newOutstanding > 0
+              ? { active: true, foreclosedAt: null }
+              : {}),
+          },
+        });
+      }
+
+      // ── Investment BUY/SELL: undo the holdings change made when this
+      // transaction was posted. BUY added → reverse subtracts; SELL
+      // subtracted → reverse adds.
+      if (t.investmentId && t.investment && t.investmentAction) {
+        const sign = t.investmentAction === "BUY" ? -1 : 1;
+        const newAmount = Math.max(
+          0,
+          Number(t.investment.amount) + sign * Number(t.amount)
+        );
+        const qtyDelta = t.investmentQty ? Number(t.investmentQty) : 0;
+        const newQty =
+          t.investment.quantity == null && qtyDelta === 0
+            ? null
+            : Math.max(
+                0,
+                Number(t.investment.quantity ?? 0) + sign * qtyDelta
+              );
+        await tx.investment.update({
+          where: { id: t.investment.id },
+          data: { amount: newAmount, quantity: newQty },
+        });
+      }
+
+      // ── Lease schedule: a confirmed instalment becomes UPCOMING again.
+      // The leaseScheduleId FK on the txn auto-clears via SetNull on
+      // delete, but the schedule's status is decoupled — reset it.
+      if (t.leaseScheduleId) {
+        await tx.leasePaymentSchedule.update({
+          where: { id: t.leaseScheduleId },
+          data: { status: ReminderStatus.UPCOMING },
+        });
+      }
+
+      // ── Investment reminder: the reminder pointed at this txn as its
+      // confirmation. Reopen it so the user can confirm again.
+      if (t.reminderConfirmation) {
+        await tx.investmentReminder.update({
+          where: { id: t.reminderConfirmation.id },
+          data: { status: ReminderStatus.UPCOMING },
+        });
+      }
+
+      // ── Log-style relations exist *because* of this transaction. With
+      // the txn gone they'd become orphaned rows that no longer
+      // represent any money movement; drop them.
+      if (t.wagePayment) {
+        await tx.wagePayment.delete({ where: { id: t.wagePayment.id } });
+      }
+      if (t.handLoanEntry) {
+        await tx.handLoanEntry.delete({ where: { id: t.handLoanEntry.id } });
+      }
+      if (t.livestockEvent) {
+        await tx.livestockEvent.delete({ where: { id: t.livestockEvent.id } });
+      }
+      if (t.feedLog) {
+        await tx.feedLog.delete({ where: { id: t.feedLog.id } });
+      }
+      if (t.vaccinationLog) {
+        await tx.vaccinationLog.delete({ where: { id: t.vaccinationLog.id } });
+      }
+
+      // ── Member charge: pre-existing behaviour. Drop the charge if no
+      // settlements yet, otherwise mark it written-off.
+      if (t.memberChargeId) {
         const settlements = await tx.memberChargeSettlement.count({
-          where: { chargeId: loaded.transaction.memberChargeId },
+          where: { chargeId: t.memberChargeId },
         });
         if (settlements === 0) {
           await tx.memberCharge.delete({
-            where: { id: loaded.transaction.memberChargeId },
+            where: { id: t.memberChargeId },
           });
         } else {
           await tx.memberCharge.update({
-            where: { id: loaded.transaction.memberChargeId },
+            where: { id: t.memberChargeId },
             data: { status: MemberChargeStatus.WRITTEN_OFF },
           });
         }
       }
+
       await tx.transaction.delete({ where: { id } });
     });
     return NextResponse.json({ ok: true });

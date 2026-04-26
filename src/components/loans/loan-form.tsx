@@ -98,6 +98,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const [kind, setKind] = useState<LoanKind>("PERSONAL");
   const [lender, setLender] = useState("");
   const [principal, setPrincipal] = useState("");
+  const [outstanding, setOutstanding] = useState("");
   const [interestRate, setInterestRate] = useState("");
   const [gstOnInterest, setGstOnInterest] = useState(source === "CARD_EMI" ? "18" : "");
   const [emiAmount, setEmiAmount] = useState("");
@@ -205,6 +206,11 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           source,
           lender: lender.trim(),
           principal: principalNum,
+          // Only send outstanding when the user is entering an existing
+          // loan and explicitly typed a value — otherwise the API defaults
+          // outstanding to principal.
+          outstanding:
+            isExisting && outstanding !== "" ? Number(outstanding) : undefined,
           interestRate: interestRate ? Number(interestRate) : null,
           gstOnInterest: gstOnInterest ? Number(gstOnInterest) : null,
           emiAmount: effectiveEmi ?? null,
@@ -547,16 +553,6 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               </div>
             )}
           </div>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={isExisting}
-              onChange={(e) => setIsExisting(e.target.checked)}
-            />
-            <span className="text-sm">
-              Already disbursed (don&apos;t create a disbursement transaction)
-            </span>
-          </label>
           {!isExisting && (
             <label className="block">
               <span className="text-xs font-medium">Disbursed into (bank account)</span>
@@ -570,6 +566,39 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             </label>
           )}
         </>
+      )}
+
+      {source !== "CARD_EMI" && (
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={isExisting}
+              onChange={(e) => setIsExisting(e.target.checked)}
+            />
+            <span className="text-sm">
+              {source === "BANK"
+                ? "Already disbursed (don't create a disbursement transaction)"
+                : "Existing loan (already taken — partially or fully repaid)"}
+            </span>
+          </label>
+          {isExisting && (
+            <label className="block">
+              <span className="text-xs font-medium">Current outstanding (₹)</span>
+              <AmountInput
+                value={outstanding}
+                onChange={setOutstanding}
+                placeholder={principalNum > 0 ? String(principalNum) : "Same as principal"}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Leave blank if no payments yet.{" "}
+                {outstanding !== "" && Number(outstanding) === 0
+                  ? "Loan will be marked as paid and closed automatically."
+                  : "Enter the remaining balance after EMIs already paid."}
+              </p>
+            </label>
+          )}
+        </div>
       )}
 
       {source === "CARD_EMI" && (

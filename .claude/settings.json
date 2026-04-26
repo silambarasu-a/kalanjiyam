@@ -11,7 +11,8 @@
       "Bash(grep -oE '\\\\.sm\\\\\\\\:max-w-[^{ ,]*')",
       "Bash(sed -n '54,67p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/ui/command.tsx)",
       "Bash(sed -n '70,80p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-lock-dialog.tsx)",
-      "Bash(sed -n '70,82p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-expiry-banner.tsx)"
+      "Bash(sed -n '70,82p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-expiry-banner.tsx)",
+      "Bash(npx tsc *)"
     ]
   }
 }
