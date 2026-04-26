@@ -22,6 +22,7 @@ import {
   type LoanPaymentRow,
 } from "@/components/loans/loan-payment-history";
 import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
+import { LoanEditButton } from "@/components/loans/loan-edit-button";
 
 const SOURCE_PATH = {
   BANK: "/loans/bank",
@@ -191,21 +192,58 @@ export default async function LoanDetailPage({
             {loan.borrower ? ` · for ${loan.borrower}` : ""}
           </p>
         </div>
-        {loan.active && outstanding > 0 && (
-          <LoanPayButton
+        <div className="flex flex-wrap items-center gap-2">
+          <LoanEditButton
             loan={{
               id: loan.id,
+              kind: loan.kind,
+              source: loan.source,
               lender: loan.lender,
+              principal,
               outstanding,
-              emiAmount: loan.emiAmount != null ? Number(loan.emiAmount) : null,
               interestRate:
                 loan.interestRate != null ? Number(loan.interestRate) : null,
               gstOnInterest:
                 loan.gstOnInterest != null ? Number(loan.gstOnInterest) : null,
+              emiAmount:
+                loan.emiAmount != null ? Number(loan.emiAmount) : null,
+              tenure: loan.tenure,
               frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
+              charges: loan.charges != null ? Number(loan.charges) : null,
+              chargeBreakdown: chargeBreakdown.map((c) => ({
+                label: c.label,
+                amount: Number(c.amount) || 0,
+              })),
+              accountId: loan.accountId,
+              cardId: loan.cardId,
+              isExisting: loan.isExisting,
+              startedAt: loan.startedAt.toISOString(),
+              notes: loan.notes,
+              goldItems: loan.goldItems.map((g) => ({
+                name: g.name,
+                quantity: g.quantity,
+                weightGrams: Number(g.weightGrams),
+                purity: g.purity,
+                notes: g.notes,
+              })),
             }}
           />
-        )}
+          {loan.active && outstanding > 0 && (
+            <LoanPayButton
+              loan={{
+                id: loan.id,
+                lender: loan.lender,
+                outstanding,
+                emiAmount: loan.emiAmount != null ? Number(loan.emiAmount) : null,
+                interestRate:
+                  loan.interestRate != null ? Number(loan.interestRate) : null,
+                gstOnInterest:
+                  loan.gstOnInterest != null ? Number(loan.gstOnInterest) : null,
+                frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
+              }}
+            />
+          )}
+        </div>
       </div>
 
       <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-5 sm:p-6">

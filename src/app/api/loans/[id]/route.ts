@@ -4,6 +4,11 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { loanUpdateSchema } from "@/lib/validators-domain";
+import {
+  Prisma,
+  TransactionType,
+  TransactionKind,
+} from "@/generated/prisma/client";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -69,6 +74,8 @@ export async function GET(
         tenure: loan.tenure,
         frequency: loan.frequency,
         charges: loan.charges == null ? null : Number(loan.charges),
+        chargeBreakdown: loan.chargeBreakdown ?? null,
+        isExisting: loan.isExisting,
         account: loan.account,
         card: loan.card,
         startedAt: loan.startedAt.toISOString(),
@@ -119,24 +126,203 @@ export async function PATCH(
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const updated = await prisma.loan.update({
-      where: { id },
-      data: {
-        lender: parsed.data.lender ?? loan.lender,
-        borrower: parsed.data.borrower ?? loan.borrower,
-        interestRate: parsed.data.interestRate ?? loan.interestRate,
-        gstOnInterest: parsed.data.gstOnInterest ?? loan.gstOnInterest,
-        emiAmount: parsed.data.emiAmount ?? loan.emiAmount,
-        tenure: parsed.data.tenure ?? loan.tenure,
-        frequency: parsed.data.frequency ?? loan.frequency,
-        charges: parsed.data.charges ?? loan.charges,
-        maturityAt: parsed.data.maturityAt ? new Date(parsed.data.maturityAt) : loan.maturityAt,
-        nextDueDate: parsed.data.nextDueDate ? new Date(parsed.data.nextDueDate) : loan.nextDueDate,
-        notes: parsed.data.notes ?? loan.notes,
-        active: parsed.data.active ?? loan.active,
-      },
+    const data = parsed.data;
+
+    // Source change is unsupported — different feature/UI per source. The
+    // form locks this, so a mismatch is a programmer error, not a user one.
+    if (data.source && data.source !== loan.source) {
+      return NextResponse.json(
+        { error: "Cannot change loan source" },
+        { status: 400 }
+      );
+    }
+
+    // Workspace-scope check the new account/card if either was changed.
+    if (data.cardId && data.cardId !== loan.cardId) {
+      const card = await prisma.card.findUnique({ where: { id: data.cardId } });
+      if (!card || card.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Card not found" }, { status: 404 });
+      }
+      if (!canAccessRecord(session, card)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
+    if (data.accountId && data.accountId !== loan.accountId) {
+      const account = await prisma.account.findUnique({
+        where: { id: data.accountId },
+      });
+      if (!account || account.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Account not found" }, { status: 404 });
+      }
+      if (!canAccessRecord(session, account)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
+
+    // chargeBreakdown handling: undefined → leave alone; null/empty → clear;
+    // populated array → set & sum into the `charges` total. Mirrors how the
+    // create path normalises the breakdown.
+    const breakdown = data.chargeBreakdown;
+    const breakdownProvided = breakdown !== undefined;
+    const newChargesTotal = breakdownProvided
+      ? breakdown && breakdown.length > 0
+        ? Math.round(
+            breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100,
+          ) / 100
+        : 0
+      : null;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedLoan = await tx.loan.update({
+        where: { id },
+        data: {
+          kind: data.kind ?? loan.kind,
+          lender: data.lender ?? loan.lender,
+          borrower:
+            data.borrower !== undefined ? data.borrower : loan.borrower,
+          principal: data.principal ?? loan.principal,
+          outstanding: data.outstanding ?? loan.outstanding,
+          interestRate:
+            data.interestRate !== undefined
+              ? data.interestRate
+              : loan.interestRate,
+          gstOnInterest:
+            data.gstOnInterest !== undefined
+              ? data.gstOnInterest
+              : loan.gstOnInterest,
+          emiAmount:
+            data.emiAmount !== undefined ? data.emiAmount : loan.emiAmount,
+          tenure: data.tenure !== undefined ? data.tenure : loan.tenure,
+          frequency: data.frequency ?? loan.frequency,
+          charges: breakdownProvided
+            ? newChargesTotal && newChargesTotal > 0
+              ? newChargesTotal
+              : null
+            : data.charges !== undefined
+              ? data.charges
+              : loan.charges,
+          chargeBreakdown: breakdownProvided
+            ? breakdown && breakdown.length > 0
+              ? breakdown
+              : Prisma.DbNull
+            : undefined,
+          accountId:
+            data.accountId !== undefined ? data.accountId : loan.accountId,
+          cardId: data.cardId !== undefined ? data.cardId : loan.cardId,
+          startedAt: data.startedAt ? new Date(data.startedAt) : loan.startedAt,
+          maturityAt: data.maturityAt
+            ? new Date(data.maturityAt)
+            : loan.maturityAt,
+          nextDueDate: data.nextDueDate
+            ? new Date(data.nextDueDate)
+            : loan.nextDueDate,
+          notes: data.notes !== undefined ? data.notes : loan.notes,
+          active: data.active ?? loan.active,
+        },
+      });
+
+      // BANK loans created with isExisting=false have an auto-generated
+      // disbursement INCOME and (optionally) a charges EXPENSE pinned to
+      // this loanId. Keep them in sync so balances and the transaction
+      // ledger reflect the edit instead of drifting silently.
+      if (loan.source === "BANK" && !loan.isExisting) {
+        const newPrincipal = Number(updatedLoan.principal);
+        const newAccountId = updatedLoan.accountId;
+        const newDate = updatedLoan.startedAt;
+        const newCharges = updatedLoan.charges
+          ? Number(updatedLoan.charges)
+          : 0;
+        const labelList =
+          breakdownProvided && breakdown && breakdown.length > 0
+            ? breakdown.map((c) => c.label).join(", ")
+            : "Processing & other charges";
+
+        const disbursement = await tx.transaction.findFirst({
+          where: {
+            loanId: id,
+            type: TransactionType.INCOME,
+            kind: TransactionKind.LOAN_PAYMENT,
+          },
+          orderBy: { createdAt: "asc" },
+        });
+        if (disbursement) {
+          await tx.transaction.update({
+            where: { id: disbursement.id },
+            data: {
+              amount: newPrincipal,
+              date: newDate,
+              accountId: newAccountId,
+              description: `Loan disbursement · ${updatedLoan.lender}`,
+            },
+          });
+        }
+
+        const chargeTxn = await tx.transaction.findFirst({
+          where: {
+            loanId: id,
+            type: TransactionType.EXPENSE,
+            kind: TransactionKind.OTHER_EXPENSE,
+          },
+          orderBy: { createdAt: "asc" },
+        });
+        if (chargeTxn) {
+          if (newCharges > 0) {
+            await tx.transaction.update({
+              where: { id: chargeTxn.id },
+              data: {
+                amount: newCharges,
+                date: newDate,
+                accountId: newAccountId,
+                description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
+              },
+            });
+          } else {
+            await tx.transaction.delete({ where: { id: chargeTxn.id } });
+          }
+        } else if (newCharges > 0 && newAccountId) {
+          await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: TransactionType.EXPENSE,
+              kind: TransactionKind.OTHER_EXPENSE,
+              amount: newCharges,
+              description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
+              date: newDate,
+              accountId: newAccountId,
+              loanId: id,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+        }
+      }
+
+      // Gold items: replace-all when the client sends a fresh list. Also
+      // wipe stale rows when kind moves away from GOLD even if the client
+      // didn't send goldItems.
+      const newKind = data.kind ?? loan.kind;
+      if (data.goldItems !== undefined) {
+        await tx.goldLoanItem.deleteMany({ where: { loanId: id } });
+        if (data.goldItems.length > 0 && newKind === "GOLD") {
+          await tx.goldLoanItem.createMany({
+            data: data.goldItems.map((g) => ({
+              loanId: id,
+              name: g.name,
+              quantity: g.quantity ?? 1,
+              weightGrams: g.weightGrams,
+              purity: g.purity ?? null,
+              notes: g.notes ?? null,
+            })),
+          });
+        }
+      } else if (loan.kind === "GOLD" && newKind !== "GOLD") {
+        await tx.goldLoanItem.deleteMany({ where: { loanId: id } });
+      }
+
+      return updatedLoan;
     });
-    return NextResponse.json({ id: updated.id });
+
+    return NextResponse.json({ id: result.id });
   } catch (e) {
     return err(e);
   }
