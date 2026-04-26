@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { useMemo } from "react";
 import { useSession } from "next-auth/react";
 import {
   ArrowDownLeft,
@@ -14,11 +16,30 @@ import {
   Wallet2,
   Users,
   HardHat,
+  AlertCircle,
 } from "lucide-react";
 import { formatINR, formatDate } from "@/lib/utils";
+import { calendarMonthPeriods } from "@/lib/statement-period";
+import { PeriodFilter } from "@/components/transactions/period-filter";
+
+type Due = {
+  id: string;
+  source: "REMINDER" | "LOAN" | "LEASE";
+  kind: string;
+  label: string;
+  dueDate: string;
+  amount: number | null;
+  href: string;
+};
 
 type Summary = {
-  month: { income: number; expense: number; net: number };
+  period: {
+    start: string;
+    end: string;
+    income: number;
+    expense: number;
+    net: number;
+  };
   netWorth: number;
   liquid: number;
   investedAmount: number;
@@ -29,13 +50,7 @@ type Summary = {
   activeCropBatches: number;
   activeLivestockBatches: number;
   pendingSettlements: number;
-  reminders: {
-    id: string;
-    kind: string;
-    dueDate: string;
-    amount: number | null;
-    name: string;
-  }[];
+  dues: Due[];
 };
 
 const fetcher = async (url: string) => {
@@ -46,17 +61,32 @@ const fetcher = async (url: string) => {
 
 export default function DashboardPage() {
   const { data: session } = useSession();
-  const { data } = useSWR<Summary>("/api/dashboard/summary", fetcher);
+  const search = useSearchParams();
+  const periods = useMemo(() => calendarMonthPeriods(), []);
+  const activeId = search.get("period") ?? periods[0]?.id ?? "";
+  const queryString = search.toString();
+  const { data } = useSWR<Summary>(
+    `/api/dashboard/summary${queryString ? `?${queryString}` : ""}`,
+    fetcher,
+  );
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Welcome back, {session?.user.name?.split(" ")[0] ?? "friend"}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Overview for this month across every feature.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Welcome back, {session?.user.name?.split(" ")[0] ?? "friend"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Overview across every feature.
+          </p>
+        </div>
+        <PeriodFilter
+          periods={periods}
+          activeId={activeId}
+          customFrom={search.get("from") ?? undefined}
+          customTo={search.get("to") ?? undefined}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -68,19 +98,19 @@ export default function DashboardPage() {
           tone={data && data.netWorth >= 0 ? "primary" : "destructive"}
         />
         <BigStat
-          label="This month"
+          label="Period flow"
           value={
             data
-              ? `${data.month.net >= 0 ? "+" : "−"}${formatINR(Math.abs(data.month.net))}`
+              ? `${data.period.net >= 0 ? "+" : "−"}${formatINR(Math.abs(data.period.net))}`
               : "—"
           }
           hint={
             data
-              ? `+${formatINR(data.month.income)} / −${formatINR(data.month.expense)}`
+              ? `+${formatINR(data.period.income)} / −${formatINR(data.period.expense)}`
               : ""
           }
           icon={
-            data && data.month.net >= 0 ? (
+            data && data.period.net >= 0 ? (
               <ArrowDownLeft className="h-5 w-5 text-primary" />
             ) : (
               <ArrowUpRight className="h-5 w-5 text-destructive" />
@@ -123,34 +153,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
-        <section className="rounded-xl border bg-card p-5">
-          <h2 className="flex items-center gap-2 font-semibold mb-3">
-            <Bell className="h-4 w-4 text-primary" /> Upcoming reminders
-          </h2>
-          <div className="divide-y">
-            {(data?.reminders ?? []).map((r) => (
-              <div key={r.id} className="flex items-center gap-3 py-2.5">
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {r.kind.replace(/_/g, " ")} · {r.name}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(r.dueDate)}
-                    {r.amount != null ? ` · ${formatINR(r.amount)}` : ""}
-                  </div>
-                </div>
-                <Link href="/reminders" className="text-xs text-primary hover:underline">
-                  Open →
-                </Link>
-              </div>
-            ))}
-            {data && data.reminders.length === 0 && (
-              <div className="py-4 text-sm text-muted-foreground text-center">
-                Nothing in the next two weeks.
-              </div>
-            )}
-          </div>
-        </section>
+        <UpcomingDues dues={data?.dues ?? null} />
 
         <section className="space-y-3">
           <SmallCard
@@ -173,6 +176,177 @@ export default function DashboardPage() {
           />
         </section>
       </div>
+    </div>
+  );
+}
+
+function UpcomingDues({ dues }: { dues: Due[] | null }) {
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  // Bucket dues by tone — overdue / due-soon / upcoming.
+  const grouped = useMemo(() => {
+    const overdue: Due[] = [];
+    const soon: Due[] = [];
+    const later: Due[] = [];
+    for (const d of dues ?? []) {
+      const due = new Date(d.dueDate);
+      const days = Math.round((due.getTime() - today.getTime()) / 86400000);
+      if (days < 0) overdue.push(d);
+      else if (days <= 7) soon.push(d);
+      else later.push(d);
+    }
+    return { overdue, soon, later };
+  }, [dues, today]);
+
+  const totalOwed = useMemo(
+    () => (dues ?? []).reduce((s, d) => s + (d.amount ?? 0), 0),
+    [dues],
+  );
+
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <Bell className="h-4 w-4 text-primary" /> Upcoming dues
+        </h2>
+        {dues && dues.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {dues.length} item{dues.length === 1 ? "" : "s"}
+            {totalOwed > 0 ? ` · ${formatINR(totalOwed)} total` : ""}
+          </p>
+        )}
+      </div>
+
+      {!dues ? (
+        <div className="py-6 text-sm text-muted-foreground text-center">Loading…</div>
+      ) : dues.length === 0 ? (
+        <div className="py-6 text-sm text-muted-foreground text-center">
+          Nothing due in the next 30 days.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {grouped.overdue.length > 0 && (
+            <DueGroup
+              label="Overdue"
+              tone="overdue"
+              dues={grouped.overdue}
+              today={today}
+            />
+          )}
+          {grouped.soon.length > 0 && (
+            <DueGroup
+              label="Due this week"
+              tone="soon"
+              dues={grouped.soon}
+              today={today}
+            />
+          )}
+          {grouped.later.length > 0 && (
+            <DueGroup
+              label="Coming up"
+              tone="later"
+              dues={grouped.later}
+              today={today}
+            />
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DueGroup({
+  label,
+  tone,
+  dues,
+  today,
+}: {
+  label: string;
+  tone: "overdue" | "soon" | "later";
+  dues: Due[];
+  today: Date;
+}) {
+  const dotClass =
+    tone === "overdue"
+      ? "bg-destructive"
+      : tone === "soon"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/40";
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+        <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+          {label}
+        </span>
+      </div>
+      <div className="divide-y">
+        {dues.map((d) => (
+          <DueRow key={d.id} due={d} today={today} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DueRow({ due, today }: { due: Due; today: Date }) {
+  const dueDate = new Date(due.dueDate);
+  const days = Math.round((dueDate.getTime() - today.getTime()) / 86400000);
+  const dayLabel =
+    days < 0
+      ? `${Math.abs(days)}d overdue`
+      : days === 0
+        ? "Due today"
+        : days === 1
+          ? "Tomorrow"
+          : `In ${days}d`;
+  const dayClass =
+    days < 0
+      ? "text-destructive"
+      : days <= 3
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-muted-foreground";
+  return (
+    <Link
+      href={due.href}
+      className="flex items-center gap-3 py-2.5 hover:bg-accent/30 -mx-2 px-2 rounded transition"
+    >
+      <DueIcon source={due.source} overdue={days < 0} />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{due.label}</div>
+        <div className="text-[11px] text-muted-foreground tabular-nums">
+          {due.kind.replace(/_/g, " ")} · {formatDate(dueDate)}
+        </div>
+      </div>
+      <div className="text-right shrink-0">
+        {due.amount != null && (
+          <div className="text-sm font-semibold tabular-nums">
+            {formatINR(due.amount)}
+          </div>
+        )}
+        <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
+      </div>
+    </Link>
+  );
+}
+
+function DueIcon({ source, overdue }: { source: Due["source"]; overdue: boolean }) {
+  if (overdue) {
+    return (
+      <div className="h-8 w-8 shrink-0 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center">
+        <AlertCircle className="h-4 w-4" />
+      </div>
+    );
+  }
+  const Icon =
+    source === "LOAN" ? Landmark : source === "LEASE" ? HardHat : Bell;
+  return (
+    <div className="h-8 w-8 shrink-0 rounded-lg bg-accent text-primary flex items-center justify-center">
+      <Icon className="h-4 w-4" />
     </div>
   );
 }

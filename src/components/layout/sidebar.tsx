@@ -14,8 +14,24 @@ export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
 
+  // Pick the single most-specific nav href that matches the current path.
+  // Without this, items whose href is a prefix of a deeper item (e.g.
+  // "/settings" vs "/settings/members") both highlight when the user is on
+  // the deeper page. Longest match wins; only that item lights up.
+  const activeHref = (() => {
+    let best: string | null = null;
+    for (const g of NAV_GROUPS) {
+      for (const i of g.items) {
+        if (pathname === i.href || pathname.startsWith(i.href + "/")) {
+          if (!best || i.href.length > best.length) best = i.href;
+        }
+      }
+    }
+    return best;
+  })();
+
   return (
-    <aside className="hidden md:flex sticky top-3 self-start h-[calc(100vh-1.5rem)] w-64 shrink-0 flex-col bg-sidebar border border-sidebar-border rounded-2xl shadow-[var(--shadow-soft)] overflow-hidden text-sidebar-foreground">
+    <aside className="hidden md:flex sticky top-3 self-start h-[calc(100vh-1.5rem)] w-64 shrink-0 flex-col bg-sidebar border border-sidebar-border rounded-2xl shadow-(--shadow-soft) overflow-hidden text-sidebar-foreground">
       <div className="px-5 pt-5 pb-3">
         <div className="flex items-center gap-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -41,8 +57,7 @@ export function Sidebar() {
               </div>
               <ul className="space-y-0.5">
                 {visibleItems.map((item) => {
-                  const active =
-                    pathname === item.href || pathname.startsWith(item.href + "/");
+                  const active = item.href === activeHref;
                   return (
                     <li key={item.href}>
                       <Link

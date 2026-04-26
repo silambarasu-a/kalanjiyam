@@ -10,6 +10,7 @@ import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { cardCreateSchema } from "@/lib/validators-domain";
 import { computeAvailableLimitForPool } from "@/lib/card-available-limit";
+import { computeAccountBalance } from "@/lib/account-balance";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -46,33 +47,44 @@ export async function GET() {
       },
     });
 
-    const availableLimits = await Promise.all(
-      cards.map((c) => {
-        if (c.kind !== "CREDIT") return Promise.resolve(null);
-        const isSharedChild = c.limitMode === "SHARED" && c.parentCard;
-        const limitSource = isSharedChild
-          ? c.parentCard?.account?.creditLimit
-          : c.account?.creditLimit;
-        const cl = limitSource == null ? null : Number(limitSource);
-        // Pool members: for a sub-card, parent + all siblings; for a parent
-        // with SHARED children, self + children; otherwise just self.
-        const poolCardIds: string[] = [];
-        const poolAccountIds: string[] = [];
-        if (isSharedChild && c.parentCard) {
-          poolCardIds.push(c.parentCard.id, c.id);
-          if (c.parentCard.accountId) poolAccountIds.push(c.parentCard.accountId);
-          if (c.accountId) poolAccountIds.push(c.accountId);
-        } else {
-          poolCardIds.push(c.id);
-          if (c.accountId) poolAccountIds.push(c.accountId);
-          for (const ch of c.childCards) {
-            poolCardIds.push(ch.id);
-            if (ch.accountId) poolAccountIds.push(ch.accountId);
+    const [availableLimits, debitBalances] = await Promise.all([
+      Promise.all(
+        cards.map((c) => {
+          if (c.kind !== "CREDIT") return Promise.resolve(null);
+          const isSharedChild = c.limitMode === "SHARED" && c.parentCard;
+          const limitSource = isSharedChild
+            ? c.parentCard?.account?.creditLimit
+            : c.account?.creditLimit;
+          const cl = limitSource == null ? null : Number(limitSource);
+          // Pool members: for a sub-card, parent + all siblings; for a parent
+          // with SHARED children, self + children; otherwise just self.
+          const poolCardIds: string[] = [];
+          const poolAccountIds: string[] = [];
+          if (isSharedChild && c.parentCard) {
+            poolCardIds.push(c.parentCard.id, c.id);
+            if (c.parentCard.accountId) poolAccountIds.push(c.parentCard.accountId);
+            if (c.accountId) poolAccountIds.push(c.accountId);
+          } else {
+            poolCardIds.push(c.id);
+            if (c.accountId) poolAccountIds.push(c.accountId);
+            for (const ch of c.childCards) {
+              poolCardIds.push(ch.id);
+              if (ch.accountId) poolAccountIds.push(ch.accountId);
+            }
           }
-        }
-        return computeAvailableLimitForPool({ poolCardIds, poolAccountIds, creditLimit: cl });
-      })
-    );
+          return computeAvailableLimitForPool({ poolCardIds, poolAccountIds, creditLimit: cl });
+        }),
+      ),
+      // For DEBIT cards: show the linked bank's spendable balance on the
+      // list page so users see how much they can swipe.
+      Promise.all(
+        cards.map((c) =>
+          c.kind === "DEBIT" && c.parentAccountId
+            ? computeAccountBalance(c.parentAccountId).then((b) => b.balance)
+            : Promise.resolve(null),
+        ),
+      ),
+    ]);
 
     return NextResponse.json({
       cards: cards.map((c, i) => {
@@ -98,6 +110,7 @@ export async function GET() {
           accountId: c.accountId,
           creditLimit: effectiveLimit == null ? null : Number(effectiveLimit),
           availableLimit: availableLimits[i],
+          linkedBalance: debitBalances[i],
           sharedWithUserIds: c.sharedWithUserIds,
         };
       }),
@@ -146,12 +159,15 @@ export async function POST(request: Request) {
     const result = await prisma.$transaction(async (tx) => {
       let companionAccountId: string | null = parsed.data.accountId ?? null;
       if (parsed.data.kind === "CREDIT" && !companionAccountId) {
+        // Each card (SOLO or SHARED sub-card) gets its own companion Account
+        // and tracks its own balance. For SHARED, the pool math sums parent
+        // + children, so seeding an existing outstanding here is correct.
         const companion = await tx.account.create({
           data: {
             workspaceId: ctx.workspaceId,
             kind: "CARD",
             name: parsed.data.name,
-            openingBalance: 0,
+            openingBalance: parsed.data.openingBalance ?? 0,
             creditLimit: isSharedChild ? null : parsed.data.creditLimit ?? null,
             statementDate: parsed.data.statementDate ?? null,
             gracePeriod: parsed.data.gracePeriod ?? null,

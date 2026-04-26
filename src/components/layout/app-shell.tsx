@@ -12,7 +12,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <SessionExpiryBanner />
       <div className="flex min-h-screen md:gap-3 md:p-3">
         <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0 md:rounded-2xl md:bg-card md:shadow-[var(--shadow-soft)] md:border md:border-border md:overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 md:rounded-2xl md:bg-card md:shadow-(--shadow-soft) md:border md:border-border md:overflow-hidden">
           <Header />
           <MobileHeader />
           <main className="flex-1 overflow-x-hidden">

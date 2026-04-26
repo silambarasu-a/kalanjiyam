@@ -81,7 +81,7 @@ export function Header() {
         <button
           type="button"
           onClick={() => openDialog("EXPENSE")}
-          className="rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 hover:bg-[var(--brand-primary-soft)] transition-colors"
+          className="rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 hover:bg-brand-primary-soft transition-colors"
         >
           <Plus className="h-4 w-4" /> New
         </button>
