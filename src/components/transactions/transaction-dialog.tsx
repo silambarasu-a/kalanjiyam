@@ -19,6 +19,8 @@ import { HoldingPicker } from "@/components/investments/holding-picker";
 import { SymbolSearch } from "@/components/investments/symbol-search";
 import { InsurancePremiumBreakdown } from "@/components/investments/insurance-premium-breakdown";
 import { BankPicker } from "@/components/ui/bank-picker";
+import { InsurerPicker } from "@/components/ui/insurer-picker";
+import type { InsurerCategory } from "@/lib/insurers";
 import {
   Dialog,
   DialogContent,
@@ -72,6 +74,31 @@ type LivestockBatch = {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
 
+/**
+ * Map a policy type to the insurer categories that actually sell that
+ * line of business. Returns undefined for OTHER (no filter) so the
+ * picker shows the full list.
+ */
+function insurerCategoriesForPolicyType(
+  policyType: string,
+): InsurerCategory[] | undefined {
+  switch (policyType) {
+    case "LIFE":
+    case "TERM":
+    case "ENDOWMENT":
+    case "ULIP":
+      return ["Life"];
+    case "HEALTH":
+      return ["Health"];
+    case "VEHICLE":
+    case "HOME":
+    case "TRAVEL":
+      return ["General", "Standalone digital"];
+    default:
+      return undefined;
+  }
+}
+
 const TABS: { value: TransactionDefault; label: string; icon: React.ElementType; disabled?: boolean }[] = [
   { value: "INCOME", label: "Income", icon: ArrowDownLeft },
   { value: "EXPENSE", label: "Expense", icon: ArrowUpRight },
@@ -81,7 +108,7 @@ const TABS: { value: TransactionDefault; label: string; icon: React.ElementType;
 ];
 
 export function TransactionDialog() {
-  const { open, defaultType, closeDialog } = useTransactionDialog();
+  const { open, defaultType, defaultCreatingNew, closeDialog } = useTransactionDialog();
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -95,7 +122,12 @@ export function TransactionDialog() {
   }, []);
 
   const body = (
-    <DialogBody key={open ? "open" : "closed"} defaultType={defaultType} onClose={closeDialog} />
+    <DialogBody
+      key={open ? "open" : "closed"}
+      defaultType={defaultType}
+      defaultCreatingNew={defaultCreatingNew}
+      onClose={closeDialog}
+    />
   );
 
   if (isMobile) {
@@ -125,9 +157,11 @@ export function TransactionDialog() {
 
 function DialogBody({
   defaultType,
+  defaultCreatingNew,
   onClose,
 }: {
   defaultType: TransactionDefault;
+  defaultCreatingNew: boolean;
   onClose: () => void;
 }) {
   const [type, setType] = useState<TransactionDefault>(defaultType);
@@ -200,6 +234,7 @@ function DialogBody({
         <InvestmentForm
           accounts={accounts}
           categories={investmentCategories}
+          defaultCreatingNew={defaultCreatingNew}
           onClose={onClose}
         />
       ) : (
@@ -1274,10 +1309,14 @@ type InvestmentHolding = {
 function InvestmentForm({
   accounts,
   categories,
+  defaultCreatingNew = false,
   onClose,
 }: {
   accounts: Account[];
   categories: Category[];
+  /** When true, the form opens in "create new holding" mode instead of the
+   * default "add a BUY/SELL transaction to an existing holding" picker. */
+  defaultCreatingNew?: boolean;
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1303,7 +1342,7 @@ function InvestmentForm({
   // Create-new-holding mode (BUY only). When on, the picker is replaced by
   // kind/name/symbol fields and submit posts to /api/investments which
   // creates the holding + initial BUY transaction in one shot.
-  const [creatingNew, setCreatingNew] = useState(false);
+  const [creatingNew, setCreatingNew] = useState(defaultCreatingNew);
   const [newKind, setNewKind] = useState<
     "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
   >("STOCK");
@@ -1319,6 +1358,11 @@ function InvestmentForm({
   const [newPremium, setNewPremium] = useState("");
   const [newPolicyType, setNewPolicyType] = useState("LIFE");
   const [newNominee, setNewNominee] = useState("");
+  const [newSumAssured, setNewSumAssured] = useState("");
+  // Recurring-due fields used by SIP + INSURANCE. Without both, the API
+  // silently skips the InvestmentReminder generation.
+  const [newPremiumFrequency, setNewPremiumFrequency] = useState("MONTHLY");
+  const [newNextDueDate, setNewNextDueDate] = useState("");
   // GOLD-specific
   const [newGoldType, setNewGoldType] = useState<
     "ORNAMENTS" | "BAR" | "COIN" | "SGB" | "DIGITAL" | "ETF"
@@ -1506,7 +1550,8 @@ function InvestmentForm({
                 ? Number(newInterestRate)
                 : undefined,
             maturityAt:
-              (newKind === "FD" || newKind === "RD") && newMaturityAt
+              (newKind === "FD" || newKind === "RD" || newKind === "INSURANCE") &&
+              newMaturityAt
                 ? newMaturityAt
                 : undefined,
             policyNumber:
@@ -1520,6 +1565,22 @@ function InvestmentForm({
                 : undefined,
             premiumAmount:
               newKind === "INSURANCE" && newPremium ? Number(newPremium) : undefined,
+            sumAssured:
+              newKind === "INSURANCE" && newSumAssured
+                ? Number(newSumAssured)
+                : undefined,
+            // SIP + INSURANCE share the recurring-due fields. Both are
+            // required for the API to seed upcoming InvestmentReminder
+            // rows; if either is blank the policy/SIP is created without
+            // a schedule and the user can fill it in later.
+            premiumFrequency:
+              (newKind === "SIP" || newKind === "INSURANCE") && newNextDueDate
+                ? newPremiumFrequency
+                : undefined,
+            nextDueDate:
+              (newKind === "SIP" || newKind === "INSURANCE") && newNextDueDate
+                ? newNextDueDate
+                : undefined,
             metadata:
               newKind === "GOLD"
                 ? (() => {
@@ -1745,6 +1806,41 @@ function InvestmentForm({
                 />
               </div>
             </label>
+          ) : newKind === "INSURANCE" ? (
+            // Pair Policy type + Insurer so the picker can suggest only
+            // insurers that actually sell the chosen line of business.
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs font-medium">Policy type</span>
+                <div className="mt-1">
+                  <NativeSelect
+                    value={newPolicyType}
+                    onChange={setNewPolicyType}
+                    options={[
+                      { value: "LIFE", label: "Life" },
+                      { value: "TERM", label: "Term" },
+                      { value: "HEALTH", label: "Health" },
+                      { value: "ENDOWMENT", label: "Endowment" },
+                      { value: "ULIP", label: "ULIP" },
+                      { value: "VEHICLE", label: "Vehicle" },
+                      { value: "HOME", label: "Home" },
+                      { value: "TRAVEL", label: "Travel" },
+                      { value: "OTHER", label: "Other" },
+                    ]}
+                  />
+                </div>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium">Insurer</span>
+                <InsurerPicker
+                  value={newName}
+                  onChange={setNewName}
+                  placeholder="Search insurers…"
+                  filterCategories={insurerCategoriesForPolicyType(newPolicyType)}
+                  autoFocus
+                />
+              </label>
+            </div>
           ) : (
             <label className="block">
               <span className="text-xs font-medium">Name</span>
@@ -1760,11 +1856,9 @@ function InvestmentForm({
                         ? "e.g. HDFC Top 100"
                         : newKind === "SIP"
                           ? "e.g. Axis Bluechip SIP"
-                          : newKind === "INSURANCE"
-                            ? "e.g. LIC Jeevan Anand"
-                            : newKind === "GOLD"
-                              ? "e.g. 24K Gold coin / Sovereign Gold Bond"
-                              : "Holding name"
+                          : newKind === "GOLD"
+                            ? "e.g. 24K Gold coin / Sovereign Gold Bond"
+                            : "Holding name"
                 }
                 autoFocus
               />
@@ -1810,24 +1904,12 @@ function InvestmentForm({
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-xs font-medium">Policy type</span>
-                  <div className="mt-1">
-                    <NativeSelect
-                      value={newPolicyType}
-                      onChange={setNewPolicyType}
-                      options={[
-                        { value: "LIFE", label: "Life" },
-                        { value: "TERM", label: "Term" },
-                        { value: "HEALTH", label: "Health" },
-                        { value: "ENDOWMENT", label: "Endowment" },
-                        { value: "ULIP", label: "ULIP" },
-                        { value: "VEHICLE", label: "Vehicle" },
-                        { value: "HOME", label: "Home" },
-                        { value: "TRAVEL", label: "Travel" },
-                        { value: "OTHER", label: "Other" },
-                      ]}
-                    />
-                  </div>
+                  <span className="text-xs font-medium">Policy number</span>
+                  <Input
+                    value={newPolicyNumber}
+                    onChange={(e) => setNewPolicyNumber(e.target.value)}
+                    placeholder="Optional"
+                  />
                 </label>
                 <label className="block">
                   <span className="text-xs font-medium">Nominee</span>
@@ -1840,14 +1922,6 @@ function InvestmentForm({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-xs font-medium">Policy number</span>
-                  <Input
-                    value={newPolicyNumber}
-                    onChange={(e) => setNewPolicyNumber(e.target.value)}
-                    placeholder="Optional"
-                  />
-                </label>
-                <label className="block">
                   <span className="text-xs font-medium">Premium (₹)</span>
                   <Input
                     type="number"
@@ -1858,8 +1932,83 @@ function InvestmentForm({
                     placeholder="0"
                   />
                 </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Sum assured (₹)</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newSumAssured}
+                    onChange={(e) => setNewSumAssured(e.target.value)}
+                    placeholder="Coverage amount"
+                  />
+                </label>
               </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Premium cadence</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={newPremiumFrequency}
+                      onChange={setNewPremiumFrequency}
+                      options={[
+                        { value: "MONTHLY", label: "Monthly" },
+                        { value: "QUARTERLY", label: "Quarterly" },
+                        { value: "HALF_YEARLY", label: "Half-yearly" },
+                        { value: "YEARLY", label: "Yearly" },
+                        { value: "ONE_TIME", label: "One-time" },
+                      ]}
+                    />
+                  </div>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Next due</span>
+                  <DateInput
+                    value={newNextDueDate}
+                    onChange={(e) => setNewNextDueDate(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-xs font-medium">Maturity / expiry</span>
+                <DateInput
+                  value={newMaturityAt}
+                  onChange={(e) => setNewMaturityAt(e.target.value)}
+                />
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                Setting both <strong>cadence</strong> and <strong>next due</strong>
+                {" "}seeds 12 upcoming reminders so the policy shows up under
+                /reminders.
+              </p>
             </>
+          )}
+
+          {newKind === "SIP" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs font-medium">SIP cadence</span>
+                <div className="mt-1">
+                  <NativeSelect
+                    value={newPremiumFrequency}
+                    onChange={setNewPremiumFrequency}
+                    options={[
+                      { value: "MONTHLY", label: "Monthly" },
+                      { value: "QUARTERLY", label: "Quarterly" },
+                      { value: "HALF_YEARLY", label: "Half-yearly" },
+                      { value: "YEARLY", label: "Yearly" },
+                    ]}
+                  />
+                </div>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium">Next instalment</span>
+                <DateInput
+                  value={newNextDueDate}
+                  onChange={(e) => setNewNextDueDate(e.target.value)}
+                />
+              </label>
+            </div>
           )}
 
           {newKind === "GOLD" && (

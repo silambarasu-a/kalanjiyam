@@ -329,14 +329,46 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       </p>
 
       {source === "CARD_EMI" && (
-        <label className="block">
-          <span className="text-xs font-medium">GST on interest (%)</span>
-          <AmountInput
-            value={gstOnInterest}
-            onChange={setGstOnInterest}
-            placeholder="18"
-          />
-        </label>
+        <div className="space-y-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">GST on interest (%)</span>
+              <div className="relative">
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={gstOnInterest}
+                  onChange={(e) =>
+                    setGstOnInterest(e.target.value.replace(/[^\d.]/g, ""))
+                  }
+                  placeholder="18"
+                  className="pr-7 tabular-nums"
+                />
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none"
+                >
+                  %
+                </span>
+              </div>
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">Credit card</span>
+              <div className="mt-1">
+                <NativeSelect
+                  value={cardId}
+                  onChange={setCardId}
+                  options={creditCards.map((c) => ({ value: c.id, label: c.name }))}
+                  disabled={!!lockedCardId}
+                />
+              </div>
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The principal will be subtracted from this card&apos;s available limit
+            until the EMI is paid off.
+          </p>
+        </div>
       )}
 
       {preview && (
@@ -599,24 +631,6 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             </label>
           )}
         </div>
-      )}
-
-      {source === "CARD_EMI" && (
-        <label className="block">
-          <span className="text-xs font-medium">Credit card</span>
-          <div className="mt-1">
-            <NativeSelect
-              value={cardId}
-              onChange={setCardId}
-              options={creditCards.map((c) => ({ value: c.id, label: c.name }))}
-              disabled={!!lockedCardId}
-            />
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The principal will be subtracted from this card&apos;s available limit until the EMI
-            is paid off.
-          </p>
-        </label>
       )}
 
       <label className="block">
