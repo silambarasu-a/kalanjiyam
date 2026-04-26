@@ -201,6 +201,11 @@ export async function POST(request: Request) {
     const goldItems =
       data.kind === "GOLD" && data.goldItems?.length ? data.goldItems : [];
 
+    // An existing loan entered with zero outstanding is already paid off —
+    // mirror the pay handler's auto-close so it doesn't show up under active.
+    const initialOutstanding = data.outstanding ?? data.principal;
+    const isAlreadyPaid = initialOutstanding <= 0;
+
     const result = await prisma.$transaction(async (tx) => {
       const loan = await tx.loan.create({
         data: {
@@ -211,7 +216,7 @@ export async function POST(request: Request) {
           lender: data.lender,
           borrower: data.borrower,
           principal: data.principal,
-          outstanding: data.outstanding ?? data.principal,
+          outstanding: initialOutstanding,
           interestRate: data.interestRate ?? null,
           gstOnInterest: data.gstOnInterest ?? null,
           emiAmount: computedEmi,
@@ -224,7 +229,9 @@ export async function POST(request: Request) {
           isExisting: data.isExisting ?? false,
           startedAt: new Date(data.startedAt),
           maturityAt: computedMaturity,
-          nextDueDate: computedNextDueDate,
+          nextDueDate: isAlreadyPaid ? null : computedNextDueDate,
+          active: !isAlreadyPaid,
+          foreclosedAt: isAlreadyPaid ? new Date() : null,
           notes: data.notes,
           goldItems: goldItems.length
             ? {

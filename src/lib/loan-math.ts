@@ -63,7 +63,8 @@ export function periodicRate(annualRate: number, frequency: LoanFrequency): numb
 /**
  * Standard reducing-balance EMI for the given cycle count + frequency.
  * Returns 0 when inputs are invalid so the caller can hide the preview
- * without exception handling.
+ * without exception handling. Rounded to a whole rupee — banks quote
+ * EMIs as integers; the last cycle absorbs the rounding residual.
  */
 export function calculateEMI(
   principal: number,
@@ -74,10 +75,10 @@ export function calculateEMI(
   if (!Number.isFinite(principal) || principal <= 0) return 0;
   if (!Number.isFinite(tenureCycles) || tenureCycles <= 0) return 0;
   if (!Number.isFinite(annualRate) || annualRate < 0) return 0;
-  if (annualRate === 0) return round2(principal / tenureCycles);
+  if (annualRate === 0) return Math.round(principal / tenureCycles);
   const r = periodicRate(annualRate, frequency);
   const pow = Math.pow(1 + r, tenureCycles);
-  return round2((principal * r * pow) / (pow - 1));
+  return Math.round((principal * r * pow) / (pow - 1));
 }
 
 /**
@@ -210,4 +211,32 @@ export function advanceByCycle(date: Date, frequency: LoanFrequency, cycles = 1)
   const m = monthsPerCycle(frequency) * cycles;
   next.setMonth(next.getMonth() + m);
   return next;
+}
+
+/**
+ * Closed-form inverse of `splitPayment`: given the loan's outstanding
+ * AFTER a payment was applied and the gross payment amount, return the
+ * principal portion that should be added back to outstanding when that
+ * payment is reversed (e.g. the linked transaction is being deleted).
+ *
+ *   outstandingBefore × (1 + r) − amount = newOutstanding
+ *   ⇒  outstandingBefore = (newOutstanding + amount) / (1 + r)
+ *   ⇒  principalDrop = outstandingBefore − newOutstanding
+ *
+ * For zero-interest loans the principal drop equals the gross amount.
+ * The result is approximate when the original payment used a manual
+ * principal/interest override or when subsequent payments have applied
+ * since — the error is bounded and never under-restores outstanding.
+ */
+export function reverseLoanPaymentPrincipal(
+  newOutstanding: number,
+  amount: number,
+  annualRate: number,
+  frequency: LoanFrequency = "MONTHLY"
+): number {
+  if (amount <= 0) return 0;
+  if (!annualRate || annualRate <= 0) return amount;
+  const r = periodicRate(annualRate, frequency);
+  const before = (newOutstanding + amount) / (1 + r);
+  return Math.max(0, before - newOutstanding);
 }
