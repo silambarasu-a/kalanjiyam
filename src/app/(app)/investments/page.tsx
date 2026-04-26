@@ -11,6 +11,11 @@ import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
+  PercentOrRupeeInput,
+  resolveAmount,
+} from "@/components/ui/percent-or-rupee-input";
+import { GoldBreakdown } from "@/components/investments/gold-breakdown";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -23,7 +28,7 @@ import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 
 type Investment = {
   id: string;
-  kind: "STOCK" | "FD" | "MUTUAL_FUND" | "SIP" | "INSURANCE" | "OTHER";
+  kind: "STOCK" | "FD" | "RD" | "MUTUAL_FUND" | "SIP" | "INSURANCE" | "GOLD" | "OTHER";
   name: string;
   institution: string | null;
   amount: number;
@@ -55,7 +60,9 @@ const KIND_OPTIONS: { value: Investment["kind"]; label: string }[] = [
   { value: "MUTUAL_FUND", label: "Mutual fund" },
   { value: "SIP", label: "SIP" },
   { value: "FD", label: "Fixed deposit" },
+  { value: "RD", label: "Recurring deposit" },
   { value: "INSURANCE", label: "Insurance" },
+  { value: "GOLD", label: "Gold" },
   { value: "OTHER", label: "Other" },
 ];
 
@@ -230,6 +237,21 @@ function CreateInvestmentDialog({
   const [premiumFrequency, setPremiumFrequency] = useState("MONTHLY");
   const [nextDueDate, setNextDueDate] = useState("");
   const [sumAssured, setSumAssured] = useState("");
+  // INSURANCE extras
+  const [policyType, setPolicyType] = useState("LIFE");
+  const [nominee, setNominee] = useState("");
+  // GOLD extras (stored in metadata + reused typed fields: quantity = grams, purchasePrice = rate/g)
+  const [goldType, setGoldType] = useState<"ORNAMENTS" | "BAR" | "COIN" | "SGB" | "DIGITAL" | "ETF">(
+    "ORNAMENTS",
+  );
+  const [goldPurity, setGoldPurity] = useState("22K");
+  const [goldWastage, setGoldWastage] = useState("");
+  const [goldWastageMode, setGoldWastageMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  const [goldMaking, setGoldMaking] = useState("");
+  const [goldMakingMode, setGoldMakingMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  const [goldGst, setGoldGst] = useState("");
+  // GST defaults to %: India levies 3% on gold (1.5% CGST + 1.5% SGST).
+  const [goldGstMode, setGoldGstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
   const [accountId, setAccountId] = useState("");
   const [isExisting, setIsExisting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -253,6 +275,16 @@ function CreateInvestmentDialog({
     setPremiumFrequency("MONTHLY");
     setNextDueDate("");
     setSumAssured("");
+    setPolicyType("LIFE");
+    setNominee("");
+    setGoldType("ORNAMENTS");
+    setGoldPurity("22K");
+    setGoldWastage("");
+    setGoldWastageMode("PERCENT");
+    setGoldMaking("");
+    setGoldMakingMode("PERCENT");
+    setGoldGst("");
+    setGoldGstMode("PERCENT");
     setAccountId("");
     setIsExisting(false);
     setError(null);
@@ -282,17 +314,44 @@ function CreateInvestmentDialog({
         payload.quantity = quantity ? Number(quantity) : null;
         payload.purchasePrice = purchasePrice ? Number(purchasePrice) : null;
       }
-      if (kind === "SIP") {
+      if (kind === "SIP" || kind === "RD") {
         payload.premiumAmount = premiumAmount ? Number(premiumAmount) : amt;
         payload.premiumFrequency = premiumFrequency;
         payload.nextDueDate = nextDueDate || null;
       }
       if (kind === "INSURANCE") {
         payload.policyNumber = policyNumber.trim() || undefined;
+        payload.policyType = policyType;
+        payload.nominee = nominee.trim() || undefined;
         payload.premiumAmount = premiumAmount ? Number(premiumAmount) : null;
         payload.premiumFrequency = premiumFrequency;
         payload.nextDueDate = nextDueDate || null;
         payload.sumAssured = sumAssured ? Number(sumAssured) : null;
+      }
+      if (kind === "GOLD") {
+        // Reuse typed columns: quantity = weight (g), purchasePrice = rate/g.
+        const w = parseFloat(quantity) || 0;
+        const r = parseFloat(purchasePrice) || 0;
+        const goldValue = w * r;
+        const wastageAmt = resolveAmount(goldWastage, goldWastageMode, goldValue);
+        const makingAmt = resolveAmount(goldMaking, goldMakingMode, goldValue);
+        // GST applies on (gold value + making + wastage) per Indian rules.
+        const gstAmt = resolveAmount(goldGst, goldGstMode, goldValue + wastageAmt + makingAmt);
+        payload.quantity = quantity ? w : null;
+        payload.purchasePrice = purchasePrice ? r : null;
+        payload.metadata = {
+          goldType,
+          purity: goldPurity,
+          wastage: wastageAmt || null,
+          wastageInput: goldWastage || null,
+          wastageMode: goldWastageMode,
+          making: makingAmt || null,
+          makingInput: goldMaking || null,
+          makingMode: goldMakingMode,
+          gst: gstAmt || null,
+          gstInput: goldGst || null,
+          gstMode: goldGstMode,
+        };
       }
       const res = await fetch("/api/investments", {
         method: "POST",
@@ -316,7 +375,7 @@ function CreateInvestmentDialog({
   }
 
   const showQty = kind === "STOCK" || kind === "MUTUAL_FUND" || kind === "SIP";
-  const showPremium = kind === "SIP" || kind === "INSURANCE";
+  const showPremium = kind === "SIP" || kind === "INSURANCE" || kind === "RD";
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -372,7 +431,7 @@ function CreateInvestmentDialog({
               />
             </label>
           </div>
-          {(kind === "FD" || kind === "SIP" || kind === "OTHER") && (
+          {(kind === "FD" || kind === "RD" || kind === "SIP" || kind === "OTHER") && (
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs font-medium">Interest rate (% p.a.)</span>
@@ -406,8 +465,163 @@ function CreateInvestmentDialog({
               </label>
             </div>
           )}
+          {kind === "GOLD" && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Type</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={goldType}
+                      onChange={(v) => setGoldType(v as typeof goldType)}
+                      options={[
+                        { value: "ORNAMENTS", label: "Ornaments / Jewellery" },
+                        { value: "BAR", label: "Bar / Bullion" },
+                        { value: "COIN", label: "Coin" },
+                        { value: "SGB", label: "Sovereign Gold Bond" },
+                        { value: "DIGITAL", label: "Digital gold" },
+                        { value: "ETF", label: "Gold ETF" },
+                      ]}
+                    />
+                  </div>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Purity</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={goldPurity}
+                      onChange={setGoldPurity}
+                      options={[
+                        { value: "24K", label: "24K (999.9)" },
+                        { value: "22K", label: "22K (916)" },
+                        { value: "18K", label: "18K (750)" },
+                        { value: "14K", label: "14K (585)" },
+                        { value: "OTHER", label: "Other" },
+                      ]}
+                    />
+                  </div>
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Weight (g)</span>
+                  <AmountInput value={quantity} onChange={setQuantity} placeholder="0" />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Rate per gram (₹)</span>
+                  <AmountInput
+                    value={purchasePrice}
+                    onChange={setPurchasePrice}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+              {(() => {
+                const w = parseFloat(quantity);
+                const r = parseFloat(purchasePrice);
+                const goldValue = w > 0 && r > 0 ? w * r : 0;
+                const ws = resolveAmount(goldWastage, goldWastageMode, goldValue);
+                const mk = resolveAmount(goldMaking, goldMakingMode, goldValue);
+                const gstBase = goldValue + ws + mk;
+                const gst = resolveAmount(goldGst, goldGstMode, gstBase);
+                return (
+                  <>
+                    {goldType === "ORNAMENTS" ? (
+                      <div className="grid grid-cols-3 gap-3">
+                        <label className="block">
+                          <span className="text-xs font-medium">Wastage</span>
+                          <PercentOrRupeeInput
+                            value={goldWastage}
+                            onValueChange={setGoldWastage}
+                            mode={goldWastageMode}
+                            onModeChange={setGoldWastageMode}
+                            baseAmount={goldValue}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium">Making</span>
+                          <PercentOrRupeeInput
+                            value={goldMaking}
+                            onValueChange={setGoldMaking}
+                            mode={goldMakingMode}
+                            onModeChange={setGoldMakingMode}
+                            baseAmount={goldValue}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium">GST</span>
+                          <PercentOrRupeeInput
+                            value={goldGst}
+                            onValueChange={setGoldGst}
+                            mode={goldGstMode}
+                            onModeChange={setGoldGstMode}
+                            baseAmount={gstBase}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="block">
+                        <span className="text-xs font-medium">GST</span>
+                        <PercentOrRupeeInput
+                          value={goldGst}
+                          onValueChange={setGoldGst}
+                          mode={goldGstMode}
+                          onModeChange={setGoldGstMode}
+                          baseAmount={gstBase}
+                        />
+                      </label>
+                    )}
+                    {goldValue > 0 && (
+                      <GoldBreakdown
+                        weight={w}
+                        ratePerGram={r}
+                        goldValue={goldValue}
+                        wastage={ws}
+                        making={mk}
+                        gst={gst}
+                        showWastage={goldType === "ORNAMENTS"}
+                        showMaking={goldType === "ORNAMENTS"}
+                        onUseTotal={(total) => setAmount(String(Math.round(total)))}
+                      />
+                    )}
+                  </>
+                );
+              })()}
+            </>
+          )}
           {kind === "INSURANCE" && (
             <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Policy type</span>
+                  <div className="mt-1">
+                    <NativeSelect
+                      value={policyType}
+                      onChange={setPolicyType}
+                      options={[
+                        { value: "LIFE", label: "Life" },
+                        { value: "TERM", label: "Term" },
+                        { value: "HEALTH", label: "Health" },
+                        { value: "ENDOWMENT", label: "Endowment" },
+                        { value: "ULIP", label: "ULIP" },
+                        { value: "VEHICLE", label: "Vehicle" },
+                        { value: "HOME", label: "Home" },
+                        { value: "TRAVEL", label: "Travel" },
+                        { value: "OTHER", label: "Other" },
+                      ]}
+                    />
+                  </div>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Nominee</span>
+                  <Input
+                    value={nominee}
+                    onChange={(e) => setNominee(e.target.value)}
+                    maxLength={120}
+                    placeholder="Optional"
+                  />
+                </label>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">Policy number</span>

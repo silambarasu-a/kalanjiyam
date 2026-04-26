@@ -84,6 +84,7 @@ export const transactionCreateSchema = z
     investmentAction: z.enum(["BUY", "SELL"]).optional().nullable(),
     investmentQty: z.number().positive().optional().nullable(),
     investmentPrice: z.number().positive().optional().nullable(),
+    exchangeRate: z.number().positive().optional().nullable(),
     beneficiaryMemberId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
   })
@@ -424,7 +425,16 @@ export const leasePaymentConfirmSchema = z.object({
   notes: z.string().trim().max(200).optional(),
 });
 
-const investmentKindEnum = z.enum(["STOCK", "FD", "MUTUAL_FUND", "SIP", "INSURANCE", "OTHER"]);
+const investmentKindEnum = z.enum([
+  "STOCK",
+  "FD",
+  "RD",
+  "MUTUAL_FUND",
+  "SIP",
+  "INSURANCE",
+  "GOLD",
+  "OTHER",
+]);
 const premiumFreqEnum = z.enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"]);
 
 export const investmentCreateSchema = z.object({
@@ -462,6 +472,8 @@ export const investmentCreateSchema = z.object({
   sumAssured: z.number().positive().optional().nullable(),
   nextDueDate: z.string().optional().nullable(),
   nominee: z.string().trim().max(120).optional(),
+  /** Kind-specific structured extras (e.g. for GOLD: type, purity, wastage, making, gst). */
+  metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   isExisting: z.boolean().optional().default(false),
 });
