@@ -353,7 +353,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Total lease amount (₹)</span>
               <AmountInput value={amount} onChange={setAmount}
@@ -388,7 +388,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
             </label>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Start date</span>
               <DateInput value={startDate} onChange={(e) => setStartDate(e.target.value)} />

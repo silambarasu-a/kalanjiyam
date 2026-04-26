@@ -46,7 +46,7 @@ export function PeriodFilter({ periods, activeId, customFrom, customTo }: Props)
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-      <div className="min-w-[18rem]">
+      <div className="w-full sm:min-w-56 sm:w-auto">
         <NativeSelect
           value={activeId}
           onChange={(next) => {

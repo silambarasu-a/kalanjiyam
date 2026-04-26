@@ -214,7 +214,7 @@ export function CardForm({
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3 items-end">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
         <label className="block">
           <span className="text-xs font-medium">Network</span>
           <div className="mt-1">
@@ -235,7 +235,7 @@ export function CardForm({
         </label>
       </div>
       {kind === "DEBIT" ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
             <span className="text-xs font-medium">Last 4 digits</span>
             <Input
@@ -258,7 +258,7 @@ export function CardForm({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Last 4 digits</span>
               <Input
@@ -281,7 +281,7 @@ export function CardForm({
               />
             </label>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Statement day</span>
               <Input

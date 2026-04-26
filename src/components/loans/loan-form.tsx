@@ -207,7 +207,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           />
         </label>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
             <span className="text-xs font-medium">Lender</span>
             <BankPicker value={lender} onChange={setLender} autoFocus />
@@ -225,7 +225,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Principal (₹)</span>
           <AmountInput value={principal} onChange={setPrincipal} />
@@ -236,7 +236,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </label>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Interest rate (% p.a.)</span>
           <AmountInput value={interestRate} onChange={setInterestRate} placeholder="e.g. 14" />
