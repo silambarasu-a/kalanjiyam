@@ -68,6 +68,10 @@ export async function GET(
         premiumFrequency: inv.premiumFrequency,
         sumAssured: inv.sumAssured == null ? null : Number(inv.sumAssured),
         nextDueDate: inv.nextDueDate?.toISOString() ?? null,
+        nominee: inv.nominee,
+        insuranceStatus: inv.insuranceStatus,
+        fdStatus: inv.fdStatus,
+        compoundingFrequency: inv.compoundingFrequency,
       },
       transactions: transactions.map((t) => ({
         id: t.id,

@@ -32,9 +32,14 @@ export function LoanBalanceChart({ data }: { data: BalancePoint[] }) {
     );
   }
   return (
-    <div className="h-52 w-full min-w-0">
+    <div className="w-full min-w-0">
       {mounted && (
-        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150}>
+        // Aspect ratio (rather than percentage height) lets recharts
+        // size the chart deterministically from the measured width on
+        // the very first paint — avoids the noisy "width(-1)/height(-1)"
+        // warning the percentage path emits before its first ResizeObserver
+        // tick.
+        <ResponsiveContainer width="100%" aspect={3} minWidth={0}>
           <AreaChart data={data} margin={{ top: 12, right: 8, left: 8, bottom: 4 }}>
             <defs>
               <linearGradient id="loanBalanceFill" x1="0" y1="0" x2="0" y2="1">
