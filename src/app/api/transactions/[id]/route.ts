@@ -93,7 +93,6 @@ export async function PATCH(
             loan: true,
             investment: true,
             wagePayment: true,
-            handLoanEntry: true,
             livestockEvent: true,
             feedLog: true,
             vaccinationLog: true,
@@ -179,12 +178,6 @@ export async function PATCH(
             data: { amount: newAmount },
           });
         }
-        if (full.handLoanEntry) {
-          await tx.handLoanEntry.update({
-            where: { id: full.handLoanEntry.id },
-            data: { amount: newAmount },
-          });
-        }
         if (full.feedLog) {
           await tx.feedLog.update({
             where: { id: full.feedLog.id },
@@ -216,10 +209,10 @@ export async function PATCH(
             parsed.data.categoryId === undefined
               ? t.categoryId
               : parsed.data.categoryId,
-          beneficiaryMemberId:
-            parsed.data.beneficiaryMemberId === undefined
-              ? t.beneficiaryMemberId
-              : parsed.data.beneficiaryMemberId,
+          beneficiaryContactId:
+            parsed.data.beneficiaryContactId === undefined
+              ? t.beneficiaryContactId
+              : parsed.data.beneficiaryContactId,
           memberChargeType:
             parsed.data.memberChargeType !== undefined
               ? (parsed.data.memberChargeType as MemberChargeType)
@@ -281,7 +274,6 @@ export async function DELETE(
         investment: true,
         leaseSchedule: true,
         wagePayment: true,
-        handLoanEntry: true,
         livestockEvent: true,
         feedLog: true,
         vaccinationLog: true,
@@ -370,9 +362,6 @@ export async function DELETE(
       // represent any money movement; drop them.
       if (t.wagePayment) {
         await tx.wagePayment.delete({ where: { id: t.wagePayment.id } });
-      }
-      if (t.handLoanEntry) {
-        await tx.handLoanEntry.delete({ where: { id: t.handLoanEntry.id } });
       }
       if (t.livestockEvent) {
         await tx.livestockEvent.delete({ where: { id: t.livestockEvent.id } });

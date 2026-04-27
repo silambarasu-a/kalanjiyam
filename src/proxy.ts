@@ -11,8 +11,7 @@ const SESSION_COOKIE_NAMES = [
 const PROTECTED_PAGE_PREFIXES = [
   "/dashboard",
   "/workspaces",
-  "/members",
-  "/family",
+  "/contacts",
   "/categories",
   "/accounts",
   "/cards",

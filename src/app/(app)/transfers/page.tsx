@@ -2,22 +2,46 @@
 import { toast } from "sonner";
 
 import useSWR from "swr";
-import { ArrowRight, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Plus, Trash2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+
+type Account = { id: string; name: string; kind: string };
+type Member = { id: string; name: string };
 
 type Transfer = {
   id: string;
   amount: number;
   date: string;
   notes: string | null;
-  from: { id: string; name: string; kind: string };
-  to: { id: string; name: string; kind: string };
+  fromAccount: Account | null;
+  fromContact: Member | null;
+  toAccount: Account | null;
+  toContact: Member | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+function PartyLabel({
+  account,
+  member,
+}: {
+  account: Account | null;
+  member: Member | null;
+}) {
+  if (account) return <span className="truncate">{account.name}</span>;
+  if (member) {
+    return (
+      <span className="inline-flex items-center gap-1 truncate">
+        <User className="h-3 w-3 text-muted-foreground" />
+        {member.name}
+      </span>
+    );
+  }
+  return null;
+}
 
 export default function TransfersPage() {
   const { data, isLoading } = useSWR<{ transfers: Transfer[] }>("/api/transfers", fetcher);
@@ -29,7 +53,7 @@ export default function TransfersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Transfers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Money moved between your accounts. Each transfer creates two transaction legs.
+            Money moved between your accounts, or sent to / received from a person.
           </p>
         </div>
         <Button onClick={() => openDialog("TRANSFER")} className="gap-2">
@@ -44,9 +68,9 @@ export default function TransfersPage() {
           <div key={t.id} className="flex items-center gap-3 px-5 py-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 font-medium">
-                <span className="truncate">{t.from.name}</span>
+                <PartyLabel account={t.fromAccount} member={t.fromContact} />
                 <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                <span className="truncate">{t.to.name}</span>
+                <PartyLabel account={t.toAccount} member={t.toContact} />
               </div>
               <div className="text-xs text-muted-foreground">
                 {formatDate(t.date)}

@@ -15,18 +15,18 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireWorkspace("family", "write");
+    const ctx = await requireWorkspace("contacts", "write");
     const { id } = await context.params;
     const body = await request.json();
     const parsed = familyUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const existing = await prisma.familyMember.findUnique({ where: { id } });
+    const existing = await prisma.contact.findUnique({ where: { id } });
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const member = await prisma.familyMember.update({
+    const member = await prisma.contact.update({
       where: { id },
       data: {
         name: parsed.data.name ?? existing.name,
@@ -48,13 +48,13 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireWorkspace("family", "write");
+    const ctx = await requireWorkspace("contacts", "write");
     const { id } = await context.params;
-    const existing = await prisma.familyMember.findUnique({ where: { id } });
+    const existing = await prisma.contact.findUnique({ where: { id } });
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    await prisma.familyMember.delete({ where: { id } });
+    await prisma.contact.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return error(err);

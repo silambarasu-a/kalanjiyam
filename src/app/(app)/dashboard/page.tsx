@@ -148,7 +148,7 @@ export default function DashboardPage() {
           title="Member charges"
           value={data ? formatINR(data.chargesOutstanding) : "—"}
           icon={<Users className="h-4 w-4" />}
-          href="/members"
+          href="/contacts"
         />
       </div>
 

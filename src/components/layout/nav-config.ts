@@ -19,7 +19,7 @@ export type IconName =
   | "accounts"
   | "cards"
   | "categories"
-  | "family"
+  | "contacts"
   | "members"
   | "crops"
   | "livestock"
@@ -50,10 +50,9 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Family",
+    label: "Contacts",
     items: [
-      { label: "Family Members", href: "/family", feature: "family", icon: "family" },
-      { label: "Member Ledger", href: "/members", feature: "members", icon: "members" },
+      { label: "Contacts", href: "/contacts", feature: "contacts", icon: "contacts" },
     ],
   },
   {

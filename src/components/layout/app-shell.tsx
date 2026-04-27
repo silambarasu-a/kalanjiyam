@@ -16,7 +16,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Header />
           <MobileHeader />
           <main className="flex-1 overflow-x-hidden">
-            <div className="mx-auto w-full max-w-6xl p-4 md:p-6">{children}</div>
+            <div className="mx-auto w-full max-w-[1600px] p-4 md:p-6">{children}</div>
           </main>
         </div>
       </div>

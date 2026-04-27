@@ -13,7 +13,7 @@ export function mutateBalances() {
         key.startsWith("/api/transfers") ||
         key.startsWith("/api/accounts") ||
         key.startsWith("/api/cards") ||
-        key.startsWith("/api/family") ||
+        key.startsWith("/api/contacts") ||
         key.startsWith("/api/member-charges") ||
         key.startsWith("/api/dashboard")
       );

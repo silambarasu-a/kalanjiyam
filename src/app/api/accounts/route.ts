@@ -4,7 +4,7 @@ import {
   requireWorkspace,
   WorkspaceAccessError,
   assertWorkspaceMembers,
-  assertWorkspaceFamilyMember,
+  assertWorkspaceContact,
 } from "@/lib/workspace";
 import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
@@ -32,7 +32,7 @@ export async function GET() {
       orderBy: [{ active: "desc" }, { name: "asc" }],
       include: {
         ownerUser: { select: { id: true, name: true, email: true } },
-        ownerMember: { select: { id: true, name: true } },
+        ownerContact: { select: { id: true, name: true } },
       },
     });
 
@@ -56,7 +56,7 @@ export async function GET() {
         gracePeriod: a.gracePeriod,
         active: a.active,
         ownerUser: a.ownerUser,
-        ownerMember: a.ownerMember,
+        ownerContact: a.ownerContact,
         sharedWithUserIds: a.sharedWithUserIds,
         balance: balances[i].balance,
         availableLimit: availableLimits[i],
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       parsed.data.ownerUserId,
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
-    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
+    await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
     const account = await prisma.account.create({
       data: {
         workspaceId: ctx.workspaceId,
@@ -90,7 +90,7 @@ export async function POST(request: Request) {
         statementDate: parsed.data.statementDate ?? null,
         gracePeriod: parsed.data.gracePeriod ?? null,
         ownerUserId: parsed.data.ownerUserId ?? ctx.userId,
-        ownerMemberId: parsed.data.ownerMemberId ?? null,
+        ownerContactId: parsed.data.ownerContactId ?? null,
         sharedWithUserIds: parsed.data.sharedWithUserIds ?? [],
       },
     });

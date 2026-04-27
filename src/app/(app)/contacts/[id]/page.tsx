@@ -49,7 +49,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 export default function MemberLedgerDetail() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
-  const { data } = useSWR<Ledger>(id ? `/api/family/${id}/ledger` : null, fetcher);
+  const { data } = useSWR<Ledger>(id ? `/api/contacts/${id}/ledger` : null, fetcher);
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
@@ -59,8 +59,8 @@ export default function MemberLedgerDetail() {
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/members" className="text-xs text-muted-foreground">
-          ← Member ledger
+        <Link href="/contacts" className="text-xs text-muted-foreground">
+          ← Contacts
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.member.name}</h1>
       </div>

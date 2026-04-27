@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bell, LogOut, Plus } from "lucide-react";
 import { useSession, signOut } from "next-auth/react";
@@ -115,11 +116,14 @@ export function MobileHeader() {
   return (
     <header className="md:hidden border-b border-border bg-card px-4 py-2 flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-foreground shrink-0">
+        <Link
+          href="/dashboard"
+          className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-foreground shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="" className="h-5 w-5" />
           Kalanjiyam
-        </span>
+        </Link>
         <span className="text-sm font-medium text-muted-foreground truncate flex-1 text-center min-w-0">
           {title}
         </span>

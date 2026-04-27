@@ -119,8 +119,8 @@ export async function GET(request: Request) {
               direction: true,
               lessorName: true,
               lesseeName: true,
-              lessorMember: { select: { name: true } },
-              lesseeMember: { select: { name: true } },
+              lessorContact: { select: { name: true } },
+              lesseeContact: { select: { name: true } },
             },
           },
         },
@@ -216,8 +216,8 @@ export async function GET(request: Request) {
     for (const s of upcomingLeaseDues) {
       const counterparty =
         s.lease.direction === "LEASED_OUT"
-          ? (s.lease.lesseeMember?.name ?? s.lease.lesseeName)
-          : (s.lease.lessorMember?.name ?? s.lease.lessorName);
+          ? (s.lease.lesseeContact?.name ?? s.lease.lesseeName)
+          : (s.lease.lessorContact?.name ?? s.lease.lessorName);
       dues.push({
         id: `lease:${s.id}`,
         source: "LEASE",

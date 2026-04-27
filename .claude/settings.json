@@ -12,7 +12,15 @@
       "Bash(sed -n '54,67p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/ui/command.tsx)",
       "Bash(sed -n '70,80p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-lock-dialog.tsx)",
       "Bash(sed -n '70,82p' /Users/silambu/Developer/Personal/Projects/kalanjiyam/src/components/session-expiry-banner.tsx)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(grep -E \"\\\\.\\(tsx?|ts\\)$\")",
+      "Bash(git stash *)",
+      "Bash(awk '/^type HandLoanMember = /,/^function HandLoanForm/' src/components/transactions/transaction-dialog.tsx)",
+      "Bash(awk 'NR==998 || NR==1222 || NR==1182 || NR==1183 || NR==1184' src/components/transactions/transaction-dialog.tsx)",
+      "Bash(git mv *)",
+      "Bash(grep -rn \"/api/family\\\\|href=\\\\\"/family\\\\|href=\\\\\"/members/\\\\${\\\\|href=\\\\`/members/\\\\${\\\\|href={\\\\`/members/\" src/ --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(grep -rn \"FamilyMember\\\\|FamilyPage\\\\|FamilyDialog\\\\|FamilyData\\\\|familyData\\\\|family={\\\\|family,\\\\|family:\\\\| family\\\\b\" src/ --include=\"*.ts\" --include=\"*.tsx\")",
+      "Read(//Users/silambu/Developer/Personal/Projects/kalanjiyam/**)"
     ]
   }
 }

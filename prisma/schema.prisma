@@ -105,16 +105,6 @@ enum LoanFrequency {
   YEARLY
 }
 
-enum HandLoanDirection {
-  GIVEN
-  RECEIVED
-}
-
-enum HandLoanKind {
-  FORMAL
-  INFORMAL
-}
-
 enum InvestmentKind {
   STOCK
   FD
@@ -260,7 +250,7 @@ model User {
   memberships             WorkspaceMember[]
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
-  familyProfile           FamilyMember?
+  contactProfile          Contact?
 
   ownedAccounts           Account[]       @relation("AccountOwner")
   ownedCards              Card[]          @relation("CardOwner")
@@ -273,7 +263,6 @@ model User {
   wagePayments            WagePayment[]
   wageSettlements         WageSettlement[]
   transfers               Transfer[]      @relation("TransferAuthor")
-  handLoanEntries         HandLoanEntry[] @relation("HandLoanEntryCreatedBy")
   auditLogs               AuditLog[]
   sentWorkspaceInvites    WorkspaceInvite[] @relation("WorkspaceInviteInviter")
 
@@ -292,7 +281,7 @@ model Workspace {
   members              WorkspaceMember[]
   invites              WorkspaceInvite[]
   activeForUsers       User[]               @relation("UserActiveWorkspace")
-  familyMembers        FamilyMember[]
+  contacts             Contact[]
   categories           Category[]
   accounts             Account[]
   cards                Card[]
@@ -306,7 +295,6 @@ model Workspace {
   leases               Lease[]
   workers              Worker[]
   loans                Loan[]
-  handLoanMembers      HandLoanMember[]
   investments          Investment[]
   investmentReminders  InvestmentReminder[]
   stockWishlist        StockWishlist[]
@@ -379,7 +367,7 @@ model PasswordResetToken {
   @@index([expiresAt])
 }
 
-model FamilyMember {
+model Contact {
   id           String    @id @default(uuid())
   workspaceId  String
   workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -393,13 +381,14 @@ model FamilyMember {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  ownedAccounts       Account[]      @relation("AccountFamilyOwner")
-  ownedCards          Card[]         @relation("CardFamilyOwner")
-  beneficiaryTxns     Transaction[]  @relation("TransactionBeneficiary")
-  memberCharges       MemberCharge[]
-  lessorLeases        Lease[]        @relation("LeaseLessor")
-  lesseeLeases        Lease[]        @relation("LeaseLessee")
-  handLoanMemberLinks HandLoanMember[]
+  ownedAccounts     Account[]      @relation("AccountContactOwner")
+  ownedCards        Card[]         @relation("CardContactOwner")
+  beneficiaryTxns   Transaction[]  @relation("TransactionBeneficiary")
+  sentTransfers     Transfer[]     @relation("TransferFromContact")
+  receivedTransfers Transfer[]     @relation("TransferToContact")
+  memberCharges     MemberCharge[]
+  lessorLeases      Lease[]        @relation("LeaseLessor")
+  lesseeLeases      Lease[]        @relation("LeaseLessee")
 
   @@index([workspaceId, active])
 }
@@ -414,8 +403,8 @@ model Account {
   workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   ownerUserId    String?
   ownerUser      User?        @relation("AccountOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerMemberId  String?
-  ownerMember    FamilyMember? @relation("AccountFamilyOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  ownerContactId String?
+  ownerContact   Contact?     @relation("AccountContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
   sharedWithUserIds String[]  @default([])
   kind           AccountKind
   name           String
@@ -437,7 +426,7 @@ model Account {
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
-  @@index([workspaceId, ownerMemberId])
+  @@index([workspaceId, ownerContactId])
 }
 
 model Card {
@@ -446,8 +435,8 @@ model Card {
   workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   ownerUserId     String?
   ownerUser       User?         @relation("CardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerMemberId   String?
-  ownerMember     FamilyMember? @relation("CardFamilyOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  ownerContactId  String?
+  ownerContact    Contact?      @relation("CardContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
   sharedWithUserIds String[]    @default([])
   name            String
   kind            CardKind
@@ -503,10 +492,17 @@ model Transfer {
   workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   userId        String
   user          User           @relation("TransferAuthor", fields: [userId], references: [id], onDelete: Cascade)
-  fromAccountId String
-  fromAccount   Account        @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
-  toAccountId   String
-  toAccount     Account        @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  // Exactly one of fromAccountId / fromContactId is set, and exactly one of
+  // toAccountId / toContactId is set. At least one side must be an account
+  // (contact-to-contact transfers don't touch this workspace's books).
+  fromAccountId String?
+  fromAccount   Account?       @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  fromContactId String?
+  fromContact   Contact?       @relation("TransferFromContact", fields: [fromContactId], references: [id], onDelete: Restrict)
+  toAccountId   String?
+  toAccount     Account?       @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  toContactId   String?
+  toContact     Contact?       @relation("TransferToContact", fields: [toContactId], references: [id], onDelete: Restrict)
   amount        Decimal        @db.Decimal(14, 2)
   date          DateTime
   notes         String?
@@ -518,7 +514,9 @@ model Transfer {
 
   @@index([workspaceId, date])
   @@index([fromAccountId])
+  @@index([fromContactId])
   @@index([toAccountId])
+  @@index([toContactId])
 }
 
 //
@@ -593,8 +591,8 @@ model Transaction {
   editedAt          DateTime?
   editNote          String?
 
-  beneficiaryMemberId String?
-  beneficiaryMember   FamilyMember? @relation("TransactionBeneficiary", fields: [beneficiaryMemberId], references: [id], onDelete: SetNull)
+  beneficiaryContactId String?
+  beneficiaryContact   Contact?     @relation("TransactionBeneficiary", fields: [beneficiaryContactId], references: [id], onDelete: SetNull)
   memberChargeType    MemberChargeType @default(NONE)
   memberChargeId      String?          @unique
   memberCharge        MemberCharge?    @relation("ChargeOriginTxn", fields: [memberChargeId], references: [id], onDelete: SetNull)
@@ -603,7 +601,6 @@ model Transaction {
   updatedAt         DateTime          @updatedAt
 
   wagePayment           WagePayment?
-  handLoanEntry         HandLoanEntry?
   livestockEvent        LivestockEvent?
   feedLog               FeedLog?
   vaccinationLog        VaccinationLog?
@@ -621,15 +618,15 @@ model Transaction {
   @@index([loanId])
   @@index([investmentId])
   @@index([transferId])
-  @@index([beneficiaryMemberId])
+  @@index([beneficiaryContactId])
 }
 
 model MemberCharge {
   id                   String             @id @default(uuid())
   workspaceId          String
   workspace            Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  beneficiaryMemberId  String
-  beneficiaryMember    FamilyMember       @relation(fields: [beneficiaryMemberId], references: [id], onDelete: Cascade)
+  beneficiaryContactId String
+  beneficiaryContact   Contact            @relation(fields: [beneficiaryContactId], references: [id], onDelete: Cascade)
   amount               Decimal            @db.Decimal(14, 2)
   settledAmount        Decimal            @default(0) @db.Decimal(14, 2)
   status               MemberChargeStatus @default(OUTSTANDING)
@@ -640,7 +637,7 @@ model MemberCharge {
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
-  @@index([workspaceId, beneficiaryMemberId, status])
+  @@index([workspaceId, beneficiaryContactId, status])
 }
 
 model MemberChargeSettlement {
@@ -821,11 +818,11 @@ model Lease {
   workspaceId       String
   workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   direction         LeaseDirection
-  lessorMemberId    String?
-  lessorMember      FamilyMember?  @relation("LeaseLessor", fields: [lessorMemberId], references: [id], onDelete: SetNull)
+  lessorContactId   String?
+  lessorContact     Contact?       @relation("LeaseLessor", fields: [lessorContactId], references: [id], onDelete: SetNull)
   lessorName        String?
-  lesseeMemberId    String?
-  lesseeMember      FamilyMember?  @relation("LeaseLessee", fields: [lesseeMemberId], references: [id], onDelete: SetNull)
+  lesseeContactId   String?
+  lesseeContact     Contact?       @relation("LeaseLessee", fields: [lesseeContactId], references: [id], onDelete: SetNull)
   lesseeName        String?
   assetType         LeaseAssetType
   cropBatchId       String?
@@ -907,7 +904,6 @@ model Loan {
   updatedAt       DateTime      @updatedAt
 
   transactions    Transaction[]
-  handLoanEntry   HandLoanEntry?
   reminders       InvestmentReminder[] @relation("ReminderLoan")
   goldItems       GoldLoanItem[]
 
@@ -933,47 +929,6 @@ model GoldLoanItem {
   updatedAt   DateTime @updatedAt
 
   @@index([loanId])
-}
-
-model HandLoanMember {
-  id              String          @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  familyMemberId  String?
-  familyMember    FamilyMember?   @relation(fields: [familyMemberId], references: [id], onDelete: SetNull)
-  name            String
-  email           String?
-  phone           String?
-  notes           String?
-  active          Boolean         @default(true)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-
-  entries HandLoanEntry[]
-
-  @@index([workspaceId, active])
-  @@index([email])
-}
-
-model HandLoanEntry {
-  id              String            @id @default(uuid())
-  memberId        String
-  member          HandLoanMember    @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  kind            HandLoanKind      @default(INFORMAL)
-  direction       HandLoanDirection
-  amount          Decimal           @db.Decimal(14, 2)
-  date            DateTime
-  notes           String?
-  transactionId   String?           @unique
-  transaction     Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  loanId          String?           @unique
-  loan            Loan?             @relation(fields: [loanId], references: [id], onDelete: SetNull)
-  createdByUserId String
-  createdByUser   User              @relation("HandLoanEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  @@index([memberId, date])
 }
 
 //

@@ -33,7 +33,7 @@ export const accountCreateSchema = z.object({
   statementDate: z.number().int().min(1).max(31).optional().nullable(),
   gracePeriod: z.number().int().min(0).max(60).optional().nullable(),
   ownerUserId: z.string().uuid().optional().nullable(),
-  ownerMemberId: z.string().uuid().optional().nullable(),
+  ownerContactId: z.string().uuid().optional().nullable(),
   sharedWithUserIds: z.array(z.string().uuid()).optional(),
 });
 
@@ -56,7 +56,7 @@ export const cardCreateSchema = z.object({
   accountId: z.string().uuid().optional().nullable(),
   limitMode: cardLimitModeEnum.optional().default("SOLO"),
   ownerUserId: z.string().uuid().optional().nullable(),
-  ownerMemberId: z.string().uuid().optional().nullable(),
+  ownerContactId: z.string().uuid().optional().nullable(),
   sharedWithUserIds: z.array(z.string().uuid()).optional(),
   creditLimit: z.number().finite().optional().nullable(),
   statementDate: z.number().int().min(1).max(31).optional().nullable(),
@@ -87,16 +87,16 @@ export const transactionCreateSchema = z
     investmentQty: z.number().positive().optional().nullable(),
     investmentPrice: z.number().positive().optional().nullable(),
     exchangeRate: z.number().positive().optional().nullable(),
-    beneficiaryMemberId: z.string().uuid().optional().nullable(),
+    beneficiaryContactId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
   })
   .refine((d) => !!d.accountId || !!d.cardId, {
     message: "Pick an account or a card",
     path: ["accountId"],
   })
-  .refine((d) => !(d.memberChargeType === "RECOVERABLE" && !d.beneficiaryMemberId), {
+  .refine((d) => !(d.memberChargeType === "RECOVERABLE" && !d.beneficiaryContactId), {
     message: "Pick a beneficiary for recoverable charges",
-    path: ["beneficiaryMemberId"],
+    path: ["beneficiaryContactId"],
   })
   .refine((d) => d.type !== "INVESTMENT" || (!!d.investmentId && !!d.investmentAction), {
     message: "Investment transaction needs a holding and action",
@@ -108,23 +108,42 @@ export const transactionUpdateSchema = z.object({
   description: z.string().trim().min(1).max(200).optional(),
   date: z.string().optional(),
   categoryId: z.string().uuid().optional().nullable(),
-  beneficiaryMemberId: z.string().uuid().optional().nullable(),
+  beneficiaryContactId: z.string().uuid().optional().nullable(),
   memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional(),
   editNote: z.string().trim().max(200).optional(),
 });
 
 export const transferCreateSchema = z
   .object({
-    fromAccountId: z.string().uuid(),
-    toAccountId: z.string().uuid(),
+    fromAccountId: z.string().uuid().optional().nullable(),
+    fromContactId: z.string().uuid().optional().nullable(),
+    toAccountId: z.string().uuid().optional().nullable(),
+    toContactId: z.string().uuid().optional().nullable(),
     amount: z.number().positive(),
     date: z.string(),
     notes: z.string().trim().max(500).optional(),
   })
-  .refine((d) => d.fromAccountId !== d.toAccountId, {
-    message: "Pick two different accounts",
+  .refine((d) => !!d.fromAccountId !== !!d.fromContactId, {
+    message: "Pick a source account or a person — exactly one",
+    path: ["fromAccountId"],
+  })
+  .refine((d) => !!d.toAccountId !== !!d.toContactId, {
+    message: "Pick a destination account or a person — exactly one",
     path: ["toAccountId"],
-  });
+  })
+  // At least one side must be an account — member-to-member transfers
+  // don't touch this workspace's books and aren't representable.
+  .refine((d) => !!d.fromAccountId || !!d.toAccountId, {
+    message: "At least one side must be an account",
+    path: ["toAccountId"],
+  })
+  .refine(
+    (d) => !d.toAccountId || !d.fromAccountId || d.fromAccountId !== d.toAccountId,
+    {
+      message: "Pick two different accounts",
+      path: ["toAccountId"],
+    },
+  );
 
 export const memberChargeSettleSchema = z.object({
   amount: z.number().positive(),
@@ -399,9 +418,9 @@ export const handLoanEntryCreateSchema = z.object({
 
 const leaseFieldsSchema = z.object({
   direction: z.enum(["LEASED_OUT", "LEASED_IN"]),
-  lessorMemberId: z.string().uuid().optional().nullable(),
+  lessorContactId: z.string().uuid().optional().nullable(),
   lessorName: z.string().trim().max(120).optional().nullable(),
-  lesseeMemberId: z.string().uuid().optional().nullable(),
+  lesseeContactId: z.string().uuid().optional().nullable(),
   lesseeName: z.string().trim().max(120).optional().nullable(),
   assetType: z.enum(["CROP_BATCH", "LIVESTOCK_BATCH"]),
   cropBatchId: z.string().uuid().optional().nullable(),

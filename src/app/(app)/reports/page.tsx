@@ -306,7 +306,7 @@ function MembersTab() {
             </div>
           </div>
         ))}
-        {data.members.length === 0 && <Empty label="No family members yet" />}
+        {data.members.length === 0 && <Empty label="No contacts yet" />}
       </div>
     </div>
   );

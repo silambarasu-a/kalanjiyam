@@ -3,7 +3,7 @@ import type { Session } from "next-auth";
 export const FEATURES = [
   "workspace",
   "dashboard",
-  "family",
+  "contacts",
   "accounts",
   "cards",
   "transactions",
@@ -49,7 +49,7 @@ const OWNERSHIP_FEATURES: readonly Feature[] = [
 const DEFAULT_MEMBER_PERMISSIONS: Record<Feature, PermissionLevel> = {
   workspace: "hidden",
   dashboard: "view",
-  family: "view",
+  contacts: "view",
   accounts: "own",
   cards: "own",
   transactions: "own",
