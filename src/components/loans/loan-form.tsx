@@ -291,8 +291,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         frequency,
         accountId: source === "BANK" ? accountId || null : null,
         cardId: source === "CARD_EMI" ? cardId : null,
-        // isExisting is locked at creation; never reuploaded on edit.
-        ...(editing ? {} : { isExisting }),
+        isExisting,
         startedAt,
         chargeBreakdown: breakdown.length ? breakdown : null,
         charges: breakdown.length ? chargesTotal : null,
@@ -697,7 +696,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </>
       )}
 
-      {source !== "CARD_EMI" && !editing && (
+      {source !== "CARD_EMI" && (
         <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
           <label className="flex items-center gap-2">
             <input
@@ -711,7 +710,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 : "Existing loan (already taken — partially or fully repaid)"}
             </span>
           </label>
-          {isExisting && (
+          {!editing && isExisting && (
             <label className="block">
               <span className="text-xs font-medium">Current outstanding (₹)</span>
               <AmountInput
@@ -727,6 +726,15 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               </p>
             </label>
           )}
+          {editing &&
+            source === "BANK" &&
+            isExisting !== editingLoan!.isExisting && (
+              <p className="text-[11px] text-muted-foreground">
+                {isExisting
+                  ? "Saving will remove the auto-created disbursement (and any upfront charges) on the linked account."
+                  : "Saving will create a disbursement transaction (and an upfront-charges expense, if any) on the linked account."}
+              </p>
+            )}
         </div>
       )}
 
