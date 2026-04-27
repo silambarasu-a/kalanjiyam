@@ -143,11 +143,15 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    // isExisting is fixed at creation — flipping it would orphan or
-    // double-create the disbursement bookkeeping. Block client toggles.
-    if (data.isExisting !== undefined && data.isExisting !== loan.isExisting) {
+    // CARD_EMI is always isExisting=true — the underlying purchase already
+    // posted as a card expense, so toggling makes no sense for that source.
+    // For BANK and HAND* loans we let it flip and reconcile the auto
+    // transactions further down.
+    const newIsExisting =
+      data.isExisting !== undefined ? data.isExisting : loan.isExisting;
+    if (newIsExisting !== loan.isExisting && loan.source === "CARD_EMI") {
       return NextResponse.json(
-        { error: "Cannot change existing-loan flag after creation" },
+        { error: "Cannot change existing-loan flag for card EMI loans" },
         { status: 400 }
       );
     }
@@ -312,6 +316,7 @@ export async function PATCH(
           accountId:
             data.accountId !== undefined ? data.accountId : loan.accountId,
           cardId: data.cardId !== undefined ? data.cardId : loan.cardId,
+          isExisting: newIsExisting,
           startedAt: newStartedAt,
           maturityAt: computedMaturity,
           nextDueDate: computedNextDueDate,
@@ -320,11 +325,12 @@ export async function PATCH(
         },
       });
 
-      // BANK loans created with isExisting=false have an auto-generated
-      // disbursement INCOME and (optionally) a charges EXPENSE pinned to
-      // this loanId. Keep them in sync so balances and the transaction
-      // ledger reflect the edit instead of drifting silently.
-      if (loan.source === "BANK" && !loan.isExisting) {
+      // BANK loans with isExisting=false carry an auto disbursement INCOME
+      // (and optionally a charges EXPENSE) pinned to this loanId. Reconcile
+      // those rows against the post-update state — sync amounts when the
+      // flag stays off, delete them when the user flips on, recreate them
+      // when the user flips off, and leave everything alone otherwise.
+      if (loan.source === "BANK") {
         const newPrincipal = Number(updatedLoan.principal);
         const newAccountId = updatedLoan.accountId;
         const newDate = updatedLoan.startedAt;
@@ -335,6 +341,7 @@ export async function PATCH(
           breakdownProvided && breakdown && breakdown.length > 0
             ? breakdown.map((c) => c.label).join(", ")
             : "Processing & other charges";
+        const wantAutoTxns = !newIsExisting;
 
         const disbursement = await tx.transaction.findFirst({
           where: {
@@ -344,16 +351,35 @@ export async function PATCH(
           },
           orderBy: { createdAt: "asc" },
         });
-        if (disbursement) {
-          await tx.transaction.update({
-            where: { id: disbursement.id },
-            data: {
-              amount: newPrincipal,
-              date: newDate,
-              accountId: newAccountId,
-              description: `Loan disbursement · ${updatedLoan.lender}`,
-            },
-          });
+        if (wantAutoTxns) {
+          if (disbursement) {
+            await tx.transaction.update({
+              where: { id: disbursement.id },
+              data: {
+                amount: newPrincipal,
+                date: newDate,
+                accountId: newAccountId,
+                description: `Loan disbursement · ${updatedLoan.lender}`,
+              },
+            });
+          } else if (newAccountId) {
+            await tx.transaction.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                type: TransactionType.INCOME,
+                kind: TransactionKind.LOAN_PAYMENT,
+                amount: newPrincipal,
+                description: `Loan disbursement · ${updatedLoan.lender}`,
+                date: newDate,
+                accountId: newAccountId,
+                loanId: id,
+                userId: ctx.userId,
+                createdByUserId: ctx.userId,
+              },
+            });
+          }
+        } else if (disbursement) {
+          await tx.transaction.delete({ where: { id: disbursement.id } });
         }
 
         const chargeTxn = await tx.transaction.findFirst({
@@ -364,8 +390,8 @@ export async function PATCH(
           },
           orderBy: { createdAt: "asc" },
         });
-        if (chargeTxn) {
-          if (newCharges > 0) {
+        if (wantAutoTxns && newCharges > 0) {
+          if (chargeTxn) {
             await tx.transaction.update({
               where: { id: chargeTxn.id },
               data: {
@@ -375,24 +401,24 @@ export async function PATCH(
                 description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
               },
             });
-          } else {
-            await tx.transaction.delete({ where: { id: chargeTxn.id } });
+          } else if (newAccountId) {
+            await tx.transaction.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                type: TransactionType.EXPENSE,
+                kind: TransactionKind.OTHER_EXPENSE,
+                amount: newCharges,
+                description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
+                date: newDate,
+                accountId: newAccountId,
+                loanId: id,
+                userId: ctx.userId,
+                createdByUserId: ctx.userId,
+              },
+            });
           }
-        } else if (newCharges > 0 && newAccountId) {
-          await tx.transaction.create({
-            data: {
-              workspaceId: ctx.workspaceId,
-              type: TransactionType.EXPENSE,
-              kind: TransactionKind.OTHER_EXPENSE,
-              amount: newCharges,
-              description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
-              date: newDate,
-              accountId: newAccountId,
-              loanId: id,
-              userId: ctx.userId,
-              createdByUserId: ctx.userId,
-            },
-          });
+        } else if (chargeTxn) {
+          await tx.transaction.delete({ where: { id: chargeTxn.id } });
         }
       }
 
