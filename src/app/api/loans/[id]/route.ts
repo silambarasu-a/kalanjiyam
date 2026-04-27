@@ -9,6 +9,13 @@ import {
   TransactionType,
   TransactionKind,
 } from "@/generated/prisma/client";
+import {
+  advanceByCycle,
+  calculateEMI,
+  countPaidEmis,
+  monthsPerCycle,
+  type LoanFrequency,
+} from "@/lib/loan-math";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -136,6 +143,14 @@ export async function PATCH(
         { status: 400 }
       );
     }
+    // isExisting is fixed at creation — flipping it would orphan or
+    // double-create the disbursement bookkeeping. Block client toggles.
+    if (data.isExisting !== undefined && data.isExisting !== loan.isExisting) {
+      return NextResponse.json(
+        { error: "Cannot change existing-loan flag after creation" },
+        { status: 400 }
+      );
+    }
 
     // Workspace-scope check the new account/card if either was changed.
     if (data.cardId && data.cardId !== loan.cardId) {
@@ -171,6 +186,94 @@ export async function PATCH(
           ) / 100
         : 0
       : null;
+
+    // Effective post-update values for the schedule fields. We recompute
+    // maturityAt and nextDueDate whenever the client doesn't supply them
+    // (the form never does) so changes to startedAt / tenure / frequency /
+    // EMI propagate through to the dates instead of leaving them stale.
+    const newPrincipalNum = Number(data.principal ?? loan.principal);
+    const newOutstandingNum = Number(
+      data.outstanding !== undefined ? data.outstanding : loan.outstanding,
+    );
+    const newFrequency = (data.frequency ?? loan.frequency) as LoanFrequency;
+    const newTenure =
+      data.tenure !== undefined ? data.tenure : loan.tenure;
+    const newRateNum =
+      data.interestRate !== undefined
+        ? data.interestRate == null
+          ? 0
+          : Number(data.interestRate)
+        : loan.interestRate == null
+          ? 0
+          : Number(loan.interestRate);
+    const explicitEmi =
+      data.emiAmount !== undefined
+        ? data.emiAmount
+        : loan.emiAmount == null
+          ? null
+          : Number(loan.emiAmount);
+    const newEmiNum =
+      explicitEmi != null
+        ? Number(explicitEmi)
+        : newRateNum > 0 && newTenure
+          ? calculateEMI(
+              newPrincipalNum,
+              newRateNum,
+              newTenure,
+              newFrequency,
+            ) || null
+          : null;
+    const newStartedAt = data.startedAt
+      ? new Date(data.startedAt)
+      : loan.startedAt;
+    const totalMonths =
+      newTenure != null ? newTenure * monthsPerCycle(newFrequency) : null;
+
+    // Maturity: explicit string → use it; explicit null → clear; omitted →
+    // derive from startedAt + total months (or clear if no tenure).
+    const computedMaturity =
+      data.maturityAt === undefined
+        ? totalMonths
+          ? (() => {
+              const m = new Date(newStartedAt);
+              m.setMonth(m.getMonth() + totalMonths);
+              return m;
+            })()
+          : null
+        : data.maturityAt
+          ? new Date(data.maturityAt)
+          : null;
+
+    // Next due: same fallback, plus the cycles-paid heuristic from create.
+    // Cleared automatically when the loan is paid off.
+    const computedNextDueDate =
+      newOutstandingNum <= 0
+        ? null
+        : data.nextDueDate === undefined
+          ? newEmiNum && newTenure
+            ? (() => {
+                const start = new Date(newStartedAt);
+                let advance = 1;
+                if (
+                  newRateNum > 0 &&
+                  newOutstandingNum < newPrincipalNum
+                ) {
+                  const paid = countPaidEmis(
+                    newPrincipalNum,
+                    newRateNum,
+                    newEmiNum,
+                    newTenure,
+                    newFrequency,
+                    newOutstandingNum,
+                  );
+                  advance = paid + 1;
+                }
+                return advanceByCycle(start, newFrequency, advance);
+              })()
+            : null
+          : data.nextDueDate
+            ? new Date(data.nextDueDate)
+            : null;
 
     const result = await prisma.$transaction(async (tx) => {
       const updatedLoan = await tx.loan.update({
@@ -209,13 +312,9 @@ export async function PATCH(
           accountId:
             data.accountId !== undefined ? data.accountId : loan.accountId,
           cardId: data.cardId !== undefined ? data.cardId : loan.cardId,
-          startedAt: data.startedAt ? new Date(data.startedAt) : loan.startedAt,
-          maturityAt: data.maturityAt
-            ? new Date(data.maturityAt)
-            : loan.maturityAt,
-          nextDueDate: data.nextDueDate
-            ? new Date(data.nextDueDate)
-            : loan.nextDueDate,
+          startedAt: newStartedAt,
+          maturityAt: computedMaturity,
+          nextDueDate: computedNextDueDate,
           notes: data.notes !== undefined ? data.notes : loan.notes,
           active: data.active ?? loan.active,
         },
