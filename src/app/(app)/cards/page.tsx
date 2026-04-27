@@ -19,7 +19,7 @@ import { MoneyValue } from "@/components/ui/money-tone";
 type Card = CardSnapshot & {
   active: boolean;
   ownerUser: { id: string; name: string } | null;
-  ownerMember: { id: string; name: string } | null;
+  ownerContact: { id: string; name: string } | null;
   accountId: string | null;
   availableLimit: number | null;
   linkedBalance: number | null;

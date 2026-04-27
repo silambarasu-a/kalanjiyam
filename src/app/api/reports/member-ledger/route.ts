@@ -13,7 +13,7 @@ export async function GET() {
   try {
     const ctx = await requireWorkspace("reports", "read");
 
-    const members = await prisma.familyMember.findMany({
+    const members = await prisma.contact.findMany({
       where: { workspaceId: ctx.workspaceId },
       include: {
         memberCharges: {

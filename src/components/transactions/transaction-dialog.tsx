@@ -56,7 +56,7 @@ type Category = {
   group: string | null;
   types: string[];
 };
-type FamilyMember = { id: string; name: string };
+type Contact = { id: string; name: string };
 type Worker = { id: string; name: string; dailyRate: number | null; balance: number };
 type CropBatch = {
   id: string;
@@ -173,7 +173,7 @@ function DialogBody({
       : null,
     fetcher
   );
-  const { data: familyData } = useSWR<{ members: FamilyMember[] }>("/api/family", fetcher);
+  const { data: contactsData } = useSWR<{ members: Contact[] }>("/api/contacts", fetcher);
   const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
     "/api/crop-batches?active=true",
     fetcher
@@ -195,7 +195,7 @@ function DialogBody({
   const cards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT" && c.accountId);
   const categories = categoriesData?.categories ?? [];
   const investmentCategories = investmentCategoriesData?.categories ?? [];
-  const family = familyData?.members ?? [];
+  const contacts = contactsData?.members ?? [];
   const cropBatches = cropBatchesData?.batches ?? [];
   const livestockBatches = livestockBatchesData?.batches ?? [];
   const workers = (workersData?.workers ?? []).filter((w) => w);
@@ -229,7 +229,7 @@ function DialogBody({
       {type === "TRANSFER" ? (
         <TransferForm accounts={accounts} onClose={onClose} />
       ) : type === "LOAN" ? (
-        <LoanForm accounts={accounts} onClose={onClose} />
+        <LoanEmiForm accounts={accounts} onClose={onClose} />
       ) : type === "INVESTMENT" ? (
         <InvestmentForm
           accounts={accounts}
@@ -243,7 +243,7 @@ function DialogBody({
           accounts={accounts}
           cards={cards}
           categories={categories}
-          family={family}
+          contacts={contacts}
           cropBatches={cropBatches}
           livestockBatches={livestockBatches}
           workers={workers}
@@ -259,7 +259,7 @@ function IncomeExpenseForm({
   accounts,
   cards,
   categories,
-  family,
+  contacts,
   cropBatches,
   livestockBatches,
   workers,
@@ -269,7 +269,7 @@ function IncomeExpenseForm({
   accounts: Account[];
   cards: Card[];
   categories: Category[];
-  family: FamilyMember[];
+  contacts: Contact[];
   cropBatches: CropBatch[];
   livestockBatches: LivestockBatch[];
   workers: Worker[];
@@ -281,7 +281,7 @@ function IncomeExpenseForm({
   const [date, setDate] = useState(today);
   const [categoryId, setCategoryId] = useState("");
   const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" or "card:<id>"
-  const [beneficiaryMemberId, setBeneficiaryMemberId] = useState("");
+  const [beneficiaryContactId, setBeneficiaryMemberId] = useState("");
   const [chargeFlag, setChargeFlag] = useState<ChargeFlag>("NONE");
   const [tagSource, setTagSource] = useState<string>(""); // "" | "crop:<id>" | "livestock:<id>"
   const [submitting, setSubmitting] = useState(false);
@@ -407,8 +407,8 @@ function IncomeExpenseForm({
         accountId: kind === "account" ? sid : null,
         cardId: kind === "card" ? sid : null,
       };
-      if (type === "EXPENSE" && beneficiaryMemberId) {
-        payload.beneficiaryMemberId = beneficiaryMemberId;
+      if (type === "EXPENSE" && beneficiaryContactId) {
+        payload.beneficiaryContactId = beneficiaryContactId;
         payload.memberChargeType = chargeFlag;
       }
       if (tagSource.startsWith("crop:")) payload.cropBatchId = tagSource.slice(5);
@@ -533,16 +533,16 @@ function IncomeExpenseForm({
       {type === "EXPENSE" && (
         <details className="rounded-md border bg-card">
           <summary className="cursor-pointer select-none px-4 py-2 text-sm">
-            Spent for a family member?
+            Spent for a contact?
           </summary>
           <div className="px-4 pb-4 pt-2 space-y-2">
             <NativeSelect
-              value={beneficiaryMemberId}
+              value={beneficiaryContactId}
               onChange={setBeneficiaryMemberId}
               placeholder="— pick member —"
-              options={family.map((m) => ({ value: m.id, label: m.name }))}
+              options={contacts.map((m) => ({ value: m.id, label: m.name }))}
             />
-            {beneficiaryMemberId && (
+            {beneficiaryContactId && (
               <label className="flex items-start gap-2.5 cursor-pointer">
                 <input
                   type="checkbox"
@@ -554,7 +554,7 @@ function IncomeExpenseForm({
                 />
                 <div className="space-y-0.5">
                   <span className="text-sm font-medium block">
-                    Recover this from {family.find((m) => m.id === beneficiaryMemberId)?.name ?? "them"}
+                    Recover this from {contacts.find((m) => m.id === beneficiaryContactId)?.name ?? "them"}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {chargeFlag === "RECOVERABLE"
@@ -728,13 +728,36 @@ function WorkersPanel({
 
 function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [destinationKind, setDestinationKind] = useState<"ACCOUNT" | "MEMBER">(
+    "ACCOUNT",
+  );
+  // For MEMBER mode: SENT = my account → person (outflow), RECEIVED =
+  // person → my account (inflow). The single picked account plays "from"
+  // when SENT and "to" when RECEIVED.
+  const [direction, setDirection] = useState<"SENT" | "RECEIVED">("SENT");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
+  // Single account picker shared across both directions of MEMBER mode.
+  const [memberAccountId, setMemberAccountId] = useState("");
+  // For the external flow we keep a free-text person name plus an optional
+  // resolved memberId. Clicking a chip pins both; typing the input auto-links
+  // to a matching member. On submit, if no memberId resolves we create one
+  // with the typed name first.
+  const [personName, setPersonName] = useState("");
+  const [memberId, setMemberId] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Only fetch members once the user actually picks Person mode — no point
+  // hitting /api/contacts for users who never use external transfers.
+  const { data: membersData } = useSWR<{ members: Contact[] }>(
+    destinationKind === "MEMBER" ? "/api/contacts" : null,
+    fetcher,
+  );
+  const members = membersData?.members ?? [];
 
   async function submit() {
     setError(null);
@@ -743,22 +766,64 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
       setError("Enter an amount");
       return;
     }
-    if (!fromId || !toId) {
-      setError("Pick both accounts");
-      return;
-    }
-    if (fromId === toId) {
-      setError("From and to must differ");
-      return;
+    if (destinationKind === "ACCOUNT") {
+      if (!fromId) {
+        setError("Pick a source account");
+        return;
+      }
+      if (!toId) {
+        setError("Pick a destination account");
+        return;
+      }
+      if (fromId === toId) {
+        setError("From and to must differ");
+        return;
+      }
+    } else {
+      if (!memberAccountId) {
+        setError("Pick your account");
+        return;
+      }
+      if (!memberId && !personName.trim()) {
+        setError("Pick a person or enter a name");
+        return;
+      }
     }
     setSubmitting(true);
     try {
+      let resolvedMemberId = memberId;
+      if (destinationKind === "MEMBER" && !resolvedMemberId) {
+        const createRes = await fetch("/api/contacts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: personName.trim() }),
+        });
+        const createBody = await createRes.json();
+        if (!createRes.ok) {
+          setError(createBody.error ?? "Failed to create person");
+          return;
+        }
+        resolvedMemberId = createBody.id;
+        // Refresh the contacts list so future picks see the new entry.
+        globalMutate("/api/contacts");
+      }
+
+      // Three shapes the API accepts:
+      //   self-transfer:   from=account, to=account
+      //   sent to person:  from=account, to=member
+      //   received from:   from=member,  to=account
+      const payload =
+        destinationKind === "ACCOUNT"
+          ? { fromAccountId: fromId, toAccountId: toId }
+          : direction === "SENT"
+            ? { fromAccountId: memberAccountId, toContactId: resolvedMemberId }
+            : { fromContactId: resolvedMemberId, toAccountId: memberAccountId };
+
       const res = await fetch("/api/transfers", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          fromAccountId: fromId,
-          toAccountId: toId,
+          ...payload,
           amount: amt,
           date,
           notes: notes.trim() || undefined,
@@ -779,47 +844,203 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
 
   const amtNum = parseFloat(amount) || 0;
   return (
-    <div className="space-y-3">
-      <label className="block">
-        <span className="text-xs font-medium">From</span>
-        <div className="mt-1">
-          <NativeSelect
-            value={fromId}
-            onChange={setFromId}
-            options={accounts.map((a) => buildAccountOption(a, amtNum))}
-          />
+    <div className="space-y-4">
+      {/* Transfer type toggle — between accounts vs to a person */}
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2">
+          Transfer type
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setDestinationKind("ACCOUNT")}
+            className={cn(
+              "flex items-center gap-2 px-4 py-3 rounded-lg border text-sm font-medium transition-all",
+              destinationKind === "ACCOUNT"
+                ? "border-primary bg-primary/5 text-primary"
+                : "border-border text-muted-foreground hover:border-muted-foreground/40",
+            )}
+          >
+            <ArrowLeftRight className="h-4 w-4 shrink-0" />
+            Between my accounts
+          </button>
+          <button
+            type="button"
+            onClick={() => setDestinationKind("MEMBER")}
+            className={cn(
+              "flex items-center gap-2 px-4 py-3 rounded-lg border text-sm font-medium transition-all",
+              destinationKind === "MEMBER"
+                ? "border-amber-600 bg-amber-50 text-amber-700"
+                : "border-border text-muted-foreground hover:border-muted-foreground/40",
+            )}
+          >
+            <ArrowUpRight className="h-4 w-4 shrink-0" />
+            To someone
+          </button>
         </div>
-      </label>
-      <label className="block">
-        <span className="text-xs font-medium">To</span>
-        <div className="mt-1">
-          <NativeSelect
-            value={toId}
-            onChange={setToId}
-            options={accounts
-              .filter((a) => a.id !== fromId)
-              .map((a) => buildAccountOption(a, 0))}
-          />
+      </div>
+
+      {/* Self transfer */}
+      {destinationKind === "ACCOUNT" && (
+        <div className="space-y-3">
+          <label className="block">
+            <span className="text-xs text-muted-foreground">From</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={fromId}
+                onChange={setFromId}
+                options={accounts.map((a) => buildAccountOption(a, amtNum))}
+              />
+            </div>
+          </label>
+          <div className="flex items-center gap-2 px-1 text-muted-foreground/40">
+            <div className="flex-1 h-px bg-border" />
+            <ArrowLeftRight className="h-4 w-4 shrink-0" />
+            <div className="flex-1 h-px bg-border" />
+          </div>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">To</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={toId}
+                onChange={setToId}
+                options={accounts
+                  .filter((a) => a.id !== fromId)
+                  .map((a) => buildAccountOption(a, 0))}
+              />
+            </div>
+          </label>
         </div>
-      </label>
+      )}
+
+      {/* External transfer — outflow (sent) or inflow (received) */}
+      {destinationKind === "MEMBER" && (
+        <div className="space-y-3">
+          {/* Direction toggle: sent vs received */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setDirection("SENT")}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                direction === "SENT"
+                  ? "border-amber-600 bg-amber-50 text-amber-700"
+                  : "border-border text-muted-foreground hover:border-muted-foreground/40",
+              )}
+            >
+              <ArrowUpRight className="h-4 w-4 shrink-0" />
+              Money sent
+            </button>
+            <button
+              type="button"
+              onClick={() => setDirection("RECEIVED")}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                direction === "RECEIVED"
+                  ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                  : "border-border text-muted-foreground hover:border-muted-foreground/40",
+              )}
+            >
+              <ArrowDownLeft className="h-4 w-4 shrink-0" />
+              Money received
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+            {/* Top row: my account (the side of the picker depends on
+                direction; visually it's always at the top to keep the
+                user's account anchored). */}
+            <div className="p-3 bg-muted/30">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2">
+                {direction === "SENT" ? "From (my account)" : "To (my account)"}
+              </p>
+              <NativeSelect
+                value={memberAccountId}
+                onChange={setMemberAccountId}
+                options={accounts.map((a) =>
+                  buildAccountOption(a, direction === "SENT" ? amtNum : 0),
+                )}
+              />
+            </div>
+            <div className="flex items-center justify-center py-2 bg-background">
+              {direction === "SENT" ? (
+                <ArrowUpRight className="h-4 w-4 text-amber-600" />
+              ) : (
+                <ArrowDownLeft className="h-4 w-4 text-emerald-600" />
+              )}
+            </div>
+            {/* Bottom row: the person */}
+            <div className="p-3 bg-muted/30 space-y-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {direction === "SENT" ? "To (person)" : "From (person)"}
+              </p>
+              {members.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {members.map((m) => {
+                    const isSelected = memberId === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setMemberId(m.id);
+                          setPersonName(m.name);
+                        }}
+                        className={cn(
+                          "px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                          isSelected
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border bg-background text-muted-foreground hover:border-muted-foreground/40",
+                        )}
+                      >
+                        {m.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <Input
+                value={personName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setPersonName(v);
+                  // Auto-link if the typed name matches an existing member.
+                  const match = members.find(
+                    (m) => m.name.toLowerCase() === v.toLowerCase().trim(),
+                  );
+                  setMemberId(match ? match.id : "");
+                }}
+                placeholder="e.g. Wife, Cousin Raj"
+                maxLength={80}
+                className="bg-background"
+              />
+              {!memberId && personName.trim() && (
+                <p className="text-[11px] text-muted-foreground">
+                  No match — a new person “{personName.trim()}” will be added on save.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Amount + Date */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
-          <span className="text-xs font-medium">Amount (₹)</span>
-          <AmountInput value={amount} onChange={setAmount}
-            placeholder="0"
-          />
+          <span className="text-xs text-muted-foreground">Amount (₹)</span>
+          <AmountInput value={amount} onChange={setAmount} placeholder="0" />
         </label>
         <label className="block">
-          <span className="text-xs font-medium">Date</span>
+          <span className="text-xs text-muted-foreground">Date</span>
           <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
       <label className="block">
-        <span className="text-xs font-medium">Notes</span>
+        <span className="text-xs text-muted-foreground">Notes</span>
         <Input
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="Optional"
+          placeholder="Optional — purpose, reference, etc."
           maxLength={500}
         />
       </label>
@@ -834,231 +1055,6 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
   );
 }
 
-type HandLoanMember = { id: string; name: string; balance: number };
-
-function HandLoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const { data: membersData } = useSWR<{ members: HandLoanMember[] }>(
-    "/api/hand-loan-members",
-    fetcher
-  );
-  const members = membersData?.members ?? [];
-
-  const [memberId, setMemberId] = useState("");
-  const [newName, setNewName] = useState("");
-  const [direction, setDirection] = useState<"GIVEN" | "RECEIVED">("GIVEN");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(today);
-  const [accountId, setAccountId] = useState("");
-  const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit() {
-    setError(null);
-    const amt = Number(amount);
-    if (!amt || amt <= 0) {
-      setError("Enter an amount");
-      return;
-    }
-    if (!accountId) {
-      setError("Pick an account");
-      return;
-    }
-    let resolvedMemberId = memberId;
-    if (memberId === "NEW") {
-      if (!newName.trim()) {
-        setError("Enter a name or pick an existing person");
-        return;
-      }
-    } else if (!memberId) {
-      setError("Pick a person or create a new one");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      if (memberId === "NEW") {
-        const createRes = await fetch("/api/hand-loan-members", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: newName.trim() }),
-        });
-        const createBody = await createRes.json();
-        if (!createRes.ok) {
-          setError(createBody.error ?? "Failed to create person");
-          return;
-        }
-        resolvedMemberId = createBody.id;
-      }
-      const res = await fetch("/api/hand-loan-entries", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          memberId: resolvedMemberId,
-          direction,
-          amount: amt,
-          date,
-          accountId,
-          notes: notes.trim() || undefined,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body.error ?? "Failed");
-        return;
-      }
-      toast.success(direction === "GIVEN" ? "Hand loan given" : "Hand loan received");
-      await mutateBalances();
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          variant={direction === "GIVEN" ? "default" : "outline"}
-          onClick={() => setDirection("GIVEN")}
-          className="gap-1.5"
-        >
-          <ArrowUpRight className="h-4 w-4" /> I gave
-        </Button>
-        <Button
-          type="button"
-          variant={direction === "RECEIVED" ? "default" : "outline"}
-          onClick={() => setDirection("RECEIVED")}
-          className="gap-1.5"
-        >
-          <ArrowDownLeft className="h-4 w-4" /> I received
-        </Button>
-      </div>
-
-      <label className="block">
-        <span className="text-xs font-medium">Person</span>
-        <div className="mt-1">
-          <NativeSelect
-            value={memberId}
-            onChange={setMemberId}
-            options={[
-              ...members.map((m) => ({
-                value: m.id,
-                label:
-                  m.name +
-                  (m.balance !== 0
-                    ? ` (${m.balance > 0 ? "owes" : "advanced"} ₹${Math.abs(m.balance).toLocaleString("en-IN")})`
-                    : ""),
-              })),
-              { value: "NEW", label: "+ Add new person" },
-            ]}
-          />
-        </div>
-      </label>
-
-      {memberId === "NEW" && (
-        <label className="block">
-          <span className="text-xs font-medium">Name</span>
-          <Input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Friend / relative"
-            maxLength={80}
-            autoFocus
-          />
-        </label>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="block">
-          <span className="text-xs font-medium">Amount (₹)</span>
-          <AmountInput value={amount} onChange={setAmount}
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium">Date</span>
-          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-      </div>
-
-      <label className="block">
-        <span className="text-xs font-medium">
-          {direction === "GIVEN" ? "Paid from" : "Received into"}
-        </span>
-        <div className="mt-1">
-          <NativeSelect
-            value={accountId}
-            onChange={setAccountId}
-            options={accounts.map((a) =>
-              buildAccountOption(a, direction === "GIVEN" ? Number(amount) || 0 : 0),
-            )}
-          />
-        </div>
-      </label>
-
-      <label className="block">
-        <span className="text-xs font-medium">Notes</span>
-        <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
-      </label>
-
-      <p className="text-xs text-muted-foreground">
-        For formal hand loans (interest + EMI schedule), go to Hand loans → Formal loan.
-      </p>
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
-      <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button onClick={submit} disabled={submitting}>
-          {submitting ? "Saving…" : "Save"}
-        </Button>
-      </DialogFooter>
-    </div>
-  );
-}
-
-/**
- * Loan tab — combines informal hand loans (give/receive against a person)
- * with EMI payments against a formal Loan record. Mode is picked at the
- * top; each mode renders its own self-contained sub-form.
- */
-function LoanForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
-  const [mode, setMode] = useState<"HAND" | "EMI">("HAND");
-  return (
-    <div className="space-y-3">
-      <div className="flex gap-1 rounded-md bg-muted p-1">
-        <button
-          type="button"
-          onClick={() => setMode("HAND")}
-          className={cn(
-            "flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors",
-            mode === "HAND" ? "bg-white shadow text-foreground" : "text-muted-foreground"
-          )}
-        >
-          Hand loan
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("EMI")}
-          className={cn(
-            "flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors",
-            mode === "EMI" ? "bg-white shadow text-foreground" : "text-muted-foreground"
-          )}
-        >
-          Pay EMI
-        </button>
-      </div>
-      {mode === "HAND" ? (
-        <HandLoanForm accounts={accounts} onClose={onClose} />
-      ) : (
-        <LoanEmiForm accounts={accounts} onClose={onClose} />
-      )}
-    </div>
-  );
-}
 
 type EmiLoan = {
   id: string;

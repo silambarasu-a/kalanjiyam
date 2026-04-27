@@ -4,7 +4,7 @@ import {
   requireWorkspace,
   WorkspaceAccessError,
   assertWorkspaceMembers,
-  assertWorkspaceFamilyMember,
+  assertWorkspaceContact,
 } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
@@ -29,7 +29,7 @@ export async function GET(
       where: { id },
       include: {
         ownerUser: { select: { id: true, name: true } },
-        ownerMember: { select: { id: true, name: true } },
+        ownerContact: { select: { id: true, name: true } },
         account: { select: { id: true, creditLimit: true, statementDate: true, gracePeriod: true } },
         parentAccount: { select: { id: true, name: true } },
       },
@@ -70,7 +70,7 @@ export async function PATCH(
       parsed.data.ownerUserId,
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
-    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
+    await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
     const nextLimitMode = parsed.data.limitMode ?? existing.limitMode;
     const nextParentCardId =
       parsed.data.parentCardId !== undefined ? parsed.data.parentCardId : existing.parentCardId;
@@ -104,7 +104,7 @@ export async function PATCH(
         parentCardId: nextLimitMode === "SHARED" ? nextParentCardId : null,
         limitMode: nextLimitMode,
         ownerUserId: parsed.data.ownerUserId ?? existing.ownerUserId,
-        ownerMemberId: parsed.data.ownerMemberId ?? existing.ownerMemberId,
+        ownerContactId: parsed.data.ownerContactId ?? existing.ownerContactId,
         sharedWithUserIds: parsed.data.sharedWithUserIds ?? existing.sharedWithUserIds,
         active: parsed.data.active ?? existing.active,
       },

@@ -34,7 +34,7 @@ export default async function AccountDetailPage({
     where: { id },
     include: {
       ownerUser: { select: { name: true, email: true } },
-      ownerMember: { select: { name: true } },
+      ownerContact: { select: { name: true } },
     },
   });
   if (!account || account.workspaceId !== session?.user.activeWorkspaceId) notFound();
@@ -150,7 +150,7 @@ export default async function AccountDetailPage({
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{account.name}</h1>
         <p className="text-xs uppercase tracking-widest text-muted-foreground">
           {account.kind}
-          {account.ownerMember ? ` · ${account.ownerMember.name}` : ""}
+          {account.ownerContact ? ` · ${account.ownerContact.name}` : ""}
         </p>
       </div>
 

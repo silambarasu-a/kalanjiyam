@@ -21,15 +21,24 @@ export async function DELETE(
     const { id } = await context.params;
     const transfer = await prisma.transfer.findUnique({
       where: { id },
-      include: { fromAccount: { select: { ownerUserId: true, sharedWithUserIds: true } } },
+      include: {
+        fromAccount: { select: { sharedWithUserIds: true } },
+        toAccount: { select: { sharedWithUserIds: true } },
+      },
     });
     if (!transfer || transfer.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    // Either side's account-shared users can modify; one side may be a
+    // member (no account row), so merge both lists and tolerate null.
+    const sharedWithUserIds = [
+      ...(transfer.fromAccount?.sharedWithUserIds ?? []),
+      ...(transfer.toAccount?.sharedWithUserIds ?? []),
+    ];
     if (
       !canModifyRecord(session, {
         ownerUserId: transfer.userId,
-        sharedWithUserIds: transfer.fromAccount?.sharedWithUserIds ?? [],
+        sharedWithUserIds,
       })
     ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

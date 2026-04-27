@@ -30,7 +30,7 @@ type Account = {
   gracePeriod: number | null;
   active: boolean;
   ownerUser: { id: string; name: string; email: string } | null;
-  ownerMember: { id: string; name: string } | null;
+  ownerContact: { id: string; name: string } | null;
   sharedWithUserIds: string[];
 };
 
@@ -79,7 +79,7 @@ export default function AccountsPage() {
                   </div>
                   <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
                     {label}
-                    {a.ownerMember ? ` · ${a.ownerMember.name}` : ""}
+                    {a.ownerContact ? ` · ${a.ownerContact.name}` : ""}
                   </div>
                 </Link>
                 <div className="flex gap-1">

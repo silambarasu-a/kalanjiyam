@@ -4,7 +4,7 @@ import {
   requireWorkspace,
   WorkspaceAccessError,
   assertWorkspaceMembers,
-  assertWorkspaceFamilyMember,
+  assertWorkspaceContact,
 } from "@/lib/workspace";
 import { visibilityFilter } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
@@ -32,7 +32,7 @@ export async function GET() {
       orderBy: [{ active: "desc" }, { name: "asc" }],
       include: {
         ownerUser: { select: { id: true, name: true } },
-        ownerMember: { select: { id: true, name: true } },
+        ownerContact: { select: { id: true, name: true } },
         account: { select: { id: true, creditLimit: true } },
         parentAccount: { select: { id: true, name: true } },
         parentCard: {
@@ -102,7 +102,7 @@ export async function GET() {
           limitMode: c.limitMode,
           active: c.active,
           ownerUser: c.ownerUser,
-          ownerMember: c.ownerMember,
+          ownerContact: c.ownerContact,
           parentAccount: c.parentAccount,
           parentCard: c.parentCard
             ? { id: c.parentCard.id, name: c.parentCard.name }
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       parsed.data.ownerUserId,
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
-    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
+    await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
     // For a CREDIT card we also create a companion Account (kind=CARD) to track
     // statement spend. SHARED sub-cards still get their own companion (because
     // accountId is unique on Card) but with creditLimit=null — the pool limit
@@ -172,7 +172,7 @@ export async function POST(request: Request) {
             statementDate: parsed.data.statementDate ?? null,
             gracePeriod: parsed.data.gracePeriod ?? null,
             ownerUserId: parsed.data.ownerUserId ?? ctx.userId,
-            ownerMemberId: parsed.data.ownerMemberId ?? null,
+            ownerContactId: parsed.data.ownerContactId ?? null,
             sharedWithUserIds: parsed.data.sharedWithUserIds ?? [],
           },
         });
@@ -191,7 +191,7 @@ export async function POST(request: Request) {
           accountId: companionAccountId,
           limitMode: parsed.data.limitMode ?? "SOLO",
           ownerUserId: parsed.data.ownerUserId ?? ctx.userId,
-          ownerMemberId: parsed.data.ownerMemberId ?? null,
+          ownerContactId: parsed.data.ownerContactId ?? null,
           sharedWithUserIds: parsed.data.sharedWithUserIds ?? [],
         },
       });

@@ -4,7 +4,7 @@ import {
   requireWorkspace,
   WorkspaceAccessError,
   assertWorkspaceMembers,
-  assertWorkspaceFamilyMember,
+  assertWorkspaceContact,
 } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
@@ -30,7 +30,7 @@ export async function GET(
       where: { id },
       include: {
         ownerUser: { select: { id: true, name: true, email: true } },
-        ownerMember: { select: { id: true, name: true } },
+        ownerContact: { select: { id: true, name: true } },
       },
     });
     if (!account || account.workspaceId !== ctx.workspaceId) {
@@ -77,7 +77,7 @@ export async function PATCH(
       parsed.data.ownerUserId,
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
-    await assertWorkspaceFamilyMember(ctx.workspaceId, parsed.data.ownerMemberId);
+    await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
     const account = await prisma.account.update({
       where: { id },
       data: {
@@ -91,8 +91,8 @@ export async function PATCH(
           parsed.data.gracePeriod === undefined ? existing.gracePeriod : parsed.data.gracePeriod,
         ownerUserId:
           parsed.data.ownerUserId === undefined ? existing.ownerUserId : parsed.data.ownerUserId,
-        ownerMemberId:
-          parsed.data.ownerMemberId === undefined ? existing.ownerMemberId : parsed.data.ownerMemberId,
+        ownerContactId:
+          parsed.data.ownerContactId === undefined ? existing.ownerContactId : parsed.data.ownerContactId,
         sharedWithUserIds: parsed.data.sharedWithUserIds ?? existing.sharedWithUserIds,
         active: parsed.data.active ?? existing.active,
       },

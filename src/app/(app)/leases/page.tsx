@@ -42,7 +42,7 @@ type LeaseRow = {
   };
 };
 
-type FamilyMember = { id: string; name: string };
+type Contact = { id: string; name: string };
 type CropBatch = { id: string; name: string; crop: { id: string; name: string } };
 type LivestockBatch = { id: string; name: string; livestock: { id: string; name: string } };
 
@@ -139,7 +139,7 @@ export default function LeasesPage() {
 
 function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const { data: familyData } = useSWR<{ members: FamilyMember[] }>("/api/family", fetcher);
+  const { data: contactsData } = useSWR<{ members: Contact[] }>("/api/contacts", fetcher);
   const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
     "/api/crop-batches?active=true",
     fetcher
@@ -148,7 +148,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
     "/api/livestock-batches?active=true",
     fetcher
   );
-  const family = familyData?.members ?? [];
+  const contacts = contactsData?.members ?? [];
   const cropBatches = cropBatchesData?.batches ?? [];
   const livestockBatches = livestockBatchesData?.batches ?? [];
 
@@ -200,7 +200,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
       return setError("Enter custom months");
     if (counterpartyMode === "external" && !externalName.trim())
       return setError("Enter the counterparty's name");
-    if (counterpartyMode === "member" && !memberId) return setError("Pick a family member");
+    if (counterpartyMode === "member" && !memberId) return setError("Pick a contact");
 
     setSubmitting(true);
     try {
@@ -218,10 +218,10 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
       };
       // Counterparty: the lessor is the owner of the asset; the lessee is who takes it.
       if (direction === "LEASED_OUT") {
-        if (counterpartyMode === "member") payload.lesseeMemberId = memberId;
+        if (counterpartyMode === "member") payload.lesseeContactId = memberId;
         else payload.lesseeName = externalName.trim();
       } else {
-        if (counterpartyMode === "member") payload.lessorMemberId = memberId;
+        if (counterpartyMode === "member") payload.lessorContactId = memberId;
         else payload.lessorName = externalName.trim();
       }
 
@@ -325,7 +325,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 variant={counterpartyMode === "member" ? "default" : "outline"}
                 onClick={() => setCounterpartyMode("member")}
               >
-                Family member
+                Contact
               </Button>
               <Button
                 type="button"
@@ -341,7 +341,7 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 value={memberId}
                 onChange={setMemberId}
                 placeholder="— pick member —"
-                options={family.map((m) => ({ value: m.id, label: m.name }))}
+                options={contacts.map((m) => ({ value: m.id, label: m.name }))}
               />
             ) : (
               <Input

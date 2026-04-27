@@ -29,7 +29,7 @@ const MAP: Record<IconName, React.ComponentType<{ className?: string }>> = {
   accounts: Wallet,
   cards: CreditCard,
   categories: Tags,
-  family: Users,
+  contacts: Users,
   members: UserCircle2,
   crops: Sprout,
   livestock: PawPrint,

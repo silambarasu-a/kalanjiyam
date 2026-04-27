@@ -17,13 +17,13 @@ export async function GET(
     const ctx = await requireWorkspace("members", "read");
     const { id } = await context.params;
 
-    const member = await prisma.familyMember.findUnique({ where: { id } });
+    const member = await prisma.contact.findUnique({ where: { id } });
     if (!member || member.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
     const charges = await prisma.memberCharge.findMany({
-      where: { workspaceId: ctx.workspaceId, beneficiaryMemberId: id },
+      where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
       orderBy: { createdAt: "desc" },
       include: {
         originTransaction: { select: { id: true, description: true, date: true } },

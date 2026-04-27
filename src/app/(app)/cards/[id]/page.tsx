@@ -37,7 +37,7 @@ export default async function CardDetailPage({
     where: { id },
     include: {
       ownerUser: { select: { name: true } },
-      ownerMember: { select: { name: true } },
+      ownerContact: { select: { name: true } },
       parentAccount: { select: { id: true, name: true } },
       parentCard: { select: { id: true, name: true } },
       account: {

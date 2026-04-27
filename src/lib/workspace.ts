@@ -67,19 +67,20 @@ export async function assertWorkspaceMembers(
 }
 
 /**
- * Verify a FamilyMember belongs to the given workspace. Throws
- * WorkspaceAccessError(404) when not found / belongs to another workspace.
+ * Verify a contact belongs to the given workspace.
+ * Throws WorkspaceAccessError(404) when not found / belongs to another
+ * workspace.
  */
-export async function assertWorkspaceFamilyMember(
+export async function assertWorkspaceContact(
   workspaceId: string,
   memberId: string | null | undefined
 ): Promise<void> {
   if (!memberId) return;
-  const fm = await prisma.familyMember.findUnique({
+  const fm = await prisma.contact.findUnique({
     where: { id: memberId },
     select: { workspaceId: true },
   });
   if (!fm || fm.workspaceId !== workspaceId) {
-    throw new WorkspaceAccessError(404, "Family member not found");
+    throw new WorkspaceAccessError(404, "Contact not found");
   }
 }

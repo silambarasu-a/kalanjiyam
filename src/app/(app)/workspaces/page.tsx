@@ -208,8 +208,8 @@ export default function WorkspacesPage() {
             <DialogTitle>Delete workspace?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This permanently deletes the workspace and every transaction, account, family member,
-            crop, batch, loan, and investment inside it. Members will lose access. This cannot be
+            This permanently deletes the workspace and every transaction, account, contact, crop,
+            batch, loan, and investment inside it. Members will lose access. This cannot be
             undone.
           </p>
           <DialogFooter>

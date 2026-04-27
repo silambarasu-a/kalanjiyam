@@ -26,8 +26,8 @@ export async function GET(
         livestockBatch: {
           select: { id: true, name: true, livestock: { select: { id: true, name: true } } },
         },
-        lessorMember: { select: { id: true, name: true } },
-        lesseeMember: { select: { id: true, name: true } },
+        lessorContact: { select: { id: true, name: true } },
+        lesseeContact: { select: { id: true, name: true } },
         schedule: {
           orderBy: { dueDate: "asc" },
           include: {
@@ -52,8 +52,8 @@ export async function GET(
         endDate: lease.endDate.toISOString(),
         active: lease.active,
         notes: lease.notes,
-        lessor: lease.lessorMember ?? (lease.lessorName ? { id: null, name: lease.lessorName } : null),
-        lessee: lease.lesseeMember ?? (lease.lesseeName ? { id: null, name: lease.lesseeName } : null),
+        lessor: lease.lessorContact ?? (lease.lessorName ? { id: null, name: lease.lessorName } : null),
+        lessee: lease.lesseeContact ?? (lease.lesseeName ? { id: null, name: lease.lesseeName } : null),
         assetType: lease.assetType,
         cropBatch: lease.cropBatch,
         livestockBatch: lease.livestockBatch,
@@ -90,16 +90,16 @@ export async function PATCH(
     const updated = await prisma.lease.update({
       where: { id },
       data: {
-        lessorMemberId:
-          parsed.data.lessorMemberId === undefined
-            ? existing.lessorMemberId
-            : parsed.data.lessorMemberId,
+        lessorContactId:
+          parsed.data.lessorContactId === undefined
+            ? existing.lessorContactId
+            : parsed.data.lessorContactId,
         lessorName:
           parsed.data.lessorName === undefined ? existing.lessorName : parsed.data.lessorName,
-        lesseeMemberId:
-          parsed.data.lesseeMemberId === undefined
-            ? existing.lesseeMemberId
-            : parsed.data.lesseeMemberId,
+        lesseeContactId:
+          parsed.data.lesseeContactId === undefined
+            ? existing.lesseeContactId
+            : parsed.data.lesseeContactId,
         lesseeName:
           parsed.data.lesseeName === undefined ? existing.lesseeName : parsed.data.lesseeName,
         notes: parsed.data.notes ?? existing.notes,

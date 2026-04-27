@@ -72,7 +72,7 @@ export async function POST(
             description: `Settlement: ${parsed.data.notes ?? "Member charge"}`,
             date: paidAt,
             accountId: accountForIncome,
-            beneficiaryMemberId: charge.beneficiaryMemberId,
+            beneficiaryContactId: charge.beneficiaryContactId,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
           },

@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     const type = url.searchParams.get("type");
     const accountId = url.searchParams.get("accountId");
     const cardId = url.searchParams.get("cardId");
-    const beneficiaryMemberId = url.searchParams.get("beneficiaryMemberId");
+    const beneficiaryContactId = url.searchParams.get("beneficiaryContactId");
     const limitParam = Number(url.searchParams.get("limit") ?? "50");
     const limit = Math.min(Math.max(limitParam, 1), 200);
 
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     if (type) where.type = type;
     if (accountId) where.accountId = accountId;
     if (cardId) where.cardId = cardId;
-    if (beneficiaryMemberId) where.beneficiaryMemberId = beneficiaryMemberId;
+    if (beneficiaryContactId) where.beneficiaryContactId = beneficiaryContactId;
 
     if (ctx.ownOnly) {
       const ownAccountIds = await prisma.account
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
         category: { select: { id: true, name: true, group: true } },
         account: { select: { id: true, name: true, kind: true } },
         card: { select: { id: true, name: true } },
-        beneficiaryMember: { select: { id: true, name: true } },
+        beneficiaryContact: { select: { id: true, name: true } },
         memberCharge: { select: { id: true, status: true } },
       },
     });
@@ -72,7 +72,7 @@ export async function GET(request: Request) {
         category: t.category,
         account: t.account,
         card: t.card,
-        beneficiary: t.beneficiaryMember,
+        beneficiary: t.beneficiaryContact,
         memberChargeType: t.memberChargeType,
         memberCharge: t.memberCharge,
         transferId: t.transferId,
@@ -124,13 +124,13 @@ export async function POST(request: Request) {
       }
     }
 
-    if (data.beneficiaryMemberId) {
-      const fm = await prisma.familyMember.findUnique({
-        where: { id: data.beneficiaryMemberId },
+    if (data.beneficiaryContactId) {
+      const fm = await prisma.contact.findUnique({
+        where: { id: data.beneficiaryContactId },
         select: { workspaceId: true },
       });
       if (!fm || fm.workspaceId !== ctx.workspaceId) {
-        return NextResponse.json({ error: "Family member not found" }, { status: 404 });
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
       }
     }
 
@@ -160,7 +160,7 @@ export async function POST(request: Request) {
 
     const txDate = new Date(data.date);
     const charge =
-      data.memberChargeType === "RECOVERABLE" && data.beneficiaryMemberId
+      data.memberChargeType === "RECOVERABLE" && data.beneficiaryContactId
         ? { create: true }
         : null;
 
@@ -170,7 +170,7 @@ export async function POST(request: Request) {
         const mc = await tx.memberCharge.create({
           data: {
             workspaceId: ctx.workspaceId,
-            beneficiaryMemberId: data.beneficiaryMemberId!,
+            beneficiaryContactId: data.beneficiaryContactId!,
             amount: data.amount,
             status: MemberChargeStatus.OUTSTANDING,
           },
@@ -196,7 +196,7 @@ export async function POST(request: Request) {
           investmentQty: data.investmentQty ?? null,
           investmentPrice: data.investmentPrice ?? null,
           exchangeRate: data.exchangeRate ?? null,
-          beneficiaryMemberId: data.beneficiaryMemberId ?? null,
+          beneficiaryContactId: data.beneficiaryContactId ?? null,
           memberChargeType: (data.memberChargeType as MemberChargeType) ?? "NONE",
           memberChargeId,
           userId: ctx.userId,
