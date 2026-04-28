@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { DateInput } from "@/components/ui/date-input";
 import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
@@ -22,6 +23,8 @@ export type CardSnapshot = {
   creditLimit: number | null;
   statementDate: number | null;
   gracePeriod: number | null;
+  nextBillDue: string | null;
+  nextBillAmount: number | null;
 };
 
 type BankAccountRow = { id: string; name: string; kind: string };
@@ -77,6 +80,8 @@ export function CardForm({
   const [openingBalance, setOpeningBalance] = useState("");
   const [statementDate, setStatementDate] = useState("");
   const [gracePeriod, setGracePeriod] = useState("");
+  const [nextBillDue, setNextBillDue] = useState("");
+  const [nextBillAmount, setNextBillAmount] = useState("");
   const [limitMode, setLimitMode] = useState<"SOLO" | "SHARED">("SOLO");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +112,8 @@ export function CardForm({
     setOpeningBalance("");
     setStatementDate(card?.statementDate != null ? String(card.statementDate) : "");
     setGracePeriod(card?.gracePeriod != null ? String(card.gracePeriod) : "");
+    setNextBillDue(card?.nextBillDue ? card.nextBillDue.slice(0, 10) : "");
+    setNextBillAmount(card?.nextBillAmount != null ? String(card.nextBillAmount) : "");
     setLimitMode(card?.limitMode ?? "SOLO");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -139,7 +146,9 @@ export function CardForm({
         name: assembledName,
         kind,
         network,
-        supportsUpi,
+        // UPI on Indian networks is RuPay-only; force false on other networks
+        // so the flag matches the form's visibility rule.
+        supportsUpi: network === "RUPAY" ? supportsUpi : false,
         last4: last4 ? last4.slice(-4) : null,
         parentAccountId: kind === "DEBIT" ? parentAccountId || null : null,
         parentCardId: isSharedChild ? parentCardId || null : null,
@@ -153,6 +162,8 @@ export function CardForm({
         }
         payload.statementDate = statementDate ? Number(statementDate) : null;
         payload.gracePeriod = gracePeriod ? Number(gracePeriod) : null;
+        payload.nextBillDue = nextBillDue || null;
+        payload.nextBillAmount = nextBillAmount ? Number(nextBillAmount) : null;
         // Opening outstanding only applies when creating a new card.
         if (!card && openingBalance) {
           payload.openingBalance = Number(openingBalance);
@@ -216,7 +227,7 @@ export function CardForm({
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Network</span>
           <div className="mt-1">
@@ -227,7 +238,17 @@ export function CardForm({
             />
           </div>
         </label>
-        <label className="flex items-center gap-2 h-9">
+        <label className="block">
+          <span className="text-xs font-medium">Last 4 digits</span>
+          <Input
+            value={last4}
+            onChange={(e) => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            maxLength={4}
+          />
+        </label>
+      </div>
+      {network === "RUPAY" && (
+        <label className="flex items-center gap-2">
           <input
             type="checkbox"
             checked={supportsUpi}
@@ -235,40 +256,22 @@ export function CardForm({
           />
           <span className="text-sm">Supports UPI</span>
         </label>
-      </div>
+      )}
       {kind === "DEBIT" ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="block">
-            <span className="text-xs font-medium">Last 4 digits</span>
-            <Input
-              value={last4}
-              onChange={(e) => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              maxLength={4}
+        <label className="block">
+          <span className="text-xs font-medium">Linked bank account</span>
+          <div className="mt-1">
+            <NativeSelect
+              value={parentAccountId}
+              onChange={setParentAccountId}
+              placeholder="— choose —"
+              options={bankAccounts.map((a) => ({ value: a.id, label: a.name }))}
             />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium">Linked bank account</span>
-            <div className="mt-1">
-              <NativeSelect
-                value={parentAccountId}
-                onChange={setParentAccountId}
-                placeholder="— choose —"
-                options={bankAccounts.map((a) => ({ value: a.id, label: a.name }))}
-              />
-            </div>
-          </label>
-        </div>
+          </div>
+        </label>
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="block">
-              <span className="text-xs font-medium">Last 4 digits</span>
-              <Input
-                value={last4}
-                onChange={(e) => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                maxLength={4}
-              />
-            </label>
             <label className="block">
               <span className="text-xs font-medium">
                 Credit limit (₹)
@@ -282,6 +285,48 @@ export function CardForm({
                 disabled={limitMode === "SHARED"}
               />
             </label>
+            {!card && (
+              <label className="block">
+                <span className="text-xs font-medium">
+                  Existing outstanding (₹){" "}
+                  <span className="text-muted-foreground font-normal">(optional)</span>
+                </span>
+                <AmountInput
+                  value={openingBalance}
+                  onChange={setOpeningBalance}
+                  placeholder="0"
+                />
+              </label>
+            )}
+          </div>
+          {!card && openingBalance && Number(openingBalance) > 0 && (
+            <p className="-mt-1 text-[11px] text-muted-foreground">
+              {limitMode === "SHARED"
+                ? "Existing spend on this sub-card. It rolls up to the parent's pool, reducing the shared available limit."
+                : "Seeds the opening balance so your statement and available limit start correctly."}
+            </p>
+          )}
+          <div className="space-y-1">
+            <span className="text-xs font-medium">
+              Next bill due{" "}
+              <span className="text-muted-foreground font-normal">(optional)</span>
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <DateInput
+                value={nextBillDue}
+                onChange={(e) => setNextBillDue(e.target.value)}
+              />
+              <AmountInput
+                value={nextBillAmount}
+                onChange={setNextBillAmount}
+                placeholder="Bill amount (₹)"
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              If a statement was already generated before you added this card,
+              record the due date and bill amount here. Future cycles use the
+              statement day + grace period below.
+            </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
@@ -304,24 +349,6 @@ export function CardForm({
               />
             </label>
           </div>
-          {!card && (
-            <label className="block">
-              <span className="text-xs font-medium">
-                Existing outstanding (₹){" "}
-                <span className="text-muted-foreground font-normal">(optional)</span>
-              </span>
-              <AmountInput
-                value={openingBalance}
-                onChange={setOpeningBalance}
-                placeholder="0"
-              />
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {limitMode === "SHARED"
-                  ? "Existing spend on this sub-card. It rolls up to the parent's pool, reducing the shared available limit."
-                  : "If you already owe a balance on this card, enter it here. It seeds the opening balance so your statement and available limit start correctly."}
-              </p>
-            </label>
-          )}
           <div>
             <span className="text-xs font-medium block mb-2">Limit mode</span>
             <div className="flex gap-2">

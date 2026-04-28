@@ -39,6 +39,8 @@ export async function GET() {
             creditLimit: true,
             statementDate: true,
             gracePeriod: true,
+            nextBillDue: true,
+            nextBillAmount: true,
           },
         },
         parentAccount: { select: { id: true, name: true } },
@@ -54,7 +56,7 @@ export async function GET() {
       },
     });
 
-    const [availableLimits, debitBalances] = await Promise.all([
+    const [availableLimits, debitBalances, creditBalances] = await Promise.all([
       Promise.all(
         cards.map((c) => {
           if (c.kind !== "CREDIT") return Promise.resolve(null);
@@ -91,6 +93,17 @@ export async function GET() {
             : Promise.resolve(null),
         ),
       ),
+      // For CREDIT cards: raw companion-account balance = current statement
+      // outstanding (excluding active EMI principals). Used by the loan
+      // form to show "this card already has ₹X due" when picking it for a
+      // CREDIT_CARD_LOAN, so users see what they're stacking the loan on.
+      Promise.all(
+        cards.map((c) =>
+          c.kind === "CREDIT" && c.accountId
+            ? computeAccountBalance(c.accountId).then((b) => b.balance)
+            : Promise.resolve(null),
+        ),
+      ),
     ]);
 
     return NextResponse.json({
@@ -118,8 +131,14 @@ export async function GET() {
           creditLimit: effectiveLimit == null ? null : Number(effectiveLimit),
           statementDate: c.account?.statementDate ?? null,
           gracePeriod: c.account?.gracePeriod ?? null,
+          nextBillDue: c.account?.nextBillDue?.toISOString() ?? null,
+          nextBillAmount:
+            c.account?.nextBillAmount != null
+              ? Number(c.account.nextBillAmount)
+              : null,
           availableLimit: availableLimits[i],
           linkedBalance: debitBalances[i],
+          currentBalance: creditBalances[i],
           sharedWithUserIds: c.sharedWithUserIds,
         };
       }),
@@ -180,6 +199,10 @@ export async function POST(request: Request) {
             creditLimit: isSharedChild ? null : parsed.data.creditLimit ?? null,
             statementDate: parsed.data.statementDate ?? null,
             gracePeriod: parsed.data.gracePeriod ?? null,
+            nextBillDue: parsed.data.nextBillDue
+              ? new Date(parsed.data.nextBillDue)
+              : null,
+            nextBillAmount: parsed.data.nextBillAmount ?? null,
             ownerUserId: parsed.data.ownerUserId ?? ctx.userId,
             ownerContactId: parsed.data.ownerContactId ?? null,
             sharedWithUserIds: parsed.data.sharedWithUserIds ?? [],
