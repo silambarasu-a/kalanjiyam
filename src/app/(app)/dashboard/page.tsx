@@ -24,7 +24,7 @@ import { PeriodFilter } from "@/components/transactions/period-filter";
 
 type Due = {
   id: string;
-  source: "REMINDER" | "LOAN" | "LEASE";
+  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
   kind: string;
   label: string;
   dueDate: string;
