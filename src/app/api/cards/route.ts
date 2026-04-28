@@ -33,7 +33,14 @@ export async function GET() {
       include: {
         ownerUser: { select: { id: true, name: true } },
         ownerContact: { select: { id: true, name: true } },
-        account: { select: { id: true, creditLimit: true } },
+        account: {
+          select: {
+            id: true,
+            creditLimit: true,
+            statementDate: true,
+            gracePeriod: true,
+          },
+        },
         parentAccount: { select: { id: true, name: true } },
         parentCard: {
           select: {
@@ -109,6 +116,8 @@ export async function GET() {
             : null,
           accountId: c.accountId,
           creditLimit: effectiveLimit == null ? null : Number(effectiveLimit),
+          statementDate: c.account?.statementDate ?? null,
+          gracePeriod: c.account?.gracePeriod ?? null,
           availableLimit: availableLimits[i],
           linkedBalance: debitBalances[i],
           sharedWithUserIds: c.sharedWithUserIds,

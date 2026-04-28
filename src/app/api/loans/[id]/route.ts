@@ -16,6 +16,7 @@ import {
   monthsPerCycle,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { nextStatementDueDate } from "@/lib/statement-period";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -85,6 +86,9 @@ export async function GET(
         isExisting: loan.isExisting,
         account: loan.account,
         card: loan.card,
+        loanAccountNumber: loan.loanAccountNumber,
+        loanStatementDate: loan.loanStatementDate,
+        loanGracePeriod: loan.loanGracePeriod,
         startedAt: loan.startedAt.toISOString(),
         maturityAt: loan.maturityAt?.toISOString() ?? null,
         nextDueDate: loan.nextDueDate?.toISOString() ?? null,
@@ -157,14 +161,38 @@ export async function PATCH(
     }
 
     // Workspace-scope check the new account/card if either was changed.
+    // For the CREDIT_CARD_LOAN kind we also need the linked card account's
+    // statementDate / gracePeriod to recompute the next due date below.
+    let cardStatement: { statementDate: number | null; gracePeriod: number | null } | null = null;
+    const effectiveCardId =
+      data.cardId !== undefined ? data.cardId : loan.cardId;
+    const effectiveKind = data.kind ?? loan.kind;
     if (data.cardId && data.cardId !== loan.cardId) {
-      const card = await prisma.card.findUnique({ where: { id: data.cardId } });
+      const card = await prisma.card.findUnique({
+        where: { id: data.cardId },
+        include: {
+          account: { select: { statementDate: true, gracePeriod: true } },
+        },
+      });
       if (!card || card.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Card not found" }, { status: 404 });
       }
       if (!canAccessRecord(session, card)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      cardStatement = card.account
+        ? { statementDate: card.account.statementDate, gracePeriod: card.account.gracePeriod }
+        : null;
+    } else if (effectiveKind === "CREDIT_CARD_LOAN" && effectiveCardId) {
+      const card = await prisma.card.findUnique({
+        where: { id: effectiveCardId },
+        include: {
+          account: { select: { statementDate: true, gracePeriod: true } },
+        },
+      });
+      cardStatement = card?.account
+        ? { statementDate: card.account.statementDate, gracePeriod: card.account.gracePeriod }
+        : null;
     }
     if (data.accountId && data.accountId !== loan.accountId) {
       const account = await prisma.account.findUnique({
@@ -249,32 +277,58 @@ export async function PATCH(
           : null;
 
     // Next due: same fallback, plus the cycles-paid heuristic from create.
+    // The CREDIT_CARD_LOAN kind derives its next due from the card's
+    // statement + grace period instead of a fixed cycle anniversary.
+    // Per-loan overrides win over the linked card values when supplied.
     // Cleared automatically when the loan is paid off.
+    const effectiveStatementDate =
+      effectiveKind === "CREDIT_CARD_LOAN"
+        ? (data.loanStatementDate !== undefined
+            ? data.loanStatementDate
+            : loan.loanStatementDate) ??
+          cardStatement?.statementDate ??
+          null
+        : null;
+    const effectiveGracePeriod =
+      effectiveKind === "CREDIT_CARD_LOAN"
+        ? (data.loanGracePeriod !== undefined
+            ? data.loanGracePeriod
+            : loan.loanGracePeriod) ??
+          cardStatement?.gracePeriod ??
+          0
+        : 0;
     const computedNextDueDate =
       newOutstandingNum <= 0
         ? null
         : data.nextDueDate === undefined
-          ? newEmiNum && newTenure
-            ? (() => {
-                const start = new Date(newStartedAt);
-                let advance = 1;
-                if (
-                  newRateNum > 0 &&
-                  newOutstandingNum < newPrincipalNum
-                ) {
-                  const paid = countPaidEmis(
-                    newPrincipalNum,
-                    newRateNum,
-                    newEmiNum,
-                    newTenure,
-                    newFrequency,
-                    newOutstandingNum,
-                  );
-                  advance = paid + 1;
-                }
-                return advanceByCycle(start, newFrequency, advance);
-              })()
-            : null
+          ? effectiveKind === "CREDIT_CARD_LOAN" &&
+              effectiveStatementDate != null
+            ? nextStatementDueDate(
+                new Date(),
+                effectiveStatementDate,
+                effectiveGracePeriod,
+              )
+            : newEmiNum && newTenure
+              ? (() => {
+                  const start = new Date(newStartedAt);
+                  let advance = 1;
+                  if (
+                    newRateNum > 0 &&
+                    newOutstandingNum < newPrincipalNum
+                  ) {
+                    const paid = countPaidEmis(
+                      newPrincipalNum,
+                      newRateNum,
+                      newEmiNum,
+                      newTenure,
+                      newFrequency,
+                      newOutstandingNum,
+                    );
+                    advance = paid + 1;
+                  }
+                  return advanceByCycle(start, newFrequency, advance);
+                })()
+              : null
           : data.nextDueDate
             ? new Date(data.nextDueDate)
             : null;
@@ -316,6 +370,24 @@ export async function PATCH(
           accountId:
             data.accountId !== undefined ? data.accountId : loan.accountId,
           cardId: data.cardId !== undefined ? data.cardId : loan.cardId,
+          loanAccountNumber:
+            effectiveKind !== "CREDIT_CARD_LOAN"
+              ? null
+              : data.loanAccountNumber !== undefined
+                ? data.loanAccountNumber?.trim() || null
+                : loan.loanAccountNumber,
+          loanStatementDate:
+            effectiveKind !== "CREDIT_CARD_LOAN"
+              ? null
+              : data.loanStatementDate !== undefined
+                ? data.loanStatementDate
+                : loan.loanStatementDate,
+          loanGracePeriod:
+            effectiveKind !== "CREDIT_CARD_LOAN"
+              ? null
+              : data.loanGracePeriod !== undefined
+                ? data.loanGracePeriod
+                : loan.loanGracePeriod,
           isExisting: newIsExisting,
           startedAt: newStartedAt,
           maturityAt: computedMaturity,

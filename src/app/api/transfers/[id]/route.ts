@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canModifyRecord } from "@/lib/permissions";
+import { recomputeStatementPaidAt } from "@/lib/card-statement-service";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -43,8 +44,15 @@ export async function DELETE(
     ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+    // Capture the statementId before deletion so we can recompute its
+    // paidAt afterwards (this transfer might have been the one closing
+    // the bill).
+    const tagged = transfer.statementId;
     // Cascade: legs reference transferId with onDelete: Cascade.
     await prisma.transfer.delete({ where: { id } });
+    if (tagged) {
+      await recomputeStatementPaidAt(tagged);
+    }
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

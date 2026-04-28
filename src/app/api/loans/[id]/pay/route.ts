@@ -5,6 +5,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { loanPaymentSchema } from "@/lib/validators-domain";
 import { splitPayment, advanceByCycle, type LoanFrequency } from "@/lib/loan-math";
+import { nextStatementDueDate } from "@/lib/statement-period";
 import { TransactionType, TransactionKind } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -90,12 +91,47 @@ export async function POST(
     // Advance nextDueDate by one cycle when the principal portion covers
     // (close to) one full EMI principal. Heuristic, but matches what banks
     // do — partial pre-payments don't shift the schedule.
+    //
+    // The CREDIT_CARD_LOAN kind advances along the linked card's billing
+    // cycle — the next due is "next statement-close + grace" relative to
+    // the payment date, not a fixed monthly anniversary.
+    // Per-loan overrides win over the linked card's account values.
+    let cardStatement: { statementDate: number | null; gracePeriod: number | null } | null = null;
+    if (loan.kind === "CREDIT_CARD_LOAN" && loan.cardId) {
+      const card = await prisma.card.findUnique({
+        where: { id: loan.cardId },
+        include: {
+          account: { select: { statementDate: true, gracePeriod: true } },
+        },
+      });
+      cardStatement = card?.account
+        ? { statementDate: card.account.statementDate, gracePeriod: card.account.gracePeriod }
+        : null;
+    }
+    const effectiveStatementDate =
+      loan.kind === "CREDIT_CARD_LOAN"
+        ? loan.loanStatementDate ?? cardStatement?.statementDate ?? null
+        : null;
+    const effectiveGracePeriod =
+      loan.kind === "CREDIT_CARD_LOAN"
+        ? loan.loanGracePeriod ?? cardStatement?.gracePeriod ?? 0
+        : 0;
     const nextDue = (() => {
       if (!loan.nextDueDate) return loan.nextDueDate;
       if (newOutstanding <= 0) return null;
       // Treat anything within 1% of the suggested principal as a full EMI.
       const fullEmiPaid = principalDrop >= suggested.principal * 0.99;
       if (!fullEmiPaid) return loan.nextDueDate;
+      if (
+        loan.kind === "CREDIT_CARD_LOAN" &&
+        effectiveStatementDate != null
+      ) {
+        return nextStatementDueDate(
+          new Date(data.paidAt),
+          effectiveStatementDate,
+          effectiveGracePeriod,
+        );
+      }
       return advanceByCycle(new Date(loan.nextDueDate), frequency, 1);
     })();
 

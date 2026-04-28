@@ -5,6 +5,11 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { transferCreateSchema } from "@/lib/validators-domain";
 import { TransactionType } from "@/generated/prisma/client";
+import {
+  findStatementForPayment,
+  materializeStatementsFor,
+  recomputeStatementPaidAt,
+} from "@/lib/card-statement-service";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -129,6 +134,17 @@ export async function POST(request: Request) {
     }
 
     const date = new Date(dateStr);
+    // When the destination is a credit-card companion account, this
+    // transfer is a bill payment. Make sure all closed statements exist
+    // before we look for one to tag, then pick the best match. Tagging
+    // ahead of `tx.transfer.create` keeps the row's statementId consistent
+    // from the start.
+    let statementIdToTag: string | null = null;
+    if (toAccount && toAccount.kind === "CARD") {
+      await materializeStatementsFor(toAccount.id, date);
+      statementIdToTag = await findStatementForPayment(toAccount.id, date);
+    }
+
     const transfer = await prisma.$transaction(async (tx) => {
       const t = await tx.transfer.create({
         data: {
@@ -141,6 +157,7 @@ export async function POST(request: Request) {
           amount,
           date,
           notes,
+          statementId: statementIdToTag,
         },
       });
 
@@ -210,6 +227,9 @@ export async function POST(request: Request) {
       }
       return t;
     });
+    if (statementIdToTag) {
+      await recomputeStatementPaidAt(statementIdToTag);
+    }
     return NextResponse.json({ id: transfer.id });
   } catch (e) {
     return err(e);

@@ -9,6 +9,7 @@ import {
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { cardUpdateSchema } from "@/lib/validators-domain";
+import { nextStatementDueDate } from "@/lib/statement-period";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -109,24 +110,69 @@ export async function PATCH(
         active: parsed.data.active ?? existing.active,
       },
     });
-    // Propagate credit-limit updates to the companion Account — but a SHARED
-    // sub-card has no own limit (the pool lives on its parent), so force null.
+    // Propagate credit-limit / billing-cycle updates to the companion
+    // Account. A SHARED sub-card has no own limit (the pool lives on its
+    // parent), so force null there — but statementDate / gracePeriod still
+    // belong on its own account so card EMI math works per sub-card.
     if (existing.accountId) {
       const isSharedChild = nextLimitMode === "SHARED";
+      const accountPatch: {
+        creditLimit?: number | null;
+        statementDate?: number | null;
+        gracePeriod?: number | null;
+      } = {};
       if (isSharedChild) {
-        await prisma.account.update({
-          where: { id: existing.accountId },
-          data: { creditLimit: null },
-        });
+        accountPatch.creditLimit = null;
       } else if (parsed.data.creditLimit !== undefined) {
+        accountPatch.creditLimit = parsed.data.creditLimit ?? null;
+      }
+      if (parsed.data.statementDate !== undefined) {
+        accountPatch.statementDate = parsed.data.statementDate ?? null;
+      }
+      if (parsed.data.gracePeriod !== undefined) {
+        accountPatch.gracePeriod = parsed.data.gracePeriod ?? null;
+      }
+      if (Object.keys(accountPatch).length > 0) {
         await prisma.account.update({
           where: { id: existing.accountId },
-          data: {
-            creditLimit: parsed.data.creditLimit ?? null,
-            statementDate: parsed.data.statementDate ?? undefined,
-            gracePeriod: parsed.data.gracePeriod ?? undefined,
+          data: accountPatch,
+        });
+      }
+    }
+
+    // Cascade statementDate / gracePeriod changes to any active
+    // CREDIT_CARD_LOAN loans linked to this card so their stored
+    // nextDueDate reflects the new billing cycle. Otherwise the loan would
+    // keep showing the old (now stale) due date until the next payment.
+    const sdChanged = parsed.data.statementDate !== undefined;
+    const graceChanged = parsed.data.gracePeriod !== undefined;
+    if ((sdChanged || graceChanged) && existing.accountId) {
+      const refreshed = await prisma.account.findUnique({
+        where: { id: existing.accountId },
+        select: { statementDate: true, gracePeriod: true },
+      });
+      if (refreshed?.statementDate != null) {
+        const linkedLoans = await prisma.loan.findMany({
+          where: { cardId: id, kind: "CREDIT_CARD_LOAN", active: true },
+          select: {
+            id: true,
+            outstanding: true,
+            loanStatementDate: true,
+            loanGracePeriod: true,
           },
         });
+        for (const l of linkedLoans) {
+          if (Number(l.outstanding) <= 0) continue;
+          // Per-loan override wins; only loans using the card's defaults
+          // need their nextDueDate refreshed when the card cycle changes.
+          const sd = l.loanStatementDate ?? refreshed.statementDate;
+          const grace = l.loanGracePeriod ?? refreshed.gracePeriod ?? 0;
+          const nextDue = nextStatementDueDate(new Date(), sd, grace);
+          await prisma.loan.update({
+            where: { id: l.id },
+            data: { nextDueDate: nextDue },
+          });
+        }
       }
     }
     return NextResponse.json({ id: card.id });
