@@ -50,7 +50,7 @@ type Summary = {
   loanOutstanding: number;
   chargesOutstanding: number;
   currentMonthDue: number;
-  remainingDue: number;
+  nextMonthDue: number;
   activeCropBatches: number;
   activeLivestockBatches: number;
   pendingSettlements: number;
@@ -152,13 +152,13 @@ export default function DashboardPage() {
             href="/loans/bank"
           />
           <SmallCard
-            title="This month's dues"
+            title="Due this month"
             value={data ? formatINR(data.currentMonthDue) : "—"}
             icon={<CalendarClock className="h-4 w-4" />}
           />
           <SmallCard
-            title="Remaining dues"
-            value={data ? formatINR(data.remainingDue) : "—"}
+            title="Due next month"
+            value={data ? formatINR(data.nextMonthDue) : "—"}
             icon={<Hourglass className="h-4 w-4" />}
           />
           <SmallCard
