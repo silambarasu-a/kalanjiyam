@@ -17,6 +17,8 @@ import {
   Users,
   HardHat,
   AlertCircle,
+  CalendarClock,
+  Hourglass,
 } from "lucide-react";
 import { formatINR, formatDate } from "@/lib/utils";
 import { calendarMonthPeriods } from "@/lib/statement-period";
@@ -47,6 +49,8 @@ type Summary = {
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
+  currentMonthDue: number;
+  remainingDue: number;
   activeCropBatches: number;
   activeLivestockBatches: number;
   pendingSettlements: number;
@@ -146,6 +150,16 @@ export default function DashboardPage() {
             value={data ? formatINR(data.loanOutstanding) : "—"}
             icon={<Landmark className="h-4 w-4" />}
             href="/loans/bank"
+          />
+          <SmallCard
+            title="This month's dues"
+            value={data ? formatINR(data.currentMonthDue) : "—"}
+            icon={<CalendarClock className="h-4 w-4" />}
+          />
+          <SmallCard
+            title="Remaining dues"
+            value={data ? formatINR(data.remainingDue) : "—"}
+            icon={<Hourglass className="h-4 w-4" />}
           />
           <SmallCard
             title="Member charges"

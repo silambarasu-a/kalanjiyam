@@ -363,6 +363,32 @@ export async function GET(request: Request) {
     }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
+    // Split the dues list into "this calendar month" vs "after that".
+    // currentMonthDue covers the immediate cashflow need; remainingDue is
+    // anything in the upcoming-30-days window that lands in the next
+    // calendar month so the user sees what's queued up next.
+    const thisMonthStart = Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth(),
+      1,
+    );
+    const nextMonthStart = Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth() + 1,
+      1,
+    );
+    let currentMonthDue = 0;
+    let remainingDue = 0;
+    for (const d of dues) {
+      if (d.amount == null) continue;
+      const t = new Date(d.dueDate).getTime();
+      if (t >= thisMonthStart && t < nextMonthStart) {
+        currentMonthDue += d.amount;
+      } else if (t >= nextMonthStart) {
+        remainingDue += d.amount;
+      }
+    }
+
     return NextResponse.json({
       period: {
         start: periodStart.toISOString(),
@@ -380,6 +406,8 @@ export async function GET(request: Request) {
       cardOutstanding,
       loanOutstanding,
       chargesOutstanding,
+      currentMonthDue,
+      remainingDue,
       activeCropBatches,
       activeLivestockBatches,
       pendingSettlements,
