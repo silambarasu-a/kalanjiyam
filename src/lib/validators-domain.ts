@@ -325,6 +325,7 @@ const loanKindEnum = z.enum([
   "GOLD",
   "BUSINESS",
   "EDUCATION",
+  "CREDIT_CARD_LOAN",
   "OTHER",
 ]);
 const loanFrequencyEnum = z.enum([
@@ -366,6 +367,9 @@ const loanFieldsSchema = z.object({
     .nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
+  loanAccountNumber: z.string().trim().max(40).optional().nullable(),
+  loanStatementDate: z.number().int().min(1).max(31).optional().nullable(),
+  loanGracePeriod: z.number().int().min(0).max(60).optional().nullable(),
   isExisting: z.boolean().optional().default(false),
   startedAt: z.string(),
   maturityAt: z.string().optional().nullable(),
@@ -374,10 +378,23 @@ const loanFieldsSchema = z.object({
   goldItems: z.array(goldLoanItemSchema).optional(),
 });
 
-export const loanCreateSchema = loanFieldsSchema.refine(
-  (d) => d.source !== "CARD_EMI" || !!d.cardId,
-  { message: "Card EMI needs a card", path: ["cardId"] }
-);
+export const loanCreateSchema = loanFieldsSchema
+  .refine((d) => d.source !== "CARD_EMI" || !!d.cardId, {
+    message: "Card EMI needs a card",
+    path: ["cardId"],
+  })
+  // CREDIT_CARD_LOAN needs *either* a linked card (whose account provides
+  // the billing cycle) *or* an explicit per-loan loanStatementDate (covers
+  // standalone HDFC Jumbo-style loans where there's no parent card to pick).
+  .refine(
+    (d) =>
+      d.kind !== "CREDIT_CARD_LOAN" || !!d.cardId || d.loanStatementDate != null,
+    {
+      message:
+        "Credit card loan needs either a linked card or a statement-day override",
+      path: ["cardId"],
+    },
+  );
 
 export const loanUpdateSchema = loanFieldsSchema.partial().extend({
   active: z.boolean().optional(),

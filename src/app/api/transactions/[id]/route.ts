@@ -14,6 +14,7 @@ import {
   splitPayment,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -62,6 +63,25 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const t = loaded.transaction;
+
+    // Edit-window check (statement-closed for card txns, N-day window for
+    // others). OWNER/ADMIN can pass `force: true` to bypass.
+    const lock = await checkTransactionEditAllowed({
+      transaction: {
+        id: t.id,
+        date: t.date,
+        accountId: t.accountId,
+        workspaceId: t.workspaceId,
+      },
+      role: ctx.role,
+      force: body?.force === true,
+    });
+    if (!lock.ok) {
+      return NextResponse.json(
+        { error: lock.message, canForce: lock.canForce },
+        { status: lock.status },
+      );
+    }
 
     // Transfer legs are immutable — they're book-kept by the Transfer
     // record itself. Editing one leg in isolation would desync the pair.
@@ -231,7 +251,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -244,6 +264,25 @@ export async function DELETE(
     }
     if (!canModifyRecord(session, loaded.ownership)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    // Edit-window check. DELETE uses ?force=1 since there's no body.
+    const force =
+      new URL(request.url).searchParams.get("force") === "1";
+    const lock = await checkTransactionEditAllowed({
+      transaction: {
+        id: loaded.transaction.id,
+        date: loaded.transaction.date,
+        accountId: loaded.transaction.accountId,
+        workspaceId: loaded.transaction.workspaceId,
+      },
+      role: ctx.role,
+      force,
+    });
+    if (!lock.ok) {
+      return NextResponse.json(
+        { error: lock.message, canForce: lock.canForce },
+        { status: lock.status },
+      );
     }
     if (loaded.transaction.transferId) {
       return NextResponse.json(

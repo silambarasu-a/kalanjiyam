@@ -51,7 +51,13 @@ type Account = {
   balance: number;
   availableLimit: number | null;
 };
-type Card = { id: string; name: string; kind: "CREDIT" | "DEBIT" };
+type Card = {
+  id: string;
+  name: string;
+  kind: "CREDIT" | "DEBIT";
+  statementDate?: number | null;
+  gracePeriod?: number | null;
+};
 
 const KIND_OPTIONS: LoanKind[] = [
   "PERSONAL",
@@ -60,8 +66,20 @@ const KIND_OPTIONS: LoanKind[] = [
   "GOLD",
   "BUSINESS",
   "EDUCATION",
+  "CREDIT_CARD_LOAN",
   "OTHER",
 ];
+
+const KIND_LABEL: Record<LoanKind, string> = {
+  PERSONAL: "Personal",
+  HOME: "Home",
+  CAR: "Car",
+  GOLD: "Gold",
+  BUSINESS: "Business",
+  EDUCATION: "Education",
+  CREDIT_CARD_LOAN: "Credit card loan",
+  OTHER: "Other",
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -86,6 +104,9 @@ export type EditingLoan = {
   chargeBreakdown: { label: string; amount: number }[] | null;
   accountId: string | null;
   cardId: string | null;
+  loanAccountNumber: string | null;
+  loanStatementDate: number | null;
+  loanGracePeriod: number | null;
   isExisting: boolean;
   startedAt: string;
   notes: string | null;
@@ -159,6 +180,20 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const [cardId, setCardId] = useState(
     editingLoan?.cardId ?? lockedCardId ?? ""
   );
+  const [loanAccountNumber, setLoanAccountNumber] = useState(
+    editingLoan?.loanAccountNumber ?? ""
+  );
+  const [loanStatementDate, setLoanStatementDate] = useState(
+    editingLoan?.loanStatementDate != null ? String(editingLoan.loanStatementDate) : ""
+  );
+  const [loanGracePeriod, setLoanGracePeriod] = useState(
+    editingLoan?.loanGracePeriod != null ? String(editingLoan.loanGracePeriod) : ""
+  );
+  const [hasSeparateLoanCard, setHasSeparateLoanCard] = useState(
+    !!editingLoan?.loanAccountNumber ||
+      editingLoan?.loanStatementDate != null ||
+      editingLoan?.loanGracePeriod != null
+  );
   const [isExisting, setIsExisting] = useState(
     editingLoan
       ? editingLoan.isExisting
@@ -200,12 +235,15 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     const p = Number(principal);
     const r = Number(interestRate);
     const t = Number(tenure);
-    const gst = source === "CARD_EMI" && gstOnInterest ? Number(gstOnInterest) : null;
+    const gst =
+      (source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN") && gstOnInterest
+        ? Number(gstOnInterest)
+        : null;
     if (!p || !t || !Number.isFinite(r) || r < 0) return null;
     const totals = loanTotals(p, r, t, frequency, gst);
     if (!totals.emi) return null;
     return totals;
-  }, [principal, interestRate, tenure, gstOnInterest, frequency, source]);
+  }, [principal, interestRate, tenure, gstOnInterest, frequency, source, kind]);
 
   const tenureUnit =
     FREQUENCY_OPTIONS.find((f) => f.value === frequency)?.tenureUnit ?? "months";
@@ -265,6 +303,16 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       setError("Pick a credit card");
       return;
     }
+    if (
+      kind === "CREDIT_CARD_LOAN" &&
+      !cardId &&
+      !(hasSeparateLoanCard && loanStatementDate)
+    ) {
+      setError(
+        "Pick a credit card, or enable the override and enter a statement day",
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       // Edit mode always sends outstanding (so the user can correct it
@@ -290,7 +338,24 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         tenure: tenure ? Number(tenure) : null,
         frequency,
         accountId: source === "BANK" ? accountId || null : null,
-        cardId: source === "CARD_EMI" ? cardId : null,
+        cardId:
+          source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN" ? cardId : null,
+        loanAccountNumber:
+          kind === "CREDIT_CARD_LOAN" && (hasSeparateLoanCard || !cardId)
+            ? loanAccountNumber.trim() || null
+            : null,
+        loanStatementDate:
+          kind === "CREDIT_CARD_LOAN" &&
+          (hasSeparateLoanCard || !cardId) &&
+          loanStatementDate
+            ? Number(loanStatementDate)
+            : null,
+        loanGracePeriod:
+          kind === "CREDIT_CARD_LOAN" &&
+          (hasSeparateLoanCard || !cardId) &&
+          loanGracePeriod
+            ? Number(loanGracePeriod)
+            : null,
         isExisting,
         startedAt,
         chargeBreakdown: breakdown.length ? breakdown : null,
@@ -360,7 +425,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               <NativeSelect
                 value={kind}
                 onChange={(next) => setKind(next as LoanKind)}
-                options={KIND_OPTIONS.map((k) => ({ value: k, label: k }))}
+                options={KIND_OPTIONS.map((k) => ({ value: k, label: KIND_LABEL[k] }))}
               />
             </div>
           </label>
@@ -416,7 +481,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         )}
       </p>
 
-      {source === "CARD_EMI" && (
+      {(source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN") && (
         <div className="space-y-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
@@ -441,21 +506,129 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               </div>
             </label>
             <label className="block">
-              <span className="text-xs font-medium">Credit card</span>
+              <span className="text-xs font-medium">
+                Credit card
+                {kind === "CREDIT_CARD_LOAN" && (
+                  <span className="text-muted-foreground"> (optional)</span>
+                )}
+              </span>
               <div className="mt-1">
                 <NativeSelect
                   value={cardId}
                   onChange={setCardId}
-                  options={creditCards.map((c) => ({ value: c.id, label: c.name }))}
+                  options={[
+                    ...(kind === "CREDIT_CARD_LOAN"
+                      ? [{ value: "", label: "— None (standalone loan account) —" }]
+                      : []),
+                    ...creditCards.map((c) => ({ value: c.id, label: c.name })),
+                  ]}
                   disabled={!!lockedCardId}
                 />
               </div>
             </label>
           </div>
           <p className="text-xs text-muted-foreground">
-            The principal will be subtracted from this card&apos;s available limit
-            until the EMI is paid off.
+            {source === "CARD_EMI"
+              ? "The principal will be subtracted from this card's available limit until the EMI is paid off."
+              : kind === "CREDIT_CARD_LOAN" && !cardId
+                ? "Standalone loan: the linked card is optional. Enable the override below and set the statement day + grace period the loan bills on."
+                : "Each EMI is billed on this card's monthly statement. Due dates follow the card's statement date + grace period."}
           </p>
+          {kind === "CREDIT_CARD_LOAN" && (hasSeparateLoanCard || !cardId) && (
+            <div className="mt-2 space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+              {cardId ? (
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={hasSeparateLoanCard}
+                    onChange={(e) => setHasSeparateLoanCard(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Loan has its own account / billing-cycle override
+                    <span className="block text-[11px] text-muted-foreground">
+                      Some banks (e.g. HDFC Insta Jumbo Loan) issue a separate
+                      Account Number (AAN) for the loan with its own statement
+                      cycle. Use this when the loan bills differently from the
+                      parent card.
+                    </span>
+                  </span>
+                </label>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  <strong className="font-medium text-foreground">
+                    Standalone loan account.
+                  </strong>{" "}
+                  Enter the loan&apos;s billing cycle directly (statement day
+                  is required so the next due date can be calculated).
+                </p>
+              )}
+              <div className={cardId ? "space-y-2 pl-6" : "space-y-2"}>
+                <label className="block">
+                  <span className="text-xs font-medium">
+                    Loan account number
+                    <span className="text-muted-foreground"> (optional)</span>
+                  </span>
+                  <Input
+                    value={loanAccountNumber}
+                    onChange={(e) => setLoanAccountNumber(e.target.value)}
+                    placeholder="e.g. 5524 67XX XXXX 1234"
+                    maxLength={40}
+                  />
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Statement day (1–31)
+                      {!cardId && (
+                        <span className="text-destructive"> *</span>
+                      )}
+                    </span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={loanStatementDate}
+                      onChange={(e) => setLoanStatementDate(e.target.value)}
+                      placeholder={
+                        (() => {
+                          const c = creditCards.find((c) => c.id === cardId);
+                          return c?.statementDate != null
+                            ? `card: ${c.statementDate}`
+                            : "13";
+                        })()
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Grace period (days)
+                    </span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={loanGracePeriod}
+                      onChange={(e) => setLoanGracePeriod(e.target.value)}
+                      placeholder={
+                        (() => {
+                          const c = creditCards.find((c) => c.id === cardId);
+                          return c?.gracePeriod != null
+                            ? `card: ${c.gracePeriod}`
+                            : "20";
+                        })()
+                      }
+                    />
+                  </label>
+                </div>
+                {cardId && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Leave blank to use the linked card&apos;s billing cycle.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

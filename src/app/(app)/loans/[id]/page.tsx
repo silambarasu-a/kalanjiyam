@@ -216,6 +216,9 @@ export default async function LoanDetailPage({
               })),
               accountId: loan.accountId,
               cardId: loan.cardId,
+              loanAccountNumber: loan.loanAccountNumber,
+              loanStatementDate: loan.loanStatementDate,
+              loanGracePeriod: loan.loanGracePeriod,
               isExisting: loan.isExisting,
               startedAt: loan.startedAt.toISOString(),
               notes: loan.notes,
@@ -438,6 +441,31 @@ export default async function LoanDetailPage({
                 >
                   {loan.card.name}
                 </Link>
+              }
+            />
+          )}
+          {loan.loanAccountNumber && (
+            <Row
+              label="Loan account no."
+              value={
+                <span className="font-mono text-xs">
+                  {loan.loanAccountNumber}
+                </span>
+              }
+            />
+          )}
+          {(loan.loanStatementDate != null || loan.loanGracePeriod != null) && (
+            <Row
+              label="Billing cycle override"
+              value={
+                <span className="text-xs">
+                  {loan.loanStatementDate != null
+                    ? `statement on ${loan.loanStatementDate}`
+                    : "card default statement"}
+                  {loan.loanGracePeriod != null
+                    ? ` · ${loan.loanGracePeriod}-day grace`
+                    : ""}
+                </span>
               }
             />
           )}

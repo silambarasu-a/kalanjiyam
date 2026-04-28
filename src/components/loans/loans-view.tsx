@@ -96,7 +96,11 @@ const SOURCE_META = {
   },
 } as const;
 
-export function LoansView({ source }: { source: "BANK" | "HAND_FORMAL" | "CARD_EMI" }) {
+export function LoansView({
+  source,
+}: {
+  source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+}) {
   const meta = SOURCE_META[source];
   const { data, isLoading } = useSWR<{ loans: Loan[] }>(
     `/api/loans?source=${source}`,

@@ -118,6 +118,56 @@ export function cardStatementPeriods(
   return out;
 }
 
+/**
+ * Next EMI due date for a credit-card-billed loan, strictly after `after`.
+ *
+ * Credit card loans are repaid through the card's monthly statement: each
+ * billing cycle closes on day `statementDate` and the bill is due
+ * `gracePeriod` days later. Walk forward from the previous month's close
+ * (so the current cycle's already-generated bill is considered) until we
+ * find a due date strictly after `after`, then return it.
+ *
+ * Example: statementDate=13, gracePeriod=20, after=Apr 28 →
+ *   Mar 13 close → Apr 2 due (past), Apr 13 close → May 3 due ✓
+ */
+export function nextStatementDueDate(
+  after: Date,
+  statementDate: number,
+  gracePeriod: number,
+): Date {
+  const sd = Math.max(1, Math.min(31, statementDate));
+  const grace = Math.max(0, gracePeriod);
+  const afterDayUtc = Date.UTC(
+    after.getUTCFullYear(),
+    after.getUTCMonth(),
+    after.getUTCDate(),
+  );
+  // Start one cycle back so the current month's bill (closed earlier this
+  // month) gets evaluated before advancing.
+  let y = after.getUTCFullYear();
+  let m = after.getUTCMonth() - 1;
+  if (m < 0) {
+    m = 11;
+    y -= 1;
+  }
+  for (let i = 0; i < 4; i++) {
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const close = new Date(Date.UTC(y, m, Math.min(sd, lastDay)));
+    const due = new Date(close);
+    due.setUTCDate(due.getUTCDate() + grace);
+    if (due.getTime() > afterDayUtc) return due;
+    m += 1;
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+  }
+  // Unreachable for sane inputs; satisfies the type checker.
+  const fallback = new Date(after);
+  fallback.setUTCMonth(fallback.getUTCMonth() + 1);
+  return fallback;
+}
+
 /** Parse a period id from the URL search param into a {start, end} pair. */
 export function parsePeriodId(id: string | null | undefined): { start: Date; end: Date } | null {
   if (!id) return null;

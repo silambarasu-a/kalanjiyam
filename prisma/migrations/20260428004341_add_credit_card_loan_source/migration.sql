@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "LoanSource" ADD VALUE 'CREDIT_CARD_LOAN';

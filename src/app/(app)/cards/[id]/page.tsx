@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { canAccessRecord } from "@/lib/permissions";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { computeAccountAvailableLimit } from "@/lib/card-available-limit";
+import { materializeStatementsFor } from "@/lib/card-statement-service";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   calendarMonthPeriods,
@@ -50,6 +51,12 @@ export default async function CardDetailPage({
 
   // ── CREDIT-only metrics ──────────────────────────────────────────────
   const isCredit = card.kind === "CREDIT";
+  // Lazy-materialise any past statement records so the page always shows
+  // an accurate per-bill ledger. Idempotent — only writes new rows for
+  // cycles that have closed since the last visit.
+  if (isCredit && card.accountId) {
+    await materializeStatementsFor(card.accountId);
+  }
   const balance =
     isCredit && card.accountId ? await computeAccountBalance(card.accountId) : null;
   const isSharedChild = card.limitMode === "SHARED" && card.parentCardId;
@@ -128,6 +135,33 @@ export default async function CardDetailPage({
   const totalEmiPaid = closedEmiLoans.reduce((s, l) => s + Number(l.principal), 0);
   const available =
     isCredit && card.accountId ? await computeAccountAvailableLimit(card.accountId) : null;
+
+  // ── Statements ledger (CREDIT only) ─────────────────────────────────
+  // Closed billing cycles archived by `materializeStatementsFor`. Each
+  // row carries totalDue + dueDate + the list of payments tagged to it
+  // so the user can see "I paid this bill in 2 instalments on these
+  // dates" rather than just a flat transfer history.
+  const statements =
+    isCredit && card.accountId
+      ? await prisma.cardStatement.findMany({
+          where: { accountId: card.accountId },
+          orderBy: { periodEnd: "desc" },
+          take: 24,
+          include: {
+            payments: {
+              orderBy: { date: "asc" },
+              select: {
+                id: true,
+                amount: true,
+                date: true,
+                fromAccount: { select: { id: true, name: true } },
+                fromContact: { select: { id: true, name: true } },
+                notes: true,
+              },
+            },
+          },
+        })
+      : [];
 
   // ── DEBIT-only metric: linked bank balance ───────────────────────────
   const linkedBalance =
@@ -423,6 +457,90 @@ export default async function CardDetailPage({
               }
             />
           </div>
+        </section>
+      )}
+
+      {/* ── Statements ledger (CREDIT only) ──────────────────────────── */}
+      {isCredit && statements.length > 0 && (
+        <section className="rounded-lg border bg-card">
+          <header className="px-5 py-3 border-b">
+            <h2 className="text-sm font-semibold">Statements</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Each closed billing cycle is archived with the bill total and
+              every payment made against it.
+            </p>
+          </header>
+          <ul className="divide-y">
+            {statements.map((s) => {
+              const totalDue = Number(s.totalDue);
+              const paidSoFar = s.payments.reduce(
+                (sum, p) => sum + Number(p.amount),
+                0,
+              );
+              const remaining = Math.max(0, totalDue - paidSoFar);
+              const isPaid = s.paidAt != null;
+              return (
+                <li key={s.id} className="px-5 py-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium tabular-nums">
+                        {formatDate(s.periodStart)} — {formatDate(s.periodEnd)}
+                      </div>
+                      <div className="text-xs text-muted-foreground tabular-nums">
+                        Due {formatDate(s.dueDate)}
+                        {isPaid && s.paidAt
+                          ? ` · cleared ${formatDate(s.paidAt)}`
+                          : remaining > 0 && paidSoFar > 0
+                            ? ` · ${formatINR(paidSoFar)} of ${formatINR(totalDue)} paid`
+                            : ""}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div
+                        className={`text-base font-semibold tabular-nums ${
+                          isPaid
+                            ? "text-emerald-700 dark:text-emerald-400"
+                            : remaining > 0
+                              ? "text-destructive"
+                              : ""
+                        }`}
+                      >
+                        {formatINR(totalDue)}
+                      </div>
+                      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                        {isPaid
+                          ? "Paid"
+                          : remaining > 0
+                            ? `${formatINR(remaining)} due`
+                            : "Settled"}
+                      </div>
+                    </div>
+                  </div>
+                  {s.payments.length > 0 && (
+                    <ul className="mt-2 space-y-1 pl-3 border-l-2 border-border">
+                      {s.payments.map((p) => (
+                        <li
+                          key={p.id}
+                          className="flex items-baseline justify-between gap-3 text-xs"
+                        >
+                          <span className="text-muted-foreground">
+                            {formatDate(p.date)} · from{" "}
+                            {p.fromAccount?.name ??
+                              p.fromContact?.name ??
+                              "—"}
+                            {p.notes ? ` · ${p.notes}` : ""}
+                          </span>
+                          <span className="tabular-nums">
+                            {formatINR(Number(p.amount))}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )}
 

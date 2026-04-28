@@ -95,6 +95,7 @@ enum LoanKind {
   GOLD
   BUSINESS
   EDUCATION
+  CREDIT_CARD_LOAN
   OTHER
 }
 
@@ -275,6 +276,10 @@ model Workspace {
   slug         String?  @unique
   ownerUserId  String
   owner        User     @relation("WorkspaceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  // How many days a non-card transaction stays editable from its date.
+  // Card-account transactions follow a different rule (locked once their
+  // billing period closes into a CardStatement). 0 disables the window.
+  transactionEditWindowDays Int @default(30)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -475,7 +480,11 @@ model CardStatement {
   dueDate      DateTime  @db.Date
   totalDue     Decimal   @db.Decimal(14, 2)
   paidAt       DateTime?
-  paidTransfer Transfer? @relation("StatementPaidTransfer")
+  // Many transfers can pay down one statement (partial payments). The
+  // earlier `paidTransfer` 1-to-1 relation modelled "the single transfer
+  // that closed this bill" but real-world bills are often paid in
+  // instalments, so it's been replaced with this 1-to-many.
+  payments     Transfer[] @relation("StatementPayments")
   closedAt     DateTime?
   reminders    InvestmentReminder[] @relation("ReminderCardStatement")
   createdAt    DateTime  @default(now())
@@ -506,8 +515,8 @@ model Transfer {
   amount        Decimal        @db.Decimal(14, 2)
   date          DateTime
   notes         String?
-  statementId   String?        @unique
-  statement     CardStatement? @relation("StatementPaidTransfer", fields: [statementId], references: [id], onDelete: SetNull)
+  statementId   String?
+  statement     CardStatement? @relation("StatementPayments", fields: [statementId], references: [id], onDelete: SetNull)
   legs          Transaction[]  @relation("TransferLegs")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -892,6 +901,18 @@ model Loan {
   account         Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
   cardId          String?
   card            Card?         @relation("CardEmiLoan", fields: [cardId], references: [id], onDelete: SetNull)
+  // Optional virtual loan-account number issued for CREDIT_CARD_LOAN kinds
+  // (e.g. HDFC Insta Jumbo Loan AAN). The parent credit card stays usable;
+  // EMIs are billed against this separate account number on the same
+  // statement cycle as the parent card.
+  loanAccountNumber String?
+  // Per-loan billing-cycle overrides for CREDIT_CARD_LOAN kinds. When set,
+  // they take precedence over the linked card's account.statementDate /
+  // gracePeriod when computing nextDueDate. Useful when (a) the linked
+  // card doesn't have those fields configured, or (b) the loan's separate
+  // AAN bills on a different cycle than the parent card.
+  loanStatementDate Int?
+  loanGracePeriod   Int?
   isExisting      Boolean       @default(false)
   foreclosedAt    DateTime?
   foreclosureAmt  Decimal?      @db.Decimal(14, 2)

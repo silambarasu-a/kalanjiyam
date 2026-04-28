@@ -5,6 +5,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { loanCreateSchema } from "@/lib/validators-domain";
 import { calculateEMI, countPaidEmis, monthsPerCycle, advanceByCycle } from "@/lib/loan-math";
+import { nextStatementDueDate } from "@/lib/statement-period";
 import {
   LoanKind,
   LoanSource,
@@ -75,6 +76,9 @@ export async function GET(request: Request) {
         chargeBreakdown: l.chargeBreakdown ?? null,
         account: l.account,
         card: l.card,
+        loanAccountNumber: l.loanAccountNumber,
+        loanStatementDate: l.loanStatementDate,
+        loanGracePeriod: l.loanGracePeriod,
         isExisting: l.isExisting,
         startedAt: l.startedAt.toISOString(),
         maturityAt: l.maturityAt?.toISOString() ?? null,
@@ -110,14 +114,28 @@ export async function POST(request: Request) {
     const session = await auth();
     const data = parsed.data;
 
+    // For CREDIT_CARD_LOAN we also need the card's linked account so we can
+     // read the statementDate / gracePeriod for billing-cycle math.
+    let cardStatement: { statementDate: number | null; gracePeriod: number | null } | null = null;
     if (data.cardId) {
-      const card = await prisma.card.findUnique({ where: { id: data.cardId } });
+      const card = await prisma.card.findUnique({
+        where: { id: data.cardId },
+        include: {
+          account: { select: { statementDate: true, gracePeriod: true } },
+        },
+      });
       if (!card || card.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Card not found" }, { status: 404 });
       }
       if (!canAccessRecord(session, card)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      cardStatement = card.account
+        ? {
+            statementDate: card.account.statementDate,
+            gracePeriod: card.account.gracePeriod,
+          }
+        : null;
     }
     if (data.accountId) {
       const account = await prisma.account.findUnique({ where: { id: data.accountId } });
@@ -159,34 +177,58 @@ export async function POST(request: Request) {
             })()
           : null;
 
-    // First due date: startedAt + 1 cycle, advanced past any already-paid
-    // cycles for `isExisting` loans.
+    // First due date.
+    //
+    // For most loans this is `startedAt + 1 cycle`, advanced past any
+    // already-paid cycles for `isExisting` loans.
+    //
+    // The CREDIT_CARD_LOAN kind is repaid through the linked card's
+    // monthly statement, so the next due date is the next statement-close
+    // after `startedAt` (or "today" for an existing partly-paid loan) plus
+    // the grace period — not a fixed monthly anniversary. Per-loan
+    // overrides win over the linked card's account values (handles the
+    // HDFC AAN case where the loan bills on its own cycle, and the case
+    // where the linked card has no statementDate configured).
+    const effectiveStatementDate =
+      data.kind === "CREDIT_CARD_LOAN"
+        ? (data.loanStatementDate ?? cardStatement?.statementDate ?? null)
+        : null;
+    const effectiveGracePeriod =
+      data.kind === "CREDIT_CARD_LOAN"
+        ? (data.loanGracePeriod ?? cardStatement?.gracePeriod ?? 0)
+        : 0;
     const computedNextDueDate =
       data.nextDueDate
         ? new Date(data.nextDueDate)
-        : computedEmi && tenureCycles
-          ? (() => {
-              const start = new Date(data.startedAt);
-              let advance = 1;
-              if (
-                data.isExisting &&
-                data.interestRate != null &&
-                data.outstanding != null &&
-                data.outstanding < data.principal
-              ) {
-                const paid = countPaidEmis(
-                  data.principal,
-                  data.interestRate,
-                  computedEmi,
-                  tenureCycles,
-                  frequency,
-                  data.outstanding
-                );
-                advance = paid + 1;
-              }
-              return advanceByCycle(start, frequency, advance);
-            })()
-          : null;
+        : data.kind === "CREDIT_CARD_LOAN" && effectiveStatementDate != null
+          ? nextStatementDueDate(
+              data.isExisting ? new Date() : new Date(data.startedAt),
+              effectiveStatementDate,
+              effectiveGracePeriod,
+            )
+          : computedEmi && tenureCycles
+            ? (() => {
+                const start = new Date(data.startedAt);
+                let advance = 1;
+                if (
+                  data.isExisting &&
+                  data.interestRate != null &&
+                  data.outstanding != null &&
+                  data.outstanding < data.principal
+                ) {
+                  const paid = countPaidEmis(
+                    data.principal,
+                    data.interestRate,
+                    computedEmi,
+                    tenureCycles,
+                    frequency,
+                    data.outstanding
+                  );
+                  advance = paid + 1;
+                }
+                return advanceByCycle(start, frequency, advance);
+              })()
+            : null;
 
     // If the client supplied a per-line breakdown, sum it; otherwise fall
     // back to the explicit `charges` total. This is the amount that banks
@@ -226,6 +268,18 @@ export async function POST(request: Request) {
           chargeBreakdown: breakdown.length ? breakdown : undefined,
           accountId: data.accountId ?? null,
           cardId: data.cardId ?? null,
+          loanAccountNumber:
+            data.kind === "CREDIT_CARD_LOAN"
+              ? data.loanAccountNumber?.trim() || null
+              : null,
+          loanStatementDate:
+            data.kind === "CREDIT_CARD_LOAN"
+              ? data.loanStatementDate ?? null
+              : null,
+          loanGracePeriod:
+            data.kind === "CREDIT_CARD_LOAN"
+              ? data.loanGracePeriod ?? null
+              : null,
           isExisting: data.isExisting ?? false,
           startedAt: new Date(data.startedAt),
           maturityAt: computedMaturity,
