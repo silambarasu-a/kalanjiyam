@@ -303,14 +303,8 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       setError("Pick a credit card");
       return;
     }
-    if (
-      kind === "CREDIT_CARD_LOAN" &&
-      !cardId &&
-      !(hasSeparateLoanCard && loanStatementDate)
-    ) {
-      setError(
-        "Pick a credit card, or enable the override and enter a statement day",
-      );
+    if (kind === "CREDIT_CARD_LOAN" && !cardId && !loanStatementDate) {
+      setError("Pick a credit card or enter a statement day for the loan");
       return;
     }
     setSubmitting(true);
@@ -339,7 +333,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         frequency,
         accountId: source === "BANK" ? accountId || null : null,
         cardId:
-          source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN" ? cardId : null,
+          source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN"
+            ? cardId || null
+            : null,
         loanAccountNumber:
           kind === "CREDIT_CARD_LOAN" && (hasSeparateLoanCard || !cardId)
             ? loanAccountNumber.trim() || null
@@ -446,7 +442,24 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Interest rate (% p.a.)</span>
-          <AmountInput value={interestRate} onChange={setInterestRate} placeholder="e.g. 14" />
+          <div className="relative">
+            <Input
+              type="text"
+              inputMode="decimal"
+              value={interestRate}
+              onChange={(e) =>
+                setInterestRate(e.target.value.replace(/[^\d.]/g, ""))
+              }
+              placeholder="e.g. 14"
+              className="pr-7 tabular-nums"
+            />
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none"
+            >
+              %
+            </span>
+          </div>
         </label>
         <label className="block">
           <span className="text-xs font-medium">EMI cadence</span>
