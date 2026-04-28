@@ -20,6 +20,8 @@ export type CardSnapshot = {
   parentAccount: { id: string; name: string } | null;
   parentCard?: { id: string; name: string } | null;
   creditLimit: number | null;
+  statementDate: number | null;
+  gracePeriod: number | null;
 };
 
 type BankAccountRow = { id: string; name: string; kind: string };
@@ -103,8 +105,8 @@ export function CardForm({
     setParentCardId(card?.parentCard?.id ?? "");
     setCreditLimit(card?.creditLimit != null ? String(card.creditLimit) : "");
     setOpeningBalance("");
-    setStatementDate("");
-    setGracePeriod("");
+    setStatementDate(card?.statementDate != null ? String(card.statementDate) : "");
+    setGracePeriod(card?.gracePeriod != null ? String(card.gracePeriod) : "");
     setLimitMode(card?.limitMode ?? "SOLO");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */

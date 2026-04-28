@@ -23,6 +23,7 @@ import {
 } from "@/components/loans/loan-payment-history";
 import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
 import { LoanEditButton } from "@/components/loans/loan-edit-button";
+import { nextStatementDueDate } from "@/lib/statement-period";
 
 const SOURCE_PATH = {
   BANK: "/loans/bank",
@@ -63,7 +64,15 @@ export default async function LoanDetailPage({
     where: { id },
     include: {
       account: { select: { id: true, name: true } },
-      card: { select: { id: true, name: true } },
+      card: {
+        select: {
+          id: true,
+          name: true,
+          account: {
+            select: { statementDate: true, gracePeriod: true },
+          },
+        },
+      },
       ownerUser: { select: { name: true } },
       goldItems: { orderBy: { createdAt: "asc" } },
     },
@@ -136,9 +145,40 @@ export default async function LoanDetailPage({
 
   // Forward schedule with projected due dates from startedAt — used in the
   // "Upcoming EMIs" preview. Cap at 12 rows; show a "+ N more" hint below.
+  //
+  // CREDIT_CARD_LOAN dates follow the linked card's statement+grace cycle
+  // (or the loan's own override) instead of a fixed monthly anniversary,
+  // so the preview reflects what actually shows up on the card statement.
+  const effectiveSd =
+    loan.kind === "CREDIT_CARD_LOAN"
+      ? loan.loanStatementDate ?? loan.card?.account?.statementDate ?? null
+      : null;
+  const effectiveGrace =
+    loan.kind === "CREDIT_CARD_LOAN"
+      ? loan.loanGracePeriod ?? loan.card?.account?.gracePeriod ?? 0
+      : 0;
+  const useStatementCycle =
+    loan.kind === "CREDIT_CARD_LOAN" && effectiveSd != null;
+  // Pre-compute due dates by chaining nextStatementDueDate from startedAt
+  // up through the last cycle we'll display.
+  const statementDueByCycle: Date[] = [];
+  if (useStatementCycle && fullSchedule.length > 0) {
+    const lastCycleNeeded = Math.min(
+      fullSchedule.length,
+      cyclesPaid + 12,
+    );
+    let prev = new Date(loan.startedAt);
+    for (let i = 0; i < lastCycleNeeded; i++) {
+      const next = nextStatementDueDate(prev, effectiveSd!, effectiveGrace);
+      statementDueByCycle.push(next);
+      prev = next;
+    }
+  }
   const upcomingPreview = fullSchedule.slice(cyclesPaid, cyclesPaid + 12).map((r) => ({
     ...r,
-    dueDate: advanceByCycle(loan.startedAt, freq, r.cycle),
+    dueDate: useStatementCycle
+      ? statementDueByCycle[r.cycle - 1] ?? advanceByCycle(loan.startedAt, freq, r.cycle)
+      : advanceByCycle(loan.startedAt, freq, r.cycle),
   }));
   const moreCycles = Math.max(0, cyclesRemaining - upcomingPreview.length);
 
