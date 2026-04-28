@@ -61,6 +61,7 @@ export async function GET(request: Request) {
       upcomingReminders,
       upcomingLoanDues,
       upcomingLeaseDues,
+      upcomingCardBills,
       pendingSettlements,
       outstandingCharges,
       activeLoans,
@@ -70,7 +71,16 @@ export async function GET(request: Request) {
     ] = await Promise.all([
       prisma.account.findMany({
         where: { workspaceId: wsId },
-        select: { id: true, kind: true },
+        select: {
+          id: true,
+          kind: true,
+          name: true,
+          statementDate: true,
+          gracePeriod: true,
+          nextBillDue: true,
+          nextBillAmount: true,
+          linkedCard: { select: { id: true } },
+        },
       }),
       prisma.cropBatch.count({
         where: { active: true, crop: { workspaceId: wsId } },
@@ -123,6 +133,28 @@ export async function GET(request: Request) {
               lesseeContact: { select: { name: true } },
             },
           },
+        },
+      }),
+      // Credit-card bills: every closed-but-unpaid statement (overdue or
+      // upcoming within 30 days). Excludes the still-open cycle's spend by
+      // construction — only materialised statements are returned.
+      prisma.cardStatement.findMany({
+        where: {
+          workspaceId: wsId,
+          paidAt: null,
+          dueDate: { lte: in30Days },
+        },
+        orderBy: { dueDate: "asc" },
+        take: 20,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+              linkedCard: { select: { id: true } },
+            },
+          },
+          payments: { select: { amount: true } },
         },
       }),
       prisma.wageSettlement.count({
@@ -180,7 +212,7 @@ export async function GET(request: Request) {
     // ── Merge upcoming-dues into one chronological list ────────────────
     type Due = {
       id: string;
-      source: "REMINDER" | "LOAN" | "LEASE";
+      source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
       kind: string;
       label: string;
       dueDate: string;
@@ -211,6 +243,107 @@ export async function GET(request: Request) {
         dueDate: l.nextDueDate.toISOString(),
         amount: l.emiAmount == null ? null : Number(l.emiAmount),
         href: l.source === "CARD_EMI" ? "/cards" : "/loans/bank",
+      });
+    }
+    // Track which card-account-ids already produced a CardStatement-based
+    // due so the manual/fallback path doesn't double-count them.
+    const cardAccountsWithStatement = new Set<string>();
+    for (const s of upcomingCardBills) {
+      const paid = s.payments.reduce((acc, p) => acc + Number(p.amount), 0);
+      const outstanding = Math.max(0, Number(s.totalDue) - paid);
+      cardAccountsWithStatement.add(s.account.id);
+      if (outstanding === 0) continue;
+      const cardId = s.account.linkedCard?.id ?? null;
+      dues.push({
+        id: `card-statement:${s.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD BILL",
+        label: s.account.name,
+        dueDate: s.dueDate.toISOString(),
+        amount: outstanding,
+        href: cardId ? `/cards/${cardId}` : "/cards",
+      });
+    }
+    // Manual-override + computed fallback for credit-card accounts that
+    // have a billing cycle configured but no materialised CardStatement
+    // yet (e.g. card just added with openingBalance, no transactions).
+    for (let i = 0; i < accounts.length; i++) {
+      const a = accounts[i];
+      if (a.kind !== "CARD") continue;
+      if (cardAccountsWithStatement.has(a.id)) continue;
+      const linkedCardId = a.linkedCard?.id ?? null;
+      const cardBal = cardBalances.find((b) => b.accountId === a.id);
+      const cardBalanceNow = cardBal?.balance ?? 0;
+      // 1. Manual override wins.
+      const manualDue = a.nextBillDue;
+      const manualAmount =
+        a.nextBillAmount != null ? Number(a.nextBillAmount) : null;
+      if (
+        manualDue &&
+        manualAmount != null &&
+        manualAmount > 0 &&
+        manualDue.getTime() <= in30Days.getTime()
+      ) {
+        dues.push({
+          id: `card-manual:${a.id}`,
+          source: "CARD_STATEMENT",
+          kind: "CARD BILL",
+          label: a.name,
+          dueDate: manualDue.toISOString(),
+          amount: manualAmount,
+          href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
+        });
+        continue;
+      }
+      // 2. Compute from current balance + statementDate when no manual
+      //    override and no CardStatement exists yet.
+      if (a.statementDate == null || cardBalanceNow <= 0) continue;
+      const sd = a.statementDate;
+      const grace = a.gracePeriod ?? 0;
+      const ty = today.getUTCFullYear();
+      const tm = today.getUTCMonth();
+      const td = today.getUTCDate();
+      let closeY = ty;
+      let closeM = tm;
+      if (td < sd) {
+        closeM -= 1;
+        if (closeM < 0) {
+          closeM = 11;
+          closeY -= 1;
+        }
+      }
+      const monthLastDay = new Date(
+        Date.UTC(closeY, closeM + 1, 0),
+      ).getUTCDate();
+      const lastClose = new Date(
+        Date.UTC(closeY, closeM, Math.min(sd, monthLastDay)),
+      );
+      const computedDue = new Date(
+        lastClose.getTime() + grace * 86400000,
+      );
+      if (computedDue.getTime() > in30Days.getTime()) continue;
+      const chargesAfterClose = await prisma.transaction.aggregate({
+        where: {
+          accountId: a.id,
+          type: "EXPENSE",
+          date: { gt: lastClose },
+          transferId: null,
+        },
+        _sum: { amount: true },
+      });
+      const computedAmount = Math.max(
+        0,
+        cardBalanceNow - Number(chargesAfterClose._sum.amount ?? 0),
+      );
+      if (computedAmount <= 0) continue;
+      dues.push({
+        id: `card-computed:${a.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD BILL",
+        label: a.name,
+        dueDate: computedDue.toISOString(),
+        amount: computedAmount,
+        href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
       });
     }
     for (const s of upcomingLeaseDues) {

@@ -42,7 +42,14 @@ export default async function CardDetailPage({
       parentAccount: { select: { id: true, name: true } },
       parentCard: { select: { id: true, name: true } },
       account: {
-        select: { id: true, creditLimit: true, statementDate: true, gracePeriod: true },
+        select: {
+          id: true,
+          creditLimit: true,
+          statementDate: true,
+          gracePeriod: true,
+          nextBillDue: true,
+          nextBillAmount: true,
+        },
       },
     },
   });
@@ -77,13 +84,14 @@ export default async function CardDetailPage({
     }
   }
   // ── Statement due / last-paid (CREDIT only) ─────────────────────────
-  // Derive close + due dates from the configured statementDate + gracePeriod.
-  // Last-paid is the most recent Transfer landing in the card's companion
-  // account — that's how a user records "I paid the bill from my bank".
+  // The "Closes on" stat is forward-looking — the date the *current open*
+  // cycle will close (when the next bill gets generated). Payment-due and
+  // amount-due come from the most recent UNPAID CardStatement (already
+  // materialised above) so the amount only reflects the closed-but-unpaid
+  // bill, excluding spending that's racked up in the still-open cycle.
   const stmtDay = card.account?.statementDate ?? null;
   const grace = card.account?.gracePeriod ?? null;
   let statementClosesOn: Date | null = null;
-  let paymentDueBy: Date | null = null;
   if (isCredit && stmtDay) {
     const today = new Date();
     const ty = today.getUTCFullYear();
@@ -94,9 +102,88 @@ export default async function CardDetailPage({
     if (td > stmtDay) closeM += 1;
     const monthLastDay = new Date(Date.UTC(closeY, closeM + 1, 0)).getUTCDate();
     statementClosesOn = new Date(Date.UTC(closeY, closeM, Math.min(stmtDay, monthLastDay)));
-    if (grace != null) {
-      paymentDueBy = new Date(statementClosesOn.getTime() + grace * 86400000);
+  }
+  // Resolve "payment due by" + "amount due" with a 3-tier fallback:
+  //   1. Account.nextBillDue + nextBillAmount — explicit manual override
+  //      captured at card onboarding (e.g. for an existing card whose
+  //      first cycle pre-dates the app).
+  //   2. Oldest unpaid CardStatement — the auto-managed source of truth
+  //      once cycles start closing. Outstanding = totalDue − tagged
+  //      payments.
+  //   3. Compute from balance + statementDate + gracePeriod when neither
+  //      exists yet (e.g. card just added with openingBalance, no
+  //      transactions, no statement materialised). Bill = current balance
+  //      minus charges since the most recent close.
+  const upcomingStatement =
+    isCredit && card.accountId
+      ? await prisma.cardStatement.findFirst({
+          where: { accountId: card.accountId, paidAt: null },
+          orderBy: { dueDate: "asc" },
+          select: {
+            id: true,
+            dueDate: true,
+            totalDue: true,
+            payments: { select: { amount: true } },
+          },
+        })
+      : null;
+
+  let paymentDueBy: Date | null = null;
+  let amountDueNow = 0;
+
+  const manualBillDue = card.account?.nextBillDue ?? null;
+  const manualBillAmount =
+    card.account?.nextBillAmount != null
+      ? Number(card.account.nextBillAmount)
+      : null;
+  if (manualBillDue && manualBillAmount != null && manualBillAmount > 0) {
+    paymentDueBy = manualBillDue;
+    amountDueNow = manualBillAmount;
+  } else if (upcomingStatement) {
+    paymentDueBy = upcomingStatement.dueDate;
+    amountDueNow = Math.max(
+      0,
+      Number(upcomingStatement.totalDue) -
+        upcomingStatement.payments.reduce((s, p) => s + Number(p.amount), 0),
+    );
+  } else if (isCredit && stmtDay && card.accountId && balance) {
+    // Fallback compute. Most recent close = sd of this month if today is
+    // past sd, otherwise sd of previous month. Due = close + grace.
+    const today = new Date();
+    const ty = today.getUTCFullYear();
+    const tm = today.getUTCMonth();
+    const td = today.getUTCDate();
+    let closeY = ty;
+    let closeM = tm;
+    if (td < stmtDay) {
+      closeM -= 1;
+      if (closeM < 0) {
+        closeM = 11;
+        closeY -= 1;
+      }
     }
+    const monthLastDay = new Date(
+      Date.UTC(closeY, closeM + 1, 0),
+    ).getUTCDate();
+    const lastClose = new Date(
+      Date.UTC(closeY, closeM, Math.min(stmtDay, monthLastDay)),
+    );
+    paymentDueBy = new Date(lastClose.getTime() + (grace ?? 0) * 86400000);
+    // amount_due = balance_now − charges_after_last_close (payments after
+    // close cancel out algebraically — see derivation in PR description).
+    const chargesAfterClose = await prisma.transaction.aggregate({
+      where: {
+        accountId: card.accountId,
+        type: "EXPENSE",
+        date: { gt: lastClose },
+        transferId: null,
+      },
+      _sum: { amount: true },
+    });
+    amountDueNow = Math.max(
+      0,
+      balance.balance - Number(chargesAfterClose._sum.amount ?? 0),
+    );
   }
   const lastPayment =
     isCredit && card.accountId
@@ -106,7 +193,6 @@ export default async function CardDetailPage({
           select: { id: true, amount: true, date: true, fromAccount: { select: { name: true } } },
         })
       : null;
-  const amountDueNow = balance ? Math.max(0, balance.balance) : 0;
 
   // Pull all EMIs (active + closed) on this card so we can render both lists
   // and aggregate the active outstanding for the hero stat.
@@ -443,7 +529,11 @@ export default async function CardDetailPage({
               label="Amount due"
               value={formatINR(amountDueNow)}
               tone={amountDueNow > 0 ? "loss" : "gain"}
-              hint={amountDueNow > 0 ? "Current statement" : "Nothing owed"}
+              hint={
+                amountDueNow > 0
+                  ? "Last closed bill (excl. open cycle)"
+                  : "Nothing owed"
+              }
             />
             <DueStat
               label="Last paid"
