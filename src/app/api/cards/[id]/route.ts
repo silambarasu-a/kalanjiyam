@@ -31,7 +31,7 @@ export async function GET(
       include: {
         ownerUser: { select: { id: true, name: true } },
         ownerContact: { select: { id: true, name: true } },
-        account: { select: { id: true, creditLimit: true, statementDate: true, gracePeriod: true } },
+        account: { select: { id: true, creditLimit: true, statementDate: true, gracePeriod: true, nextBillDue: true, nextBillAmount: true } },
         parentAccount: { select: { id: true, name: true } },
       },
     });
@@ -120,6 +120,8 @@ export async function PATCH(
         creditLimit?: number | null;
         statementDate?: number | null;
         gracePeriod?: number | null;
+        nextBillDue?: Date | null;
+        nextBillAmount?: number | null;
       } = {};
       if (isSharedChild) {
         accountPatch.creditLimit = null;
@@ -131,6 +133,14 @@ export async function PATCH(
       }
       if (parsed.data.gracePeriod !== undefined) {
         accountPatch.gracePeriod = parsed.data.gracePeriod ?? null;
+      }
+      if (parsed.data.nextBillDue !== undefined) {
+        accountPatch.nextBillDue = parsed.data.nextBillDue
+          ? new Date(parsed.data.nextBillDue)
+          : null;
+      }
+      if (parsed.data.nextBillAmount !== undefined) {
+        accountPatch.nextBillAmount = parsed.data.nextBillAmount ?? null;
       }
       if (Object.keys(accountPatch).length > 0) {
         await prisma.account.update({

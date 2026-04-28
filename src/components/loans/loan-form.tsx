@@ -12,7 +12,8 @@ import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
-import { formatINR, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
 
 type ChargeRow = { label: string; amount: string };
@@ -57,6 +58,7 @@ type Card = {
   kind: "CREDIT" | "DEBIT";
   statementDate?: number | null;
   gracePeriod?: number | null;
+  currentBalance?: number | null;
 };
 
 const KIND_OPTIONS: LoanKind[] = [
@@ -547,6 +549,55 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 ? "Standalone loan: the linked card is optional. Enable the override below and set the statement day + grace period the loan bills on."
                 : "Each EMI is billed on this card's monthly statement. Due dates follow the card's statement date + grace period."}
           </p>
+          {kind === "CREDIT_CARD_LOAN" && cardId && (() => {
+            const c = creditCards.find((c) => c.id === cardId);
+            if (!c) return null;
+            const sd = loanStatementDate
+              ? Number(loanStatementDate)
+              : c.statementDate ?? null;
+            const grace = loanGracePeriod
+              ? Number(loanGracePeriod)
+              : c.gracePeriod ?? 0;
+            const balance = c.currentBalance ?? 0;
+            const upcomingDue =
+              sd != null
+                ? nextStatementDueDate(new Date(), sd, grace)
+                : null;
+            if (balance <= 0 && !upcomingDue) return null;
+            return (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs space-y-1.5 dark:border-amber-400/30">
+                <div className="font-medium text-amber-800 dark:text-amber-300">
+                  Heads up — this card already has activity
+                </div>
+                {balance > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">
+                      Current outstanding on {c.name}
+                    </span>
+                    <span className="font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+                      {formatINR(balance)}
+                    </span>
+                  </div>
+                )}
+                {upcomingDue && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">
+                      Next statement due
+                    </span>
+                    <span className="tabular-nums">
+                      {formatDate(upcomingDue)}
+                    </span>
+                  </div>
+                )}
+                <p className="pt-0.5 text-[10px] text-muted-foreground">
+                  Loan EMIs land on the same statement{" "}
+                  {balance > 0
+                    ? "alongside the existing balance — both must be cleared by the due date."
+                    : "as the card's regular spend."}
+                </p>
+              </div>
+            );
+          })()}
           {kind === "CREDIT_CARD_LOAN" && (hasSeparateLoanCard || !cardId) && (
             <div className="mt-2 space-y-2 rounded-lg border border-border bg-muted/30 p-3">
               {cardId ? (

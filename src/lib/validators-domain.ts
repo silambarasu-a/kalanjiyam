@@ -63,6 +63,10 @@ export const cardCreateSchema = z.object({
   gracePeriod: z.number().int().min(0).max(60).optional().nullable(),
   /** Existing outstanding on a CREDIT card at the time of creation. */
   openingBalance: z.number().nonnegative().optional().nullable(),
+  /** Pre-existing bill due date for an already-generated statement. */
+  nextBillDue: z.string().optional().nullable(),
+  /** Pre-existing bill amount paired with nextBillDue. */
+  nextBillAmount: z.number().nonnegative().optional().nullable(),
 });
 
 export const cardUpdateSchema = cardCreateSchema.partial().extend({

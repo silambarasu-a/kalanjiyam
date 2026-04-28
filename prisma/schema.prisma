@@ -417,6 +417,12 @@ model Account {
   creditLimit    Decimal?     @db.Decimal(14, 2)
   statementDate  Int?
   gracePeriod    Int?
+  // For CREDIT companion accounts: pre-existing bill due date + amount
+  // captured at onboarding. Used when the user adds a card that already
+  // has a generated statement due before the regular cycle math takes
+  // over. Cleared/updated by the user manually after the bill is paid.
+  nextBillDue    DateTime?
+  nextBillAmount Decimal?     @db.Decimal(14, 2)
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -526,6 +532,7 @@ model Transfer {
   @@index([fromContactId])
   @@index([toAccountId])
   @@index([toContactId])
+  @@index([statementId])
 }
 
 //
