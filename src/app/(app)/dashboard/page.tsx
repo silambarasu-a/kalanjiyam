@@ -131,31 +131,28 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <SmallCard
-          title="Card outstanding"
-          value={data ? formatINR(data.cardOutstanding) : "—"}
-          icon={<CreditCard className="h-4 w-4" />}
-          href="/cards"
-        />
-        <SmallCard
-          title="Loan outstanding"
-          value={data ? formatINR(data.loanOutstanding) : "—"}
-          icon={<Landmark className="h-4 w-4" />}
-          href="/loans/bank"
-        />
-        <SmallCard
-          title="Member charges"
-          value={data ? formatINR(data.chargesOutstanding) : "—"}
-          icon={<Users className="h-4 w-4" />}
-          href="/contacts"
-        />
-      </div>
-
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
         <UpcomingDues dues={data?.dues ?? null} />
 
         <section className="space-y-3">
+          <SmallCard
+            title="Card outstanding"
+            value={data ? formatINR(data.cardOutstanding) : "—"}
+            icon={<CreditCard className="h-4 w-4" />}
+            href="/cards"
+          />
+          <SmallCard
+            title="Loan outstanding"
+            value={data ? formatINR(data.loanOutstanding) : "—"}
+            icon={<Landmark className="h-4 w-4" />}
+            href="/loans/bank"
+          />
+          <SmallCard
+            title="Member charges"
+            value={data ? formatINR(data.chargesOutstanding) : "—"}
+            icon={<Users className="h-4 w-4" />}
+            href="/contacts"
+          />
           <SmallCard
             title="Active crop batches"
             value={data ? String(data.activeCropBatches) : "—"}
