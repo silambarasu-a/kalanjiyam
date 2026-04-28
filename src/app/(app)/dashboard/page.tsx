@@ -404,13 +404,10 @@ function SmallCard({
   title: string;
   value: string;
   icon: React.ReactNode;
-  href: string;
+  href?: string;
 }) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center gap-3 rounded-xl border bg-card p-4 hover:bg-accent/40 transition"
-    >
+  const inner = (
+    <>
       <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center text-primary">
         {icon}
       </div>
@@ -418,6 +415,21 @@ function SmallCard({
         <div className="text-xs text-muted-foreground">{title}</div>
         <div className="text-lg font-semibold truncate">{value}</div>
       </div>
+    </>
+  );
+  if (!href) {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border bg-card p-4">
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      className="flex items-center gap-3 rounded-xl border bg-card p-4 hover:bg-accent/40 transition"
+    >
+      {inner}
     </Link>
   );
 }
