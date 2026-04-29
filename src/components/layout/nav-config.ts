@@ -30,6 +30,7 @@ export type IconName =
   | "card-emi"
   | "investments"
   | "reminders"
+  | "notifications"
   | "reports"
   | "workspace"
   | "settings";
@@ -78,12 +79,14 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Growth",
     items: [
       { label: "Investments", href: "/investments", feature: "investments", icon: "investments" },
-      { label: "Reminders", href: "/reminders", feature: "reminders", icon: "reminders" },
     ],
   },
   {
     label: "Insight",
-    items: [{ label: "Reports", href: "/reports", feature: "reports", icon: "reports" }],
+    items: [
+      { label: "Notifications", href: "/notifications", feature: "reminders", icon: "notifications" },
+      { label: "Reports", href: "/reports", feature: "reports", icon: "reports" },
+    ],
   },
   {
     label: "Settings",

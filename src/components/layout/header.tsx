@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, LogOut, Plus } from "lucide-react";
+import { LogOut, Plus } from "lucide-react";
+import { NotificationsPopover } from "./notifications-popover";
 import { useSession, signOut } from "next-auth/react";
 import { NAV_GROUPS } from "./nav-config";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
@@ -86,13 +87,7 @@ export function Header() {
         >
           <Plus className="h-4 w-4" /> New
         </button>
-        <button
-          type="button"
-          className="h-9 w-9 rounded-md hover:bg-accent flex items-center justify-center text-muted-foreground transition-colors"
-          aria-label="Notifications"
-        >
-          <Bell className="h-4 w-4" />
-        </button>
+        <NotificationsPopover />
         <button
           type="button"
           onClick={() => signOut({ callbackUrl: "/login" })}
