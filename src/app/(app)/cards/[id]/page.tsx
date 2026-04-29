@@ -399,14 +399,14 @@ export default async function CardDetailPage({
 
       {/* ── CREDIT hero ──────────────────────────────────────────────── */}
       {isCredit && effectiveLimit != null && (
-        <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-5 sm:p-6">
+        <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-4 sm:p-6">
           <div className="grid gap-6 md:grid-cols-[1.4fr_1fr]">
             <div className="flex flex-col justify-between gap-4">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
                   Available limit
                 </div>
-                <div className={`mt-1 text-4xl font-bold tabular-nums ${utilTextClass}`}>
+                <div className={`mt-1 text-3xl sm:text-4xl font-bold tabular-nums ${utilTextClass}`}>
                   {formatINR(available ?? effectiveLimit)}
                 </div>
                 <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
@@ -448,7 +448,7 @@ export default async function CardDetailPage({
 
       {/* ── DEBIT hero ───────────────────────────────────────────────── */}
       {!isCredit && (
-        <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-5 sm:p-6">
+        <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-4 sm:p-6">
           <div className="grid gap-6 md:grid-cols-[1.4fr_1fr]">
             <div className="flex flex-col justify-between gap-4">
               <div>
@@ -456,7 +456,7 @@ export default async function CardDetailPage({
                   Spendable balance
                 </div>
                 <div
-                  className={`mt-1 text-4xl font-bold tabular-nums ${
+                  className={`mt-1 text-3xl sm:text-4xl font-bold tabular-nums ${
                     (linkedBalance?.balance ?? 0) > 0
                       ? "text-primary"
                       : (linkedBalance?.balance ?? 0) < 0
@@ -513,8 +513,8 @@ export default async function CardDetailPage({
 
       {/* ── Statement / payment-due strip (CREDIT with statement day) ── */}
       {isCredit && stmtDay && (
-        <section className="rounded-lg border bg-card p-4">
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <section className="rounded-lg border bg-card p-3 sm:p-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-4">
             <DueStat
               label="Closes on"
               value={statementClosesOn ? formatDate(statementClosesOn) : "—"}
@@ -553,7 +553,7 @@ export default async function CardDetailPage({
       {/* ── Statements ledger (CREDIT only) ──────────────────────────── */}
       {isCredit && statements.length > 0 && (
         <section className="rounded-lg border bg-card">
-          <header className="px-5 py-3 border-b">
+          <header className="px-4 sm:px-5 py-3 border-b">
             <h2 className="text-sm font-semibold">Statements</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
               Each closed billing cycle is archived with the bill total and
@@ -570,7 +570,7 @@ export default async function CardDetailPage({
               const remaining = Math.max(0, totalDue - paidSoFar);
               const isPaid = s.paidAt != null;
               return (
-                <li key={s.id} className="px-5 py-3">
+                <li key={s.id} className="px-4 sm:px-5 py-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-3">
                     <div>
                       <div className="text-sm font-medium tabular-nums">
@@ -637,7 +637,7 @@ export default async function CardDetailPage({
       {/* ── EMI loans on this card (CREDIT only) ─────────────────────── */}
       {isCredit && (activeEmiLoans.length > 0 || closedEmiLoans.length > 0) && (
         <section className="rounded-lg border bg-card">
-          <header className="px-5 py-3 border-b flex flex-wrap items-center justify-between gap-3">
+          <header className="px-4 sm:px-5 py-3 border-b flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold">EMI loans</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -791,7 +791,7 @@ export default async function CardDetailPage({
 
       {/* ── Transactions table ───────────────────────────────────────── */}
       <section className="rounded-lg border bg-card">
-        <header className="px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <header className="px-4 sm:px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold">
               {isCredit && statementDay ? "Statement" : "Transactions"}
@@ -815,50 +815,89 @@ export default async function CardDetailPage({
             No transactions in this period.
           </p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
-                <th className="px-5 py-2">Date</th>
-                <th className="px-5 py-2">Description</th>
-                <th className="px-5 py-2">Category</th>
-                <th className="px-5 py-2 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            {/* Mobile: stacked card-list — table cells don't fit in <400px */}
+            <ul className="divide-y md:hidden">
               {transactions.map((t) => {
                 const isIncome = t.type === "INCOME";
                 return (
-                  <tr key={t.id} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
-                      {formatDate(t.date)}
-                    </td>
-                    <td className="px-5 py-2.5">
-                      <div className="font-medium truncate">{t.description}</div>
-                    </td>
-                    <td className="px-5 py-2.5">
-                      {t.category?.name ? (
-                        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                          {t.category.name}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td
-                      className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
-                        isIncome
-                          ? "text-emerald-700 dark:text-emerald-400"
-                          : "text-destructive"
-                      }`}
-                    >
-                      {isIncome ? "+" : "−"}
-                      {formatINR(Number(t.amount))}
-                    </td>
-                  </tr>
+                  <li key={t.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">
+                          {t.description}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <span className="tabular-nums">{formatDate(t.date)}</span>
+                          {t.category?.name && (
+                            <>
+                              <span>·</span>
+                              <span className="truncate">{t.category.name}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        className={`text-sm font-semibold tabular-nums whitespace-nowrap shrink-0 ${
+                          isIncome
+                            ? "text-emerald-700 dark:text-emerald-400"
+                            : "text-destructive"
+                        }`}
+                      >
+                        {isIncome ? "+" : "−"}
+                        {formatINR(Number(t.amount))}
+                      </div>
+                    </div>
+                  </li>
                 );
               })}
-            </tbody>
-          </table>
+            </ul>
+            {/* Desktop: full table */}
+            <table className="hidden md:table w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
+                  <th className="px-5 py-2">Date</th>
+                  <th className="px-5 py-2">Description</th>
+                  <th className="px-5 py-2">Category</th>
+                  <th className="px-5 py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map((t) => {
+                  const isIncome = t.type === "INCOME";
+                  return (
+                    <tr key={t.id} className="border-b last:border-0 hover:bg-muted/20">
+                      <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
+                        {formatDate(t.date)}
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <div className="font-medium truncate">{t.description}</div>
+                      </td>
+                      <td className="px-5 py-2.5">
+                        {t.category?.name ? (
+                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            {t.category.name}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
+                          isIncome
+                            ? "text-emerald-700 dark:text-emerald-400"
+                            : "text-destructive"
+                        }`}
+                      >
+                        {isIncome ? "+" : "−"}
+                        {formatINR(Number(t.amount))}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </>
         )}
       </section>
     </div>
@@ -883,11 +922,15 @@ function SubStat({
           ? "text-primary"
           : "";
   return (
-    <div className="rounded-lg border bg-background/60 p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+    <div className="rounded-lg border bg-background/60 p-2.5 sm:p-3 min-w-0">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground truncate">
         {label}
       </div>
-      <div className={`mt-1 text-lg font-semibold tabular-nums ${valueClass}`}>{value}</div>
+      <div
+        className={`mt-1 text-base sm:text-lg font-semibold tabular-nums truncate ${valueClass}`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -907,14 +950,18 @@ function DueStat({
     tone === "loss" ? "text-destructive" : tone === "gain" ? "text-primary" : "";
   return (
     <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <div className="text-[10px] font-semibold uppercase tracking-wider sm:tracking-widest text-muted-foreground">
         {label}
       </div>
-      <div className={`mt-1 text-base font-semibold tabular-nums truncate ${valueClass}`}>
+      <div
+        className={`mt-1 text-sm sm:text-base font-semibold tabular-nums truncate ${valueClass}`}
+      >
         {value}
       </div>
       {hint && (
-        <div className="mt-0.5 text-[11px] text-muted-foreground truncate">{hint}</div>
+        <div className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2 sm:truncate">
+          {hint}
+        </div>
       )}
     </div>
   );
