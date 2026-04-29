@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, Pencil, Trash2, PawPrint } from "lucide-react";
+import { FarmSubNav } from "@/components/layout/farm-sub-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,6 +34,7 @@ export default function LivestockPage() {
 
   return (
     <div className="space-y-6">
+      <FarmSubNav />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Livestock</h1>

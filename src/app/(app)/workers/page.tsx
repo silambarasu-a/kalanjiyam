@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { CalendarDays, HardHat, Pencil, Plus, Trash2 } from "lucide-react";
+import { FarmSubNav } from "@/components/layout/farm-sub-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
@@ -51,6 +52,7 @@ export default function WorkersPage() {
 
   return (
     <div className="space-y-6">
+      <FarmSubNav />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>

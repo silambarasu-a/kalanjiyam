@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { Check, X, Trash2, CalendarDays, Wallet2 } from "lucide-react";
+import { Check, X, Trash2, CalendarDays, Wallet2, Undo2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
@@ -29,6 +29,7 @@ type Balance = {
   balance: number;
   bonuses: number;
   advances: number;
+  repaid: number;
   daysWorked: number;
 };
 type Attendance = {
@@ -47,6 +48,15 @@ type Payment = {
   isBonus: boolean;
   isAdvance: boolean;
   notes: string | null;
+};
+type Repayment = {
+  id: string;
+  amount: number;
+  receivedAt: string;
+  notes: string | null;
+  transactionId: string | null;
+  reversedAt: string | null;
+  reversalReason: string | null;
 };
 type Settlement = {
   id: string;
@@ -72,6 +82,7 @@ type WorkerDetail = {
   balance: Balance;
   attendance: Attendance[];
   payments: Payment[];
+  repayments: Repayment[];
   settlements: Settlement[];
 };
 type Account = {
@@ -103,7 +114,12 @@ export default function WorkerDetailPage() {
 
   const [attendanceOpen, setAttendanceOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
+  const [returnOpen, setReturnOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState<Settlement | null>(null);
+
+  const outstandingAdvance = data
+    ? Math.max(0, (data.balance.advances ?? 0) - (data.balance.repaid ?? 0))
+    : 0;
 
   if (error) {
     return (
@@ -132,13 +148,22 @@ export default function WorkerDetailPage() {
               {data.worker.settlementCadence}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => setAttendanceOpen(true)} className="gap-1.5">
               <CalendarDays className="h-4 w-4" /> Attendance
             </Button>
             <Button onClick={() => setPayOpen(true)} className="gap-1.5">
               <Wallet2 className="h-4 w-4" /> Pay
             </Button>
+            {outstandingAdvance > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => setReturnOpen(true)}
+                className="gap-1.5"
+              >
+                <Undo2 className="h-4 w-4" /> Return advance
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -158,7 +183,15 @@ export default function WorkerDetailPage() {
           highlight
         />
         <Stat label="Earned" value={formatINR(data.balance.earned)} />
-        <Stat label="Paid" value={formatINR(data.balance.paidFromWages)} />
+        <Stat
+          label="Paid (net of returns)"
+          value={formatINR(data.balance.paidFromWages)}
+          hint={
+            data.balance.repaid > 0
+              ? `${formatINR(data.balance.repaid)} returned`
+              : undefined
+          }
+        />
         <Stat
           label="Bonuses"
           value={formatINR(data.balance.bonuses)}
@@ -294,6 +327,62 @@ export default function WorkerDetailPage() {
         </div>
       </section>
 
+      {data.repayments.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold mb-2">Advance returns</h2>
+          <div className="rounded-xl border bg-card divide-y">
+            {data.repayments.map((r) => (
+              <div key={r.id} className="flex items-center gap-3 px-5 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">{formatDate(r.receivedAt)}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {r.reversedAt
+                      ? `Reversed${r.reversalReason ? ` · ${r.reversalReason}` : ""}`
+                      : "Returned"}
+                    {r.notes ? ` · ${r.notes}` : ""}
+                  </div>
+                </div>
+                <div
+                  className={`text-sm font-semibold ${r.reversedAt ? "line-through text-muted-foreground" : ""}`}
+                >
+                  {formatINR(r.amount)}
+                </div>
+                {!r.reversedAt && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={async () => {
+                      const reason = prompt("Reason for reversing this return?");
+                      if (!reason || reason.trim().length < 3) return;
+                      const res = await fetch(
+                        `/api/advance-repayments/${r.id}/reverse`,
+                        {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({ reason: reason.trim() }),
+                        },
+                      );
+                      const body = await res.json().catch(() => ({}));
+                      if (!res.ok) {
+                        toast.error(body.error ?? "Failed");
+                        return;
+                      }
+                      toast.success("Reversed");
+                      globalMutate(`/api/workers/${id}`);
+                      mutateBalances();
+                    }}
+                    aria-label="Reverse"
+                    title="Reverse this return (admin only)"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <MarkAttendanceModal
         open={attendanceOpen}
         onOpenChange={setAttendanceOpen}
@@ -314,6 +403,14 @@ export default function WorkerDetailPage() {
         accounts={accounts}
         open={payOpen}
         onClose={() => setPayOpen(false)}
+      />
+      <ReturnAdvanceDialog
+        workerId={id ?? ""}
+        workerName={data.worker.name}
+        outstanding={outstandingAdvance}
+        accounts={accounts}
+        open={returnOpen}
+        onClose={() => setReturnOpen(false)}
       />
       <SettleDialog
         settlement={settleOpen}
@@ -598,6 +695,143 @@ function SettleDialog({
           </Button>
           <Button onClick={submit} disabled={submitting}>
             Confirm
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReturnAdvanceDialog({
+  workerId,
+  workerName,
+  outstanding,
+  accounts,
+  open,
+  onClose,
+}: {
+  workerId: string;
+  workerName: string;
+  outstanding: number;
+  accounts: Account[];
+  open: boolean;
+  onClose: () => void;
+}) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [amount, setAmount] = useState("");
+  const [receivedAt, setReceivedAt] = useState(today);
+  const [accountId, setAccountId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
+    setAmount("");
+    setReceivedAt(today);
+    setAccountId("");
+    setNotes("");
+    setError(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, today]);
+
+  async function submit() {
+    setError(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter an amount");
+      return;
+    }
+    if (amt > outstanding + 0.005) {
+      setError(`Cannot exceed outstanding advance (${formatINR(outstanding)})`);
+      return;
+    }
+    if (!accountId) {
+      setError("Pick where the cash landed");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/advance-repayments", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `${workerId}:${receivedAt}:${amt}:${crypto.randomUUID()}`,
+        },
+        body: JSON.stringify({
+          workerId,
+          amount: amt,
+          receivedAt,
+          accountId,
+          notes: notes.trim() || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) setError(body.error ?? "Failed");
+      else {
+        toast.success("Advance return recorded");
+        globalMutate(`/api/workers/${workerId}`);
+        globalMutate("/api/workers");
+        await mutateBalances();
+        onClose();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Return advance · {workerName}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Worker is returning cash against a prior advance. Outstanding:{" "}
+            <strong>{formatINR(outstanding)}</strong>. The amount lands in the chosen
+            account and reverses the original wage outflow on the books.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">Amount (₹)</span>
+              <AmountInput value={amount} onChange={setAmount} autoFocus />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">Date</span>
+              <DateInput
+                value={receivedAt}
+                onChange={(e) => setReceivedAt(e.target.value)}
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs font-medium">Receive into</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={accounts.map((a) => buildAccountOption(a, 0))}
+              />
+            </div>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium">Notes (optional)</span>
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={500}
+            />
+          </label>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={submitting}>
+            Record return
           </Button>
         </DialogFooter>
       </DialogContent>

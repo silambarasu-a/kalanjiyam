@@ -58,14 +58,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Farm",
     items: [
+      { label: "Overview", href: "/farm", feature: "crops", icon: "crops" },
       { label: "Crops", href: "/crops", feature: "crops", icon: "crops" },
       { label: "Livestock", href: "/livestock", feature: "livestock", icon: "livestock" },
       { label: "Leases", href: "/leases", feature: "leases", icon: "leases" },
-    ],
-  },
-  {
-    label: "Labour",
-    items: [
       { label: "Workers", href: "/workers", feature: "workers", icon: "workers" },
       { label: "Wages & Attendance", href: "/wages", feature: "wages", icon: "wages" },
     ],
@@ -102,5 +98,16 @@ export const NAV_GROUPS: NavGroup[] = [
 export const MOBILE_PRIMARY: { label: string; href: string; icon: IconName; feature: Feature }[] = [
   { label: "Dashboard", href: "/dashboard", icon: "dashboard", feature: "dashboard" },
   { label: "Transactions", href: "/transactions", icon: "transactions", feature: "transactions" },
-  { label: "Farm", href: "/crops", icon: "crops", feature: "crops" },
+  { label: "Farm", href: "/farm", icon: "crops", feature: "crops" },
+];
+
+// Subsections shown as a sticky pill-strip at the top of every Farm page.
+// Order is the corporate scan-order: planning → operations → people → money.
+export const FARM_SUBSECTIONS: { label: string; href: string; feature: Feature }[] = [
+  { label: "Overview", href: "/farm", feature: "crops" },
+  { label: "Crops", href: "/crops", feature: "crops" },
+  { label: "Livestock", href: "/livestock", feature: "livestock" },
+  { label: "Leases", href: "/leases", feature: "leases" },
+  { label: "Workers", href: "/workers", feature: "workers" },
+  { label: "Wages", href: "/wages", feature: "wages" },
 ];

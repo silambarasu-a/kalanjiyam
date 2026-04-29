@@ -1,8 +1,10 @@
 "use client";
 import { toast } from "sonner";
 
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ArrowRight, Plus, Trash2, User } from "lucide-react";
+import { ArrowRight, Plus, Trash2, User, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
@@ -44,8 +46,22 @@ function PartyLabel({
 }
 
 export default function TransfersPage() {
-  const { data, isLoading } = useSWR<{ transfers: Transfer[] }>("/api/transfers", fetcher);
+  const search = useSearchParams();
+  const contactId = search?.get("contact") ?? null;
+  const url = contactId
+    ? `/api/transfers?contact=${encodeURIComponent(contactId)}`
+    : "/api/transfers";
+  const { data, isLoading } = useSWR<{ transfers: Transfer[] }>(url, fetcher);
   const { openDialog } = useTransactionDialog();
+
+  const contactName = (() => {
+    if (!contactId || !data?.transfers) return null;
+    for (const t of data.transfers) {
+      if (t.fromContact?.id === contactId) return t.fromContact.name;
+      if (t.toContact?.id === contactId) return t.toContact.name;
+    }
+    return null;
+  })();
 
   return (
     <div className="space-y-6">
@@ -60,6 +76,20 @@ export default function TransfersPage() {
           <Plus className="h-4 w-4" /> New transfer
         </Button>
       </div>
+
+      {contactId && (
+        <div className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs">
+          <span className="text-muted-foreground">Filtered by contact:</span>
+          <span className="font-medium">{contactName ?? "(loading)"}</span>
+          <Link
+            href="/transfers"
+            aria-label="Clear filter"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </Link>
+        </div>
+      )}
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 

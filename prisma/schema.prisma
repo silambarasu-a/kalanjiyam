@@ -263,6 +263,8 @@ model User {
   editedTransactions      Transaction[]   @relation("TransactionEditedBy")
   wagePayments            WagePayment[]
   wageSettlements         WageSettlement[]
+  receivedAdvanceRepayments AdvanceRepayment[] @relation("AdvanceRepaymentReceiver")
+  reversedAdvanceRepayments AdvanceRepayment[] @relation("AdvanceRepaymentReverser")
   transfers               Transfer[]      @relation("TransferAuthor")
   auditLogs               AuditLog[]
   sentWorkspaceInvites    WorkspaceInvite[] @relation("WorkspaceInviteInviter")
@@ -299,6 +301,7 @@ model Workspace {
   livestock            Livestock[]
   leases               Lease[]
   workers              Worker[]
+  advanceRepayments    AdvanceRepayment[]
   loans                Loan[]
   investments          Investment[]
   investmentReminders  InvestmentReminder[]
@@ -617,6 +620,7 @@ model Transaction {
   updatedAt         DateTime          @updatedAt
 
   wagePayment           WagePayment?
+  advanceRepayment      AdvanceRepayment?
   livestockEvent        LivestockEvent?
   feedLog               FeedLog?
   vaccinationLog        VaccinationLog?
@@ -1074,10 +1078,11 @@ model Worker {
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 
-  attendance      Attendance[]
-  wagePayments    WagePayment[]
-  wageSettlements WageSettlement[]
-  transactions    Transaction[]
+  attendance         Attendance[]
+  wagePayments       WagePayment[]
+  wageSettlements    WageSettlement[]
+  advanceRepayments  AdvanceRepayment[]
+  transactions       Transaction[]
 
   @@index([workspaceId, active])
 }
@@ -1118,6 +1123,37 @@ model WagePayment {
   createdAt     DateTime     @default(now())
 
   @@index([workerId, paidAt])
+}
+
+// Money returned by a worker against a prior advance. Treated as a
+// contra-expense (linked Transaction is type=EXPENSE, kind=WAGE, amount<0)
+// so account balances and wage-expense rollups net automatically.
+// Append-only: deletes happen via reversal entries (reversedAt + linked
+// pair), never DELETE.
+model AdvanceRepayment {
+  id                String       @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workerId          String
+  worker            Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  amount            Decimal      @db.Decimal(12, 2)
+  receivedAt        DateTime
+  receivedByUserId  String
+  receivedByUser    User         @relation("AdvanceRepaymentReceiver", fields: [receivedByUserId], references: [id], onDelete: Restrict)
+  notes             String?
+  idempotencyKey    String?
+  transactionId     String?      @unique
+  transaction       Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  reversedAt        DateTime?
+  reversedByUserId  String?
+  reversedByUser    User?        @relation("AdvanceRepaymentReverser", fields: [reversedByUserId], references: [id], onDelete: SetNull)
+  reversalReason    String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([workerId, idempotencyKey])
+  @@index([workspaceId, receivedAt])
+  @@index([workerId, receivedAt])
 }
 
 model WageSettlement {

@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
@@ -31,10 +32,35 @@ type Charge = {
   origin: { id: string; description: string; date: string } | null;
   settlements: Settlement[];
 };
+type Transfer = {
+  id: string;
+  amount: number;
+  date: string;
+  notes: string | null;
+  direction: "TO_CONTACT" | "FROM_CONTACT";
+  account: { id: string; name: string } | null;
+};
+type SpentExpense = {
+  id: string;
+  amount: number;
+  date: string;
+  description: string;
+  kind: "NONE" | "GIFT" | "RECOVERABLE";
+  account: { id: string; name: string } | null;
+};
 type Ledger = {
   member: { id: string; name: string };
-  totals: { outstanding: number; settled: number };
+  totals: {
+    outstanding: number;
+    settled: number;
+    sentToContact: number;
+    receivedFromContact: number;
+    netTransferred: number;
+    spentOnThem: number;
+  };
   charges: Charge[];
+  transfers: Transfer[];
+  expenses: SpentExpense[];
 };
 type Account = {
   id: string;
@@ -53,6 +79,7 @@ export default function MemberLedgerDetail() {
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
+  const [transferOpen, setTransferOpen] = useState<"SEND" | "RECEIVE" | null>(null);
 
   if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
@@ -68,7 +95,22 @@ export default function MemberLedgerDetail() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Outstanding" value={formatINR(data.totals.outstanding)} highlight />
         <Stat label="Settled to date" value={formatINR(data.totals.settled)} />
-        <Stat label="Charges" value={String(data.charges.length)} />
+        <Stat
+          label="Net transferred"
+          value={formatINR(Math.abs(data.totals.netTransferred))}
+          hint={
+            data.totals.netTransferred > 0
+              ? "you sent more"
+              : data.totals.netTransferred < 0
+                ? "they sent more"
+                : "balanced"
+          }
+        />
+        <Stat
+          label="Spent on them"
+          value={formatINR(data.totals.spentOnThem)}
+          hint="not recovered"
+        />
       </div>
 
       <div className="rounded-lg border bg-card divide-y">
@@ -124,6 +166,105 @@ export default function MemberLedgerDetail() {
         )}
       </div>
 
+      {data.expenses.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold mb-2">Expenses on their behalf</h2>
+          <p className="text-xs text-muted-foreground mb-2">
+            Spent on this contact without marking as recoverable. Informational
+            only — not in Outstanding.
+          </p>
+          <div className="rounded-lg border bg-card divide-y">
+            {data.expenses.map((e) => (
+              <div key={e.id} className="flex items-center gap-3 px-5 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{e.description}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {formatDate(e.date)}
+                    {e.account ? ` · ${e.account.name}` : ""}
+                    {e.kind === "GIFT" ? " · Gift" : ""}
+                  </div>
+                </div>
+                <div className="text-sm font-semibold tabular-nums">
+                  {formatINR(e.amount)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold">Transfers</h2>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setTransferOpen("SEND")}
+              className="gap-1.5"
+            >
+              <ArrowUpRight className="h-3.5 w-3.5" /> Send
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setTransferOpen("RECEIVE")}
+              className="gap-1.5"
+            >
+              <ArrowDownLeft className="h-3.5 w-3.5" /> Receive
+            </Button>
+            {data.transfers.length > 0 && (
+              <Link
+                href={`/transfers?contact=${id}`}
+                className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground self-center px-2"
+              >
+                View all
+              </Link>
+            )}
+          </div>
+        </div>
+        <div className="rounded-lg border bg-card divide-y">
+          {data.transfers.map((t) => {
+            const out = t.direction === "TO_CONTACT";
+            return (
+              <div key={t.id} className="flex items-center gap-3 px-5 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">{formatDate(t.date)}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {out ? "You sent" : "They sent"}
+                    {t.account ? ` · ${t.account.name}` : ""}
+                    {t.notes ? ` · ${t.notes}` : ""}
+                  </div>
+                </div>
+                <div
+                  className={`text-sm font-semibold tabular-nums ${
+                    out
+                      ? "text-destructive"
+                      : "text-emerald-700 dark:text-emerald-400"
+                  }`}
+                >
+                  {out ? "−" : "+"}
+                  {formatINR(t.amount)}
+                </div>
+              </div>
+            );
+          })}
+          {data.transfers.length === 0 && (
+            <div className="px-5 py-6 text-sm text-muted-foreground text-center">
+              No transfers with this contact yet.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <TransferDialog
+        contactId={id ?? ""}
+        contactName={data.member.name}
+        direction={transferOpen}
+        accounts={accounts}
+        onClose={() => setTransferOpen(null)}
+      />
+
       <SettleDialog
         charge={settleCharge}
         accounts={accounts}
@@ -136,10 +277,12 @@ export default function MemberLedgerDetail() {
 function Stat({
   label,
   value,
+  hint,
   highlight,
 }: {
   label: string;
   value: string;
+  hint?: string;
   highlight?: boolean;
 }) {
   return (
@@ -148,6 +291,7 @@ function Stat({
         {label}
       </div>
       <div className={`mt-1 font-semibold ${highlight ? "text-2xl" : "text-lg"}`}>{value}</div>
+      {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
@@ -257,6 +401,152 @@ function SettleDialog({
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={submit} disabled={submitting}>
             {submitting ? "Saving…" : "Record"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TransferDialog({
+  contactId,
+  contactName,
+  direction,
+  accounts,
+  onClose,
+}: {
+  contactId: string;
+  contactName: string;
+  direction: "SEND" | "RECEIVE" | null;
+  accounts: Account[];
+  onClose: () => void;
+}) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(today);
+  const [accountId, setAccountId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [expectBack, setExpectBack] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!direction) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reset on dialog open */
+    setAmount("");
+    setDate(today);
+    setAccountId("");
+    setNotes("");
+    setExpectBack(false);
+    setError(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [direction, today]);
+
+  async function submit() {
+    if (!direction) return;
+    setError(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter an amount");
+      return;
+    }
+    if (!accountId) {
+      setError(direction === "SEND" ? "Pick an account to send from" : "Pick the receiving account");
+      return;
+    }
+    const body =
+      direction === "SEND"
+        ? {
+            fromAccountId: accountId,
+            toContactId: contactId,
+            amount: amt,
+            date,
+            notes: notes.trim() || undefined,
+            expectBack,
+          }
+        : { fromContactId: contactId, toAccountId: accountId, amount: amt, date, notes: notes.trim() || undefined };
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/transfers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const respBody = await res.json();
+      if (!res.ok) setError(respBody.error ?? "Failed");
+      else {
+        toast.success(direction === "SEND" ? "Transfer sent" : "Transfer received");
+        globalMutate(`/api/contacts/${contactId}/ledger`);
+        await mutateBalances();
+        onClose();
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const verb = direction === "SEND" ? "Send to" : "Receive from";
+  const accountLabel = direction === "SEND" ? "Send from" : "Receive into";
+
+  return (
+    <Dialog open={direction !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {verb} {contactName}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">Amount (₹)</span>
+              <AmountInput value={amount} onChange={setAmount} autoFocus />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">Date</span>
+              <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs font-medium">{accountLabel}</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={accounts.map((a) => buildAccountOption(a, Number(amount) || 0))}
+              />
+            </div>
+          </label>
+          {direction === "SEND" && (
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-md border bg-card p-3">
+              <input
+                type="checkbox"
+                checked={expectBack}
+                onChange={(e) => setExpectBack(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium block">
+                  Expect this back from {contactName}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {expectBack
+                    ? "Adds to their Outstanding — settle later from this page."
+                    : "Just a transfer, no balance impact."}
+                </span>
+              </div>
+            </label>
+          )}
+          <label className="block">
+            <span className="text-xs font-medium">Notes (optional)</span>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
+          </label>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={submitting}>
+            {submitting ? "Saving…" : "Record transfer"}
           </Button>
         </DialogFooter>
       </DialogContent>
