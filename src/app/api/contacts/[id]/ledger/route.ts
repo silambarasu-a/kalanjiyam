@@ -22,14 +22,47 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const charges = await prisma.memberCharge.findMany({
-      where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
-      orderBy: { createdAt: "desc" },
-      include: {
-        originTransaction: { select: { id: true, description: true, date: true } },
-        settlements: { orderBy: { paidAt: "desc" } },
-      },
-    });
+    const [charges, transfers, expenses] = await Promise.all([
+      prisma.memberCharge.findMany({
+        where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
+        orderBy: { createdAt: "desc" },
+        include: {
+          originTransaction: { select: { id: true, description: true, date: true } },
+          settlements: { orderBy: { paidAt: "desc" } },
+        },
+      }),
+      prisma.transfer.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ fromContactId: id }, { toContactId: id }],
+        },
+        orderBy: { date: "desc" },
+        include: {
+          fromAccount: { select: { id: true, name: true } },
+          toAccount: { select: { id: true, name: true } },
+        },
+      }),
+      // Spent-on-behalf expenses that the user is NOT recovering. Recoverable
+      // ones already appear via the Charges list (originTransaction).
+      prisma.transaction.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          beneficiaryContactId: id,
+          type: "EXPENSE",
+          memberChargeType: { in: ["NONE", "GIFT"] },
+        },
+        orderBy: { date: "desc" },
+        select: {
+          id: true,
+          amount: true,
+          date: true,
+          description: true,
+          memberChargeType: true,
+          account: { select: { id: true, name: true } },
+          card: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
 
     const totalOutstanding = charges.reduce(
       (sum, c) => sum + (c.status !== "WRITTEN_OFF" ? Number(c.amount) - Number(c.settledAmount) : 0),
@@ -37,9 +70,26 @@ export async function GET(
     );
     const totalSettled = charges.reduce((sum, c) => sum + Number(c.settledAmount), 0);
 
+    let sentToContact = 0;
+    let receivedFromContact = 0;
+    for (const t of transfers) {
+      const amt = Number(t.amount);
+      if (t.toContactId === id) sentToContact += amt;
+      if (t.fromContactId === id) receivedFromContact += amt;
+    }
+    const netTransferred = round2(sentToContact - receivedFromContact);
+    const spentOnThem = expenses.reduce((s, e) => s + Number(e.amount), 0);
+
     return NextResponse.json({
       member: { id: member.id, name: member.name },
-      totals: { outstanding: totalOutstanding, settled: totalSettled },
+      totals: {
+        outstanding: round2(totalOutstanding),
+        settled: round2(totalSettled),
+        sentToContact: round2(sentToContact),
+        receivedFromContact: round2(receivedFromContact),
+        netTransferred,
+        spentOnThem: round2(spentOnThem),
+      },
       charges: charges.map((c) => ({
         id: c.id,
         amount: Number(c.amount),
@@ -55,8 +105,35 @@ export async function GET(
           notes: s.notes,
         })),
       })),
+      transfers: transfers.map((t) => ({
+        id: t.id,
+        amount: Number(t.amount),
+        date: t.date.toISOString(),
+        notes: t.notes,
+        direction: t.toContactId === id ? "TO_CONTACT" : "FROM_CONTACT",
+        account:
+          t.toContactId === id
+            ? t.fromAccount
+              ? { id: t.fromAccount.id, name: t.fromAccount.name }
+              : null
+            : t.toAccount
+              ? { id: t.toAccount.id, name: t.toAccount.name }
+              : null,
+      })),
+      expenses: expenses.map((e) => ({
+        id: e.id,
+        amount: Number(e.amount),
+        date: e.date.toISOString(),
+        description: e.description,
+        kind: e.memberChargeType,
+        account: e.account ?? e.card,
+      })),
     });
   } catch (e) {
     return err(e);
   }
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

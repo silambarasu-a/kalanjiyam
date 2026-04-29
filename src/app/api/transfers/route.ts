@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { transferCreateSchema } from "@/lib/validators-domain";
-import { TransactionType } from "@/generated/prisma/client";
+import { TransactionType, MemberChargeStatus, MemberChargeType } from "@/generated/prisma/client";
 import {
   findStatementForPayment,
   materializeStatementsFor,
@@ -19,12 +19,15 @@ function err(e: unknown) {
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const ctx = await requireWorkspace("transfers", "read");
     const session = await auth();
+    const url = new URL(request.url);
+    const contactId = url.searchParams.get("contact");
 
     const where: Record<string, unknown> = { workspaceId: ctx.workspaceId };
+    const andClauses: Record<string, unknown>[] = [];
     if (ctx.ownOnly) {
       const ownAccountIds = await prisma.account
         .findMany({
@@ -35,12 +38,29 @@ export async function GET() {
           select: { id: true },
         })
         .then((r) => r.map((a) => a.id));
-      where.OR = [
-        { userId: ctx.userId },
-        { fromAccountId: { in: ownAccountIds } },
-        { toAccountId: { in: ownAccountIds } },
-      ];
+      andClauses.push({
+        OR: [
+          { userId: ctx.userId },
+          { fromAccountId: { in: ownAccountIds } },
+          { toAccountId: { in: ownAccountIds } },
+        ],
+      });
     }
+    if (contactId) {
+      // Verify the contact belongs to this workspace before applying the
+      // filter — prevents cross-workspace ID probing via the query string.
+      const contact = await prisma.contact.findUnique({
+        where: { id: contactId },
+        select: { workspaceId: true },
+      });
+      if (!contact || contact.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
+      andClauses.push({
+        OR: [{ fromContactId: contactId }, { toContactId: contactId }],
+      });
+    }
+    if (andClauses.length > 0) where.AND = andClauses;
 
     const transfers = await prisma.transfer.findMany({
       where,
@@ -90,6 +110,7 @@ export async function POST(request: Request) {
       amount,
       date: dateStr,
       notes,
+      expectBack,
     } = parsed.data;
 
     // Resolve each side. The validator guarantees exactly one of (account,
@@ -191,7 +212,23 @@ export async function POST(request: Request) {
         });
       } else if (fromAccount && toContact) {
         // Outflow: my account → person. Single leg pinned to the member as
-        // beneficiary so member-centric reports pick it up.
+        // beneficiary so member-centric reports pick it up. When the user
+        // marked the transfer as recoverable, create a MemberCharge first
+        // and link the leg to it so the contact's Outstanding stat picks up
+        // the amount and the existing settle flow can clear it.
+        let memberChargeId: string | null = null;
+        if (expectBack) {
+          const mc = await tx.memberCharge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              beneficiaryContactId: toContact.id,
+              amount,
+              status: MemberChargeStatus.OUTSTANDING,
+              notes: notes ?? null,
+            },
+          });
+          memberChargeId = mc.id;
+        }
         await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -201,6 +238,10 @@ export async function POST(request: Request) {
             date,
             accountId: fromAccount.id,
             beneficiaryContactId: toContact.id,
+            memberChargeType: expectBack
+              ? MemberChargeType.RECOVERABLE
+              : MemberChargeType.NONE,
+            memberChargeId,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,

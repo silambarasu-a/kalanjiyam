@@ -8,12 +8,17 @@ import { prisma } from "@/lib/prisma";
  *   - Earnings = Σ attendance.rate × attendance.quantity (piece-rate) if both
  *     are set, else attendance.dailyRateOverride ?? worker.dailyRate for each
  *     present=true day.
- *   - paidFromWages = Σ wage_payment.amount where !isBonus (advances count).
+ *   - paidFromWages = Σ wage_payment(non-bonus) − Σ live advance_repayment.
+ *     Repayments net the wage outflow rather than adding to earnings, so a
+ *     refunded advance returns the worker's "owed" balance to where it was.
  *   - balance = earnings − paidFromWages. Positive means owed to worker.
  *   - bonuses = Σ wage_payment.amount where isBonus. Tracked separately, never
  *     offsets the wage balance.
  *   - advances = Σ wage_payment.amount where isAdvance. Informational; already
  *     included in paidFromWages.
+ *   - repaid = Σ live advance_repayment.amount. Already netted into
+ *     paidFromWages; surfaced separately for UI.
+ *   - Reversed repayments (reversedAt != null) are excluded from all sums.
  */
 export type WorkerBalance = {
   workerId: string;
@@ -22,6 +27,7 @@ export type WorkerBalance = {
   balance: number;
   bonuses: number;
   advances: number;
+  repaid: number;
   daysWorked: number;
 };
 
@@ -44,8 +50,12 @@ export async function computeWorkerBalance(
     range?.start || range?.end
       ? { paidAt: { ...(range?.start ? { gte: range.start } : {}), ...(range?.end ? { lte: range.end } : {}) } }
       : {};
+  const receivedAtFilter =
+    range?.start || range?.end
+      ? { receivedAt: { ...(range?.start ? { gte: range.start } : {}), ...(range?.end ? { lte: range.end } : {}) } }
+      : {};
 
-  const [attendance, payments] = await Promise.all([
+  const [attendance, payments, repayments] = await Promise.all([
     prisma.attendance.findMany({
       where: { workerId, present: true, ...dateFilter },
       select: { dailyRateOverride: true, quantity: true, rate: true },
@@ -53,6 +63,10 @@ export async function computeWorkerBalance(
     prisma.wagePayment.findMany({
       where: { workerId, ...paidAtFilter },
       select: { amount: true, isBonus: true, isAdvance: true },
+    }),
+    prisma.advanceRepayment.findMany({
+      where: { workerId, reversedAt: null, ...receivedAtFilter },
+      select: { amount: true },
     }),
   ]);
 
@@ -64,7 +78,7 @@ export async function computeWorkerBalance(
     return sum + defaultRate;
   }, 0);
 
-  let paidFromWages = 0;
+  let paidGross = 0;
   let bonuses = 0;
   let advances = 0;
   for (const p of payments) {
@@ -72,10 +86,12 @@ export async function computeWorkerBalance(
     if (p.isBonus) {
       bonuses += amt;
     } else {
-      paidFromWages += amt;
+      paidGross += amt;
       if (p.isAdvance) advances += amt;
     }
   }
+  const repaid = repayments.reduce((s, r) => s + Number(r.amount), 0);
+  const paidFromWages = paidGross - repaid;
 
   return {
     workerId,
@@ -84,6 +100,7 @@ export async function computeWorkerBalance(
     balance: round2(earned - paidFromWages),
     bonuses: round2(bonuses),
     advances: round2(advances),
+    repaid: round2(repaid),
     daysWorked: attendance.length,
   };
 }

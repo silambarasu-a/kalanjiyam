@@ -126,7 +126,19 @@ export const transferCreateSchema = z
     amount: z.number().positive(),
     date: z.string(),
     notes: z.string().trim().max(500).optional(),
+    /** Marks the transfer as a recoverable outflow: creates a MemberCharge
+     *  against the destination contact so the amount lands in their
+     *  Outstanding stat. Only valid when sending FROM a workspace account
+     *  TO a contact. */
+    expectBack: z.boolean().optional().default(false),
   })
+  .refine(
+    (d) => !d.expectBack || (!!d.fromAccountId && !!d.toContactId),
+    {
+      message: "Expect-back only applies when sending from your account to a contact",
+      path: ["expectBack"],
+    },
+  )
   .refine((d) => !!d.fromAccountId !== !!d.fromContactId, {
     message: "Pick a source account or a person — exactly one",
     path: ["fromAccountId"],
@@ -313,6 +325,29 @@ export const wagePaymentCreateSchema = z.object({
   notes: z.string().trim().max(500).optional(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
+});
+
+export const advanceRepaymentCreateSchema = z
+  .object({
+    workerId: z.string().uuid(),
+    amount: z.number().positive().multipleOf(0.01).max(10_000_000),
+    receivedAt: z.string(),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    notes: z.string().trim().max(500).optional(),
+    idempotencyKey: z.string().trim().min(8).max(128).optional(),
+  })
+  .refine((d) => !!d.accountId || !!d.cardId, {
+    message: "Pick an account or a card to receive into",
+    path: ["accountId"],
+  })
+  .refine((d) => new Date(d.receivedAt) <= new Date(Date.now() + 24 * 60 * 60 * 1000), {
+    message: "Date cannot be in the future",
+    path: ["receivedAt"],
+  });
+
+export const advanceRepaymentReverseSchema = z.object({
+  reason: z.string().trim().min(3).max(200),
 });
 
 export const wageSettlementSettleSchema = z.object({

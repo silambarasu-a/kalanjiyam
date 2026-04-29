@@ -531,41 +531,41 @@ function IncomeExpenseForm({
       )}
 
       {type === "EXPENSE" && (
-        <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer select-none px-4 py-2 text-sm">
-            Spent for a contact?
-          </summary>
-          <div className="px-4 pb-4 pt-2 space-y-2">
-            <NativeSelect
-              value={beneficiaryContactId}
-              onChange={setBeneficiaryMemberId}
-              placeholder="— pick member —"
-              options={contacts.map((m) => ({ value: m.id, label: m.name }))}
-            />
-            {beneficiaryContactId && (
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={chargeFlag === "RECOVERABLE"}
-                  onChange={(e) =>
-                    setChargeFlag(e.target.checked ? "RECOVERABLE" : "NONE")
-                  }
-                  className="mt-0.5 h-4 w-4 accent-primary"
-                />
-                <div className="space-y-0.5">
-                  <span className="text-sm font-medium block">
-                    Recover this from {contacts.find((m) => m.id === beneficiaryContactId)?.name ?? "them"}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {chargeFlag === "RECOVERABLE"
-                      ? "Adds to their owed balance — settle later in the Member Ledger."
-                      : "Just tagged for reporting; no balance impact."}
-                  </span>
-                </div>
-              </label>
-            )}
+        <div className="rounded-md border bg-card p-4 space-y-3">
+          <div>
+            <span className="text-xs font-medium">Spent for a contact?</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={beneficiaryContactId}
+                onChange={setBeneficiaryMemberId}
+                placeholder="— optional, pick a contact —"
+                options={contacts.map((m) => ({ value: m.id, label: m.name }))}
+              />
+            </div>
           </div>
-        </details>
+          {beneficiaryContactId && (
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={chargeFlag === "RECOVERABLE"}
+                onChange={(e) =>
+                  setChargeFlag(e.target.checked ? "RECOVERABLE" : "NONE")
+                }
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium block">
+                  Recover this from {contacts.find((m) => m.id === beneficiaryContactId)?.name ?? "them"}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {chargeFlag === "RECOVERABLE"
+                    ? "Adds to their Outstanding — settle later from the contact page."
+                    : "Just tagged for reporting; no balance impact."}
+                </span>
+              </div>
+            </label>
+          )}
+        </div>
       )}
 
       <label className="block">
@@ -748,6 +748,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
+  const [expectBack, setExpectBack] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -827,6 +828,8 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           amount: amt,
           date,
           notes: notes.trim() || undefined,
+          expectBack:
+            destinationKind === "MEMBER" && direction === "SENT" && expectBack,
         }),
       });
       const body = await res.json();
@@ -1035,6 +1038,26 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
       </div>
+      {destinationKind === "MEMBER" && direction === "SENT" && (
+        <label className="flex items-start gap-2.5 cursor-pointer rounded-md border bg-card p-3">
+          <input
+            type="checkbox"
+            checked={expectBack}
+            onChange={(e) => setExpectBack(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-primary"
+          />
+          <div className="space-y-0.5">
+            <span className="text-sm font-medium block">
+              Expect this back from {personName.trim() || "them"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {expectBack
+                ? "Adds to their Outstanding — settle later from the contact page."
+                : "Just a transfer, no balance impact."}
+            </span>
+          </div>
+        </label>
+      )}
       <label className="block">
         <span className="text-xs text-muted-foreground">Notes</span>
         <Input

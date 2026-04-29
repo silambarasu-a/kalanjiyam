@@ -22,7 +22,7 @@ export async function GET(
     if (!worker || worker.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const [balance, attendance, payments, settlements] = await Promise.all([
+    const [balance, attendance, payments, repayments, settlements] = await Promise.all([
       computeWorkerBalance(id),
       prisma.attendance.findMany({
         where: { workerId: id },
@@ -32,6 +32,11 @@ export async function GET(
       prisma.wagePayment.findMany({
         where: { workerId: id },
         orderBy: { paidAt: "desc" },
+        take: 30,
+      }),
+      prisma.advanceRepayment.findMany({
+        where: { workerId: id },
+        orderBy: { receivedAt: "desc" },
         take: 30,
       }),
       prisma.wageSettlement.findMany({
@@ -71,6 +76,15 @@ export async function GET(
         isAdvance: p.isAdvance,
         notes: p.notes,
         transactionId: p.transactionId,
+      })),
+      repayments: repayments.map((r) => ({
+        id: r.id,
+        amount: Number(r.amount),
+        receivedAt: r.receivedAt.toISOString(),
+        notes: r.notes,
+        transactionId: r.transactionId,
+        reversedAt: r.reversedAt?.toISOString() ?? null,
+        reversalReason: r.reversalReason,
       })),
       settlements: settlements.map((s) => ({
         id: s.id,

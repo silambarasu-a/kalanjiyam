@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { CalendarDays, CheckCircle2, Coins } from "lucide-react";
+import { FarmSubNav } from "@/components/layout/farm-sub-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -239,6 +240,7 @@ export default function WagesPage() {
 
   return (
     <div className="space-y-6">
+      <FarmSubNav />
       <div>
         <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-2">
           Farm Activity

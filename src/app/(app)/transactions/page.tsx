@@ -90,21 +90,23 @@ export default function TransactionsPage() {
               </thead>
               <tbody>
                 {(data?.transactions ?? []).map((t) => {
+                  // Negative-amount EXPENSE = contra-expense (e.g. wage
+                  // advance return). Treat as inflow: green, "+", abs value.
+                  const isInflow =
+                    t.type === "INCOME" ||
+                    (t.type === "EXPENSE" && t.amount < 0);
                   const Icon = t.transferId
                     ? ArrowLeftRight
-                    : t.type === "INCOME"
+                    : isInflow
                       ? ArrowDownLeft
                       : ArrowUpRight;
-                  const sign = t.transferId
-                    ? ""
-                    : t.type === "INCOME"
-                      ? "+"
-                      : "−";
+                  const sign = t.transferId ? "" : isInflow ? "+" : "−";
                   const color = t.transferId
                     ? "text-muted-foreground"
-                    : t.type === "INCOME"
+                    : isInflow
                       ? "text-emerald-700 dark:text-emerald-400"
                       : "text-destructive";
+                  const displayAmount = Math.abs(t.amount);
                   const accountLabel = t.account?.name ?? t.card?.name ?? "—";
                   return (
                     <tr
@@ -141,7 +143,7 @@ export default function TransactionsPage() {
                         className={`px-3 py-2.5 text-right font-semibold tabular-nums whitespace-nowrap ${color}`}
                       >
                         {sign}
-                        {formatINR(t.amount)}
+                        {formatINR(displayAmount)}
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         {!t.transferId && (
