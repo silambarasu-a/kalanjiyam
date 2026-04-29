@@ -51,6 +51,24 @@ export function SessionGuard() {
     void signOut({ callbackUrl: "/login" });
   }, [status, isLocked]);
 
+  // Per-tab session gate. The login form sets a sessionStorage flag on
+  // successful sign-in; sessionStorage is per-tab and clears on tab close.
+  // If we land here authenticated but the flag is missing, this tab didn't
+  // perform the login (it's a new tab, a reopened-after-close tab, or a
+  // shared link that inherited the cookie from another tab). Force a
+  // re-login so closing a tab really does end access.
+  //
+  // Security note: the flag itself contains no secret. The actual auth
+  // credential is the HttpOnly session cookie (XSS-safe). XSS could fake
+  // the flag but couldn't access the cookie, so this gate doesn't widen
+  // the credential-leak surface.
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (typeof window === "undefined") return;
+    if (window.sessionStorage.getItem("kalanjiyam:tab-session")) return;
+    void signOut({ callbackUrl: "/login" });
+  }, [status]);
+
   // Idle detector. Depends only on stable booleans so refetchInterval-driven
   // session refreshes don't reset the activity timer.
   useEffect(() => {

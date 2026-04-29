@@ -40,6 +40,27 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
   // NextAuth v5 rejects the credentials callback on Vercel deployments and
   // the session cookie never gets set.
   trustHost: true,
+  // Override the sessionToken cookie so it's a *session cookie* — no
+  // `maxAge` / `expires`, which means browsers drop it on close. The JWT
+  // itself still expires after `session.maxAge` (15 min), so within a
+  // single browser session the user is still logged out at the 15-min
+  // mark. Without this override, NextAuth defaults the cookie's maxAge
+  // to session.maxAge, which makes it a persistent cookie that survives
+  // browser restarts (within the 15-min window).
+  cookies: {
+    sessionToken: {
+      name:
+        process.env.NODE_ENV === "production"
+          ? "__Secure-authjs.session-token"
+          : "authjs.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+      },
+    },
+  },
   pages: { signIn: "/login" },
   providers: [
     Credentials({

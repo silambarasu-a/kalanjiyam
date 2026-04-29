@@ -60,6 +60,15 @@ function LoginFormInner() {
           setError("Invalid email or password.");
         }
       } else {
+        // Per-tab session gate: this flag lives in sessionStorage (which
+        // is per-tab and cleared on tab close). SessionGuard checks for
+        // it on every mount and forces a re-login if missing — meaning
+        // closing this tab and opening a new one will require fresh
+        // credentials. The flag holds no secret data; the actual auth
+        // credential remains the HttpOnly session cookie.
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem("kalanjiyam:tab-session", "1");
+        }
         router.push(callbackUrl);
         router.refresh();
       }
