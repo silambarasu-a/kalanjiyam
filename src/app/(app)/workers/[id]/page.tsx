@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
 type Balance = {
@@ -574,7 +574,7 @@ function PayDialog({
               <NativeSelect
                 value={accountId}
                 onChange={setAccountId}
-                options={accounts.map((a) => buildAccountOption(a, Number(amount) || 0))}
+                options={groupAccountOptions(accounts, Number(amount) || 0)}
               />
             </div>
           </label>
@@ -668,9 +668,7 @@ function SettleDialog({
                       value={accountId}
                       onChange={setAccountId}
                       placeholder="— don't pay now, mark settled —"
-                      options={accounts.map((a) =>
-                        buildAccountOption(a, settlement.amountDue),
-                      )}
+                      options={groupAccountOptions(accounts, settlement.amountDue)}
                     />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -812,7 +810,7 @@ function ReturnAdvanceDialog({
               <NativeSelect
                 value={accountId}
                 onChange={setAccountId}
-                options={accounts.map((a) => buildAccountOption(a, 0))}
+                options={groupAccountOptions(accounts, 0)}
               />
             </div>
           </label>

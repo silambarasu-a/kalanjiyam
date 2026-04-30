@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
 type Charge = {
@@ -384,7 +384,7 @@ function SettleDialog({
                 value={accountId}
                 onChange={setAccountId}
                 placeholder="— don't create income transaction —"
-                options={accounts.map((a) => buildAccountOption(a, 0))}
+                options={groupAccountOptions(accounts, 0)}
               />
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -513,7 +513,7 @@ function TransferDialog({
               <NativeSelect
                 value={accountId}
                 onChange={setAccountId}
-                options={accounts.map((a) => buildAccountOption(a, Number(amount) || 0))}
+                options={groupAccountOptions(accounts, Number(amount) || 0)}
               />
             </div>
           </label>

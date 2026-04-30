@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatDate, buildAccountOption } from "@/lib/utils";
+import { formatDate, groupAccountOptions } from "@/lib/utils";
 
 type Batch = {
   id: string;
@@ -503,7 +503,7 @@ function BatchActionDialog({
                   <NativeSelect
                     value={accountId}
                     onChange={setAccountId}
-                    options={accounts.map((a) => buildAccountOption(a, debitAmount))}
+                    options={groupAccountOptions(accounts, debitAmount)}
                   />
                 </div>
               </label>

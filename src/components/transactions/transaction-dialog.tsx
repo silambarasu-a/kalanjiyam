@@ -29,7 +29,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { cn, formatINR, buildAccountOption } from "@/lib/utils";
+import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import {
   useTransactionDialog,
@@ -49,6 +49,7 @@ type Card = {
   kind: "DEBIT" | "CREDIT";
   accountId: string | null;
   availableLimit: number | null;
+  last4: string | null;
 };
 type Category = {
   id: string;
@@ -296,31 +297,74 @@ function IncomeExpenseForm({
     type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
 
   const amtNum = parseFloat(amount) || 0;
+  // Pay-from picker grouped by funding-source kind so users scan by
+  // category (Bank → Wallet → Cash → Debit Card → Credit Card) rather
+  // than a flat alphabetical list.
   const sources = useMemo(() => {
-    const items: { value: string; label: string; sub: string; disabled: boolean }[] = [];
+    type Item = { value: string; label: string; sub: string; disabled: boolean };
+    const buckets: Record<"BANK" | "WALLET" | "CASH" | "DEBIT" | "CREDIT", Item[]> = {
+      BANK: [],
+      WALLET: [],
+      CASH: [],
+      DEBIT: [],
+      CREDIT: [],
+    };
     for (const a of accounts) {
-      if (a.kind === "CARD") continue; // companion cards are surfaced via Cards
+      if (a.kind === "CARD") continue; // companion card-accounts are surfaced via /api/cards
+      if (a.kind !== "BANK" && a.kind !== "WALLET" && a.kind !== "CASH") continue;
       const insufficient = type === "EXPENSE" && amtNum > 0 && amtNum > a.balance;
-      items.push({
+      buckets[a.kind].push({
         value: `account:${a.id}`,
-        label: a.name,
-        sub: `${a.kind} · ${formatINR(a.balance)}`,
+        label: formatAccountLabel(a.name, a.kind),
+        sub: formatINR(a.balance),
         disabled: insufficient,
       });
     }
     if (type === "EXPENSE") {
       for (const c of cards) {
-        const avail = c.availableLimit;
-        const insufficient = avail != null && amtNum > 0 && amtNum > avail;
-        items.push({
-          value: `card:${c.id}`,
-          label: c.name,
-          sub: `Credit · ${avail != null ? formatINR(avail) : "—"} avail`,
-          disabled: insufficient,
-        });
+        const baseLabel = formatAccountLabel(c.name, "CARD");
+        const label = c.last4 ? `${baseLabel} ••${c.last4}` : baseLabel;
+        if (c.kind === "CREDIT") {
+          const avail = c.availableLimit;
+          const insufficient = avail != null && amtNum > 0 && amtNum > avail;
+          buckets.CREDIT.push({
+            value: `card:${c.id}`,
+            label,
+            sub: `${avail != null ? formatINR(avail) : "—"} avail`,
+            disabled: insufficient,
+          });
+        } else {
+          // Debit cards draw on a linked bank account; spendable is the
+          // bank's balance, surfaced by the API as availableLimit.
+          const avail = c.availableLimit;
+          const insufficient = avail != null && amtNum > 0 && amtNum > avail;
+          buckets.DEBIT.push({
+            value: `card:${c.id}`,
+            label,
+            sub: avail != null ? formatINR(avail) : "—",
+            disabled: insufficient,
+          });
+        }
       }
     }
-    return items;
+    const groupOrder: { key: keyof typeof buckets; label: string }[] = [
+      { key: "BANK", label: "Bank" },
+      { key: "WALLET", label: "Wallet" },
+      { key: "CASH", label: "Cash" },
+      { key: "DEBIT", label: "Debit Card" },
+      { key: "CREDIT", label: "Credit Card" },
+    ];
+    return groupOrder
+      .filter((g) => buckets[g.key].length > 0)
+      .map((g) => ({
+        label: g.label,
+        options: buckets[g.key].map((it) => ({
+          value: it.value,
+          label: it.label,
+          hint: it.sub,
+          disabled: it.disabled,
+        })),
+      }));
   }, [accounts, cards, type, amtNum]);
 
   async function submit() {
@@ -458,12 +502,7 @@ function IncomeExpenseForm({
             <NativeSelect
               value={paymentSource}
               onChange={setPaymentSource}
-              options={sources.map((s) => ({
-                value: s.value,
-                label: s.label,
-                hint: s.sub,
-                disabled: s.disabled,
-              }))}
+              options={sources}
             />
           </div>
         </label>
@@ -892,7 +931,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
               <NativeSelect
                 value={fromId}
                 onChange={setFromId}
-                options={accounts.map((a) => buildAccountOption(a, amtNum))}
+                options={groupAccountOptions(accounts, amtNum)}
               />
             </div>
           </label>
@@ -907,9 +946,10 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
               <NativeSelect
                 value={toId}
                 onChange={setToId}
-                options={accounts
-                  .filter((a) => a.id !== fromId)
-                  .map((a) => buildAccountOption(a, 0))}
+                options={groupAccountOptions(
+                  accounts.filter((a) => a.id !== fromId),
+                  0,
+                )}
               />
             </div>
           </label>
@@ -960,8 +1000,9 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
               <NativeSelect
                 value={memberAccountId}
                 onChange={setMemberAccountId}
-                options={accounts.map((a) =>
-                  buildAccountOption(a, direction === "SENT" ? amtNum : 0),
+                options={groupAccountOptions(
+                  accounts,
+                  direction === "SENT" ? amtNum : 0,
                 )}
               />
             </div>
@@ -1261,7 +1302,7 @@ function LoanEmiForm({
           <NativeSelect
             value={accountId}
             onChange={setAccountId}
-            options={payable.map((a) => buildAccountOption(a, Number(amount) || 0))}
+            options={groupAccountOptions(payable, Number(amount) || 0)}
           />
         </div>
       </label>
@@ -2360,8 +2401,9 @@ function InvestmentForm({
           <NativeSelect
             value={accountId}
             onChange={setAccountId}
-            options={accounts.map((a) =>
-              buildAccountOption(a, action === "BUY" ? Number(amount) || 0 : 0),
+            options={groupAccountOptions(
+              accounts,
+              action === "BUY" ? Number(amount) || 0 : 0,
             )}
           />
         </div>
