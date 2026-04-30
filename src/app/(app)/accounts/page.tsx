@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,7 +33,11 @@ type Account = {
   ownerUser: { id: string; name: string; email: string } | null;
   ownerContact: { id: string; name: string } | null;
   sharedWithUserIds: string[];
+  availableLimit: number | null;
+  upcomingBillAmount: number | null;
 };
+
+const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
 
 type DialogMode = null | { kind: "new" } | { kind: "newCard" } | { kind: "edit"; account: Account };
 
@@ -66,74 +71,107 @@ export default function AccountsPage() {
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {(data?.accounts ?? []).map((a) => {
-          const { Icon, label } = KIND_META[a.kind];
+      {(() => {
+        const accounts = (data?.accounts ?? []).filter((a) => a.active);
+        if (accounts.length === 0) return null;
+
+        const cashAccounts = accounts.filter((a) => a.kind !== "CARD");
+        const cardAccounts = accounts.filter((a) => a.kind === "CARD");
+
+        const availableBalance = cashAccounts.reduce((s, a) => s + a.balance, 0);
+        // Skip SHARED sub-cards (creditLimit on the companion is null when
+        // the limit lives on the parent's pool) so we don't double-count.
+        const cardsWithOwnLimit = cardAccounts.filter((a) => a.creditLimit != null);
+        const totalLimit = cardsWithOwnLimit.reduce(
+          (s, a) => s + (a.creditLimit ?? 0),
+          0,
+        );
+        const totalAvailable = cardsWithOwnLimit.reduce(
+          (s, a) => s + (a.availableLimit ?? a.creditLimit ?? 0),
+          0,
+        );
+        const totalOutstanding = Math.max(0, totalLimit - totalAvailable);
+        const totalDue = cardAccounts.reduce(
+          (s, a) => s + (a.upcomingBillAmount ?? 0),
+          0,
+        );
+
+        return (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <SummaryStat
+              label="Available balance"
+              value={formatINR(availableBalance)}
+              tone={availableBalance > 0 ? "gain" : "muted"}
+              hint={`${cashAccounts.length} bank/cash/wallet`}
+            />
+            <SummaryStat
+              label="Available limit"
+              value={cardsWithOwnLimit.length === 0 ? "—" : formatINR(totalAvailable)}
+              tone={cardsWithOwnLimit.length === 0 ? "muted" : "gain"}
+              hint={
+                cardsWithOwnLimit.length === 0
+                  ? "No credit cards"
+                  : `of ${formatINR(totalLimit)}`
+              }
+            />
+            <SummaryStat
+              label="Outstanding"
+              value={cardsWithOwnLimit.length === 0 ? "—" : formatINR(totalOutstanding)}
+              tone={totalOutstanding > 0 ? "loss" : "muted"}
+              hint={totalOutstanding > 0 ? "Limit in use" : "Nothing in use"}
+            />
+            <SummaryStat
+              label="Total due"
+              value={cardAccounts.length === 0 ? "—" : formatINR(totalDue)}
+              tone={totalDue > 0 ? "loss" : "muted"}
+              hint={totalDue > 0 ? "Across upcoming bills" : "Nothing pending"}
+            />
+          </div>
+        );
+      })()}
+
+      {(() => {
+        const accounts = data?.accounts ?? [];
+        if (accounts.length === 0 && !isLoading) {
           return (
-            <div key={a.id} className="rounded-lg border bg-card p-5 flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-3">
-                <Link href={`/accounts/${a.id}`} className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <h3 className="truncate font-semibold">{a.name}</h3>
-                  </div>
-                  <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
-                    {label}
-                    {a.ownerContact ? ` · ${a.ownerContact.name}` : ""}
-                  </div>
-                </Link>
-                <div className="flex gap-1">
-                  {a.kind !== "CARD" && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setDialog({ kind: "edit", account: a })}
-                      aria-label="Edit"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={async () => {
-                      if (!confirm(`Delete ${a.name}?`)) return;
-                      const res = await fetch(`/api/accounts/${a.id}`, { method: "DELETE" });
-                      if (!res.ok) {
-                        const body = await res.json();
-                        toast.error(body.error ?? "Failed");
-                      }
-                      globalMutate("/api/accounts");
-                    }}
-                    aria-label="Delete"
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">
-                  {a.kind === "CARD" ? "Outstanding" : "Balance"}
-                </div>
-                <div className="text-2xl font-semibold">{formatINR(a.balance)}</div>
-              </div>
-              {a.kind === "CARD" && a.creditLimit != null && (
-                <div className="text-xs text-muted-foreground">
-                  Credit limit: {formatINR(a.creditLimit)} ·{" "}
-                  <Link href="/cards" className="text-primary hover:underline">
-                    manage card →
-                  </Link>
-                </div>
-              )}
+            <div className="rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
+              No accounts yet. Add your bank, cash, or credit card to start tracking.
             </div>
           );
-        })}
-        {(data?.accounts ?? []).length === 0 && !isLoading && (
-          <div className="col-span-full rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
-            No accounts yet. Add your bank, cash, or credit card to start tracking.
+        }
+        const grouped = KIND_ORDER.map((kind) => ({
+          kind,
+          items: accounts.filter((a) => a.kind === kind),
+        })).filter((g) => g.items.length > 0);
+
+        return (
+          <div className="space-y-6">
+            {grouped.map(({ kind, items }) => {
+              const { label, Icon } = KIND_META[kind];
+              return (
+                <section key={kind} className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{label}</span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-muted-foreground">
+                      {items.length}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    {items.map((a) => (
+                      <AccountCard
+                        key={a.id}
+                        account={a}
+                        onEdit={() => setDialog({ kind: "edit", account: a })}
+                      />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       <AccountDialog
         mode={dialog}
@@ -321,5 +359,190 @@ function AccountDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  hint,
+  tone = "muted",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "muted" | "gain" | "loss";
+}) {
+  const valueClass =
+    tone === "gain"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : tone === "loss"
+        ? "text-destructive"
+        : "";
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}
+      </div>
+      <div className={`mt-1 text-xl font-semibold tabular-nums ${valueClass}`}>
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>
+      )}
+    </div>
+  );
+}
+
+function AccountCard({
+  account: a,
+  onEdit,
+}: {
+  account: Account;
+  onEdit: () => void;
+}) {
+  const router = useRouter();
+  const { Icon, label } = KIND_META[a.kind];
+  const isCard = a.kind === "CARD";
+  const showLimit = isCard && a.creditLimit != null;
+  const avail = a.availableLimit ?? a.creditLimit ?? 0;
+  const limitPct =
+    showLimit && a.creditLimit && a.creditLimit > 0 ? avail / a.creditLimit : 1;
+  const limitTone = limitPct > 0.5 ? "gain" : limitPct > 0.2 ? "outstanding" : "loss";
+  const href = `/accounts/${a.id}`;
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={() => router.push(href)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          router.push(href);
+        }
+      }}
+      aria-label={`Open ${a.name}`}
+      className="cursor-pointer rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+            <h3 className="truncate font-semibold">{a.name}</h3>
+          </div>
+          <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
+            {label}
+            {a.ownerContact ? ` · ${a.ownerContact.name}` : ""}
+          </div>
+        </div>
+        <div className="flex gap-1">
+          {!isCard && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+              }}
+              aria-label="Edit"
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!confirm(`Delete ${a.name}?`)) return;
+              const res = await fetch(`/api/accounts/${a.id}`, { method: "DELETE" });
+              if (!res.ok) {
+                const body = await res.json();
+                toast.error(body.error ?? "Failed");
+              }
+              globalMutate("/api/accounts");
+            }}
+            aria-label="Delete"
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+      </div>
+
+      {showLimit ? (
+        <div>
+          <div className="text-xs text-muted-foreground">Available limit</div>
+          <div
+            className={
+              "text-2xl font-semibold tabular-nums " +
+              (limitTone === "gain"
+                ? "text-emerald-700 dark:text-emerald-400"
+                : limitTone === "outstanding"
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-destructive")
+            }
+          >
+            {formatINR(avail)}
+          </div>
+          <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className={
+                limitTone === "gain"
+                  ? "h-full bg-primary"
+                  : limitTone === "outstanding"
+                    ? "h-full bg-amber-500"
+                    : "h-full bg-destructive"
+              }
+              style={{ width: `${Math.max(0, Math.min(100, limitPct * 100))}%` }}
+            />
+          </div>
+          <div className="mt-1 flex items-center justify-between text-xs">
+            <span className="text-muted-foreground tabular-nums">
+              of {formatINR(a.creditLimit ?? 0)}
+            </span>
+            {a.upcomingBillAmount != null && a.upcomingBillAmount > 0 ? (
+              <span className="font-medium text-destructive tabular-nums">
+                Due {formatINR(a.upcomingBillAmount)}
+              </span>
+            ) : a.balance > 0 ? (
+              <span className="text-muted-foreground tabular-nums">
+                Spend {formatINR(a.balance)}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">No dues</span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="text-xs text-muted-foreground">Balance</div>
+          <div
+            className={
+              "text-2xl font-semibold tabular-nums " +
+              (a.balance > 0
+                ? "text-emerald-700 dark:text-emerald-400"
+                : a.balance < 0
+                  ? "text-destructive"
+                  : "")
+            }
+          >
+            {formatINR(a.balance)}
+          </div>
+        </div>
+      )}
+
+      {isCard && (
+        <div className="text-xs">
+          <Link
+            href="/cards"
+            onClick={(e) => e.stopPropagation()}
+            className="text-primary hover:underline"
+          >
+            manage card →
+          </Link>
+        </div>
+      )}
+    </div>
   );
 }
