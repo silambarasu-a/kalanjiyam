@@ -193,3 +193,42 @@
     background-color: #9CA3AF;
   }
 }
+
+/* ── Print styles for reports ───────────────────────────────────────────
+ * Reports use ReportShell which wraps content in `.print-container` and
+ * marks navigational/interactive chrome with `.no-print`. When the user
+ * triggers print (Save as PDF), we hide the app shell and isolate the
+ * report container. Tables get borders and sane page-break behavior.
+ */
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  /* Hide app chrome — everything outside the report. */
+  aside, nav, header, .no-print, [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"] {
+    display: none !important;
+  }
+  .print-container {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+  }
+  .print-container * {
+    box-shadow: none !important;
+  }
+  .print-container .rounded-lg,
+  .print-container .rounded-xl,
+  .print-container .rounded-2xl {
+    border-radius: 4px !important;
+  }
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+  h1, h2, h3 { page-break-after: avoid; }
+  /* Force bg colors to render in PDFs — Chrome respects this hint. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
