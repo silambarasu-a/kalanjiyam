@@ -13,7 +13,7 @@ import { useDismissedNotifications } from "@/lib/use-dismissed-notifications";
 
 type Item = {
   id: string;
-  source: "REMINDER" | "LOAN" | "LEASE";
+  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
   kind: string;
   label: string;
   dueDate: string;
@@ -240,5 +240,7 @@ function sourceLabel(s: Item["source"]): string {
       return "Loan EMI";
     case "LEASE":
       return "Lease";
+    case "CARD_STATEMENT":
+      return "Card bill";
   }
 }

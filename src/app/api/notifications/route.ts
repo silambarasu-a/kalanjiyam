@@ -12,7 +12,7 @@ function err(e: unknown) {
 
 export type Notification = {
   id: string;
-  source: "REMINDER" | "LOAN" | "LEASE";
+  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
   kind: string;
   label: string;
   dueDate: string;
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
     const horizon = new Date(today);
     horizon.setDate(horizon.getDate() + days);
 
-    const [reminders, loans, leaseSchedules] = await Promise.all([
+    const [reminders, loans, leaseSchedules, statements, cardAccounts] = await Promise.all([
       prisma.investmentReminder.findMany({
         where: {
           workspaceId: wsId,
@@ -78,6 +78,42 @@ export async function GET(request: Request) {
           lease: { select: { id: true, lessorName: true, lesseeName: true, direction: true } },
         },
         take: 50,
+      }),
+      // Materialised credit-card statements that are unpaid and due within
+      // the horizon. We include payments to compute outstanding (statement
+      // can be partially paid).
+      prisma.cardStatement.findMany({
+        where: {
+          workspaceId: wsId,
+          paidAt: null,
+          dueDate: { lte: horizon },
+        },
+        orderBy: { dueDate: "asc" },
+        take: 30,
+        include: {
+          account: {
+            select: { id: true, name: true, linkedCard: { select: { id: true } } },
+          },
+          payments: { select: { amount: true } },
+        },
+      }),
+      // Manual-override path for CARD accounts that have a billing cycle
+      // configured but no materialised statement yet. Mirrors the dashboard.
+      prisma.account.findMany({
+        where: {
+          workspaceId: wsId,
+          active: true,
+          kind: "CARD",
+          nextBillDue: { not: null, lte: horizon },
+          nextBillAmount: { gt: 0 },
+        },
+        select: {
+          id: true,
+          name: true,
+          nextBillDue: true,
+          nextBillAmount: true,
+          linkedCard: { select: { id: true } },
+        },
       }),
     ]);
 
@@ -123,6 +159,44 @@ export async function GET(request: Request) {
         overdue: s.dueDate < today,
       });
     }
+    // Card statements — outstanding = totalDue − Σ payments. Skip rows
+    // already paid in full.
+    const accountsWithStatement = new Set<string>();
+    for (const s of statements) {
+      const paid = s.payments.reduce((a, p) => a + Number(p.amount), 0);
+      const outstanding = Math.max(0, Number(s.totalDue) - paid);
+      accountsWithStatement.add(s.account.id);
+      if (outstanding === 0) continue;
+      const cardId = s.account.linkedCard?.id ?? null;
+      items.push({
+        id: `card-statement:${s.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD_BILL",
+        label: s.account.name,
+        dueDate: s.dueDate.toISOString(),
+        amount: round2(outstanding),
+        href: cardId ? `/cards/${cardId}` : "/cards",
+        overdue: s.dueDate < today,
+      });
+    }
+    // Manual-override card bills for accounts without a materialised stmt.
+    for (const a of cardAccounts) {
+      if (accountsWithStatement.has(a.id)) continue;
+      if (!a.nextBillDue || a.nextBillAmount == null) continue;
+      const amount = Number(a.nextBillAmount);
+      if (amount <= 0) continue;
+      const cardId = a.linkedCard?.id ?? null;
+      items.push({
+        id: `card-manual:${a.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD_BILL",
+        label: a.name,
+        dueDate: a.nextBillDue.toISOString(),
+        amount: round2(amount),
+        href: cardId ? `/cards/${cardId}` : "/cards",
+        overdue: a.nextBillDue < today,
+      });
+    }
 
     items.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
@@ -138,4 +212,8 @@ export async function GET(request: Request) {
   } catch (e) {
     return err(e);
   }
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
