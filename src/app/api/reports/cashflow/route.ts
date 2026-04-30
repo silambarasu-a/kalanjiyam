@@ -11,24 +11,34 @@ function err(e: unknown) {
 }
 
 /**
- * Monthly cashflow for the last N months (default 12). Returns income/expense
- * totals per month plus top income / top expense categories over the period.
+ * Monthly cashflow within an arbitrary date range. Backwards-compatible:
+ * if `start` / `end` aren't supplied, falls back to `months=N` (default 12).
  */
 export async function GET(request: Request) {
   try {
     const ctx = await requireWorkspace("reports", "read");
     const url = new URL(request.url);
-    const months = Math.min(36, Math.max(1, Number(url.searchParams.get("months") ?? "12")));
+    const startStr = url.searchParams.get("start");
+    const endStr = url.searchParams.get("end");
 
-    const now = new Date();
-    const rangeStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months + 1, 1));
+    let rangeStart: Date;
+    let rangeEnd: Date;
+    if (startStr && endStr) {
+      rangeStart = new Date(`${startStr}T00:00:00Z`);
+      rangeEnd = new Date(`${endStr}T23:59:59Z`);
+    } else {
+      const months = Math.min(36, Math.max(1, Number(url.searchParams.get("months") ?? "12")));
+      const now = new Date();
+      rangeStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months + 1, 1));
+      rangeEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59));
+    }
 
     const txns = await prisma.transaction.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         transferId: null,
         type: { in: ["INCOME", "EXPENSE"] },
-        date: { gte: rangeStart },
+        date: { gte: rangeStart, lte: rangeEnd },
       },
       select: {
         amount: true,
@@ -39,9 +49,12 @@ export async function GET(request: Request) {
     });
 
     const buckets = new Map<string, { income: number; expense: number }>();
-    for (let i = 0; i < months; i++) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1) + i, 1));
-      buckets.set(monthKey(d), { income: 0, expense: 0 });
+    {
+      const start = new Date(Date.UTC(rangeStart.getUTCFullYear(), rangeStart.getUTCMonth(), 1));
+      const end = new Date(Date.UTC(rangeEnd.getUTCFullYear(), rangeEnd.getUTCMonth(), 1));
+      for (let d = new Date(start); d <= end; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+        buckets.set(monthKey(d), { income: 0, expense: 0 });
+      }
     }
     const categoryAgg = new Map<
       string,
@@ -95,7 +108,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       rangeStart: rangeStart.toISOString(),
-      months,
+      rangeEnd: rangeEnd.toISOString(),
       series,
       totals: {
         income: Math.round(totals.income * 100) / 100,
