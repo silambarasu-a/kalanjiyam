@@ -12,7 +12,7 @@ import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
 
@@ -919,7 +919,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 <NativeSelect
                   value={accountId}
                   onChange={setAccountId}
-                  options={bankAccounts.map((a) => buildAccountOption(a, 0))}
+                  options={groupAccountOptions(bankAccounts, 0)}
                 />
               </div>
               {editing && !isExisting && (

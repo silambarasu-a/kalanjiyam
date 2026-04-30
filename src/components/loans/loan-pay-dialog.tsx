@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, buildAccountOption } from "@/lib/utils";
+import { formatINR, groupAccountOptions } from "@/lib/utils";
 import {
   splitPayment,
   cyclesPerYear,
@@ -268,7 +268,7 @@ export function LoanPayDialog({
                 <NativeSelect
                   value={accountId}
                   onChange={setAccountId}
-                  options={accounts.map((a) => buildAccountOption(a, amt))}
+                  options={groupAccountOptions(accounts, amt)}
                 />
               </div>
             </label>

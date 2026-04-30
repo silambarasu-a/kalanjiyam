@@ -99,12 +99,21 @@ export default function CardsPage() {
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.cards ?? []).map((c) => (
-          <Link
+          <div
             key={c.id}
-            href={`/cards/${c.id}`}
-            className="rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+            className="relative rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30"
           >
-            <div className="flex items-start justify-between gap-3">
+            {/* Stretched link covers the whole card. Action buttons sit
+                above it via relative+z-10 so they stay clickable without
+                being nested inside the <a> (which is invalid HTML and
+                breaks the mobile layout — child blocks silently disappear
+                on some browsers/devices). */}
+            <Link
+              href={`/cards/${c.id}`}
+              aria-label={`Open ${c.name}`}
+              className="absolute inset-0 z-0 rounded-lg focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+            />
+            <div className="relative flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-4 w-4 text-muted-foreground" />
@@ -116,23 +125,11 @@ export default function CardsPage() {
                   {c.last4 ? ` · ••${c.last4}` : ""}
                 </div>
               </div>
-              {/* Action buttons sit above the link via relative+z-10 so
-                  they're clickable without bubbling into navigation. */}
-              <div
-                className="relative z-10 flex gap-1"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-              >
+              <div className="relative z-10 flex gap-1">
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setEditOpen(c);
-                  }}
+                  onClick={() => setEditOpen(c)}
                   aria-label="Edit"
                 >
                   <Pencil className="h-4 w-4" />
@@ -140,9 +137,7 @@ export default function CardsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+                  onClick={async () => {
                     if (!confirm(`Delete ${c.name}?`)) return;
                     const res = await fetch(`/api/cards/${c.id}`, { method: "DELETE" });
                     if (!res.ok) {
@@ -158,7 +153,7 @@ export default function CardsPage() {
               </div>
             </div>
             {c.kind === "CREDIT" && c.creditLimit != null && (
-              <div>
+              <div className="relative">
                 {(() => {
                   const avail = c.availableLimit ?? c.creditLimit;
                   const outstanding = Math.max(0, c.creditLimit - avail);
@@ -206,7 +201,7 @@ export default function CardsPage() {
               </div>
             )}
             {c.kind === "DEBIT" && c.parentAccount && (
-              <div>
+              <div className="relative">
                 <div className="text-xs text-muted-foreground">Available balance</div>
                 <MoneyValue
                   tone={
@@ -225,7 +220,7 @@ export default function CardsPage() {
                 </div>
               </div>
             )}
-          </Link>
+          </div>
         ))}
         {(data?.cards ?? []).length === 0 && !isLoading && (
           <div className="col-span-full rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">

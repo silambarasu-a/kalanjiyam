@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { formatINR, formatDate, accountSpendable, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, accountSpendable, groupAccountOptions } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
@@ -519,7 +519,7 @@ export default function WagesPage() {
                           onChange={(next) => updatePay(w.id, { accountId: next })}
                           disabled={!e.selected}
                           placeholder="No account"
-                          options={accounts.map((a) => buildAccountOption(a, amt))}
+                          options={groupAccountOptions(accounts, amt)}
                         />
                         {insufficient && selectedAcc && selectedSpendable != null && (
                           <p className="text-[10px] text-rose-500 mt-0.5">

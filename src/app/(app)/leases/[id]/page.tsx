@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 
 type Lease = {
   id: string;
@@ -328,8 +328,9 @@ function ConfirmPaymentDialog({
                 <NativeSelect
                   value={accountId}
                   onChange={setAccountId}
-                  options={accounts.map((a) =>
-                    buildAccountOption(a, direction === "LEASED_IN" ? Number(amount) || 0 : 0),
+                  options={groupAccountOptions(
+                    accounts,
+                    direction === "LEASED_IN" ? Number(amount) || 0 : 0,
                   )}
                 />
               </div>

@@ -91,6 +91,10 @@ export function buildAccountOption(
     kind: string;
     balance: number;
     availableLimit?: number | null;
+    /** Last 4 digits, when this row represents a card. Appended to the
+     *  label as " ••1234" so the picker is unambiguous when multiple
+     *  cards share an issuer. */
+    last4?: string | null;
   },
   amount: number,
 ): { value: string; label: string; hint?: string; disabled?: boolean } {
@@ -100,10 +104,50 @@ export function buildAccountOption(
     spendable == null
       ? undefined
       : `₹${spendable.toLocaleString("en-IN")}`;
+  const baseLabel = formatAccountLabel(a.name, a.kind);
+  const label =
+    a.kind === "CARD" && a.last4 ? `${baseLabel} ••${a.last4}` : baseLabel;
   return {
     value: a.id,
-    label: formatAccountLabel(a.name, a.kind),
+    label,
     hint,
     disabled: insufficient,
   };
+}
+
+/**
+ * Group an account list into NativeSelect groups by funding-source kind:
+ * Bank → Wallet → Cash → Card. Empty groups are dropped so the picker
+ * stays compact. Pass `amount > 0` to grey out rows whose spendable
+ * balance can't cover it.
+ *
+ * Drop-in replacement for `accounts.map((a) => buildAccountOption(a, X))`
+ * — feed the result straight to <NativeSelect options={...} />.
+ */
+export function groupAccountOptions(
+  accounts: Array<Parameters<typeof buildAccountOption>[0]>,
+  amount: number,
+): Array<{
+  label: string;
+  options: Array<{ value: string; label: string; hint?: string; disabled?: boolean }>;
+}> {
+  const buckets: Record<"BANK" | "WALLET" | "CASH" | "CARD", ReturnType<typeof buildAccountOption>[]> = {
+    BANK: [],
+    WALLET: [],
+    CASH: [],
+    CARD: [],
+  };
+  for (const a of accounts) {
+    const k = a.kind as keyof typeof buckets;
+    if (k in buckets) buckets[k].push(buildAccountOption(a, amount));
+  }
+  const order: { key: keyof typeof buckets; label: string }[] = [
+    { key: "BANK", label: "Bank" },
+    { key: "WALLET", label: "Wallet" },
+    { key: "CASH", label: "Cash" },
+    { key: "CARD", label: "Card" },
+  ];
+  return order
+    .filter((g) => buckets[g.key].length > 0)
+    .map((g) => ({ label: g.label, options: buckets[g.key] }));
 }

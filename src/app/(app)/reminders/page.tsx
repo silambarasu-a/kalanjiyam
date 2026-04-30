@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, buildAccountOption } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 
 type Reminder = {
   id: string;
@@ -240,11 +240,9 @@ function ConfirmDialog({
                 <NativeSelect
                   value={accountId}
                   onChange={setAccountId}
-                  options={accounts.map((a) =>
-                    buildAccountOption(
-                      a,
-                      reminder.kind === "FD_INTEREST" ? 0 : Number(amount) || 0,
-                    ),
+                  options={groupAccountOptions(
+                    accounts,
+                    reminder.kind === "FD_INTEREST" ? 0 : Number(amount) || 0,
                   )}
                 />
               </div>

@@ -32,7 +32,7 @@ import {
   ArrowDownRight,
   ArrowLeft,
 } from "lucide-react";
-import { formatINR, cn, buildAccountOption } from "@/lib/utils";
+import { formatINR, cn, groupAccountOptions } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { SymbolSearch } from "@/components/investments/symbol-search";
@@ -698,8 +698,16 @@ export function StockPortfolio() {
                           }
                         }}
                         options={[
-                          ...accounts.map((a) => buildAccountOption(a, investedNow)),
-                          { value: "__existing__", label: "Already owned (no transaction)" },
+                          ...groupAccountOptions(accounts, investedNow),
+                          {
+                            label: "Other",
+                            options: [
+                              {
+                                value: "__existing__",
+                                label: "Already owned (no transaction)",
+                              },
+                            ],
+                          },
                         ]}
                       />
                       {isExisting && (
