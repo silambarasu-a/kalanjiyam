@@ -74,8 +74,9 @@ export function NotificationsPopover() {
         {total > 0 && (
           <span
             aria-hidden
+            style={{ top: "0.3rem", right: "0.35rem" }}
             className={cn(
-              "pointer-events-none absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background shadow-sm",
+              "pointer-events-none absolute h-2.5 w-2.5 rounded-full border-2 border-background shadow-sm",
               overdue > 0 ? "bg-destructive" : "bg-primary",
             )}
           />

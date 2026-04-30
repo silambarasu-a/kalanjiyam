@@ -36,12 +36,32 @@ export async function GET() {
       },
     });
 
-    const [balances, availableLimits] = await Promise.all([
+    const [balances, availableLimits, upcomingBills] = await Promise.all([
       Promise.all(accounts.map((a) => computeAccountBalance(a.id))),
       Promise.all(
         accounts.map((a) =>
           a.kind === "CARD" ? computeAccountAvailableLimit(a.id) : Promise.resolve(null),
         ),
+      ),
+      // Upcoming bill resolution mirrors /api/cards: a manual override on
+      // Account.nextBillAmount wins, otherwise fall back to the oldest
+      // unpaid CardStatement's outstanding (totalDue − tagged payments).
+      Promise.all(
+        accounts.map(async (a) => {
+          if (a.kind !== "CARD") return null;
+          if (a.nextBillAmount != null) return Number(a.nextBillAmount);
+          const unpaid = await prisma.cardStatement.findFirst({
+            where: { accountId: a.id, paidAt: null },
+            orderBy: { dueDate: "asc" },
+            select: {
+              totalDue: true,
+              payments: { select: { amount: true } },
+            },
+          });
+          if (!unpaid) return null;
+          const paid = unpaid.payments.reduce((s, p) => s + Number(p.amount), 0);
+          return Math.max(0, Number(unpaid.totalDue) - paid);
+        }),
       ),
     ]);
 
@@ -60,6 +80,7 @@ export async function GET() {
         sharedWithUserIds: a.sharedWithUserIds,
         balance: balances[i].balance,
         availableLimit: availableLimits[i],
+        upcomingBillAmount: upcomingBills[i],
       })),
     });
   } catch (err) {
