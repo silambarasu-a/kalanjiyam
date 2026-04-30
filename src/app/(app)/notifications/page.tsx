@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { cn, formatDate, formatINR } from "@/lib/utils";
 import { useDismissedNotifications } from "@/lib/use-dismissed-notifications";
 
-type Source = "REMINDER" | "LOAN" | "LEASE";
+type Source = "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
 type Item = {
   id: string;
   source: Source;
@@ -324,6 +324,7 @@ function SourceSelect({
     >
       <option value="all">All sources</option>
       <option value="LOAN">Loan EMIs</option>
+      <option value="CARD_STATEMENT">Card bills</option>
       <option value="LEASE">Lease payments</option>
       <option value="REMINDER">Investment reminders</option>
     </select>
@@ -361,6 +362,8 @@ function sourceLabel(s: Source): string {
       return "Loan EMI";
     case "LEASE":
       return "Lease";
+    case "CARD_STATEMENT":
+      return "Card bill";
   }
 }
 
