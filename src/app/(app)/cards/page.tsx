@@ -23,6 +23,9 @@ type Card = CardSnapshot & {
   accountId: string | null;
   availableLimit: number | null;
   linkedBalance: number | null;
+  currentBalance: number | null;
+  upcomingBillAmount: number | null;
+  limitMode: "SOLO" | "SHARED";
   sharedWithUserIds: string[];
 };
 
@@ -49,11 +52,60 @@ export default function CardsPage() {
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
+      {(() => {
+        // Aggregate across active CREDIT cards only. SHARED sub-cards
+        // inherit their parent's pool, so summing their inherited
+        // creditLimit / availableLimit would double-count the parent's
+        // pool. Skip them in the totals.
+        const credit = (data?.cards ?? []).filter(
+          (c) => c.kind === "CREDIT" && c.active && c.limitMode !== "SHARED",
+        );
+        if (credit.length === 0) return null;
+        const totalLimit = credit.reduce(
+          (s, c) => s + (c.creditLimit ?? 0),
+          0,
+        );
+        const totalAvailable = credit.reduce(
+          (s, c) => s + (c.availableLimit ?? c.creditLimit ?? 0),
+          0,
+        );
+        const totalOutstanding = Math.max(0, totalLimit - totalAvailable);
+        const totalDue = credit.reduce(
+          (s, c) => s + (c.upcomingBillAmount ?? 0),
+          0,
+        );
+        return (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <SummaryStat label="Total limit" value={formatINR(totalLimit)} />
+            <SummaryStat
+              label="Available"
+              value={formatINR(totalAvailable)}
+              tone="gain"
+            />
+            <SummaryStat
+              label="Total outstanding"
+              value={formatINR(totalOutstanding)}
+              tone={totalOutstanding > 0 ? "loss" : "muted"}
+            />
+            <SummaryStat
+              label="Total due"
+              value={formatINR(totalDue)}
+              tone={totalDue > 0 ? "loss" : "muted"}
+              hint={totalDue > 0 ? "Across upcoming bills" : "Nothing pending"}
+            />
+          </div>
+        );
+      })()}
+
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.cards ?? []).map((c) => (
-          <div key={c.id} className="rounded-lg border bg-card p-5 flex flex-col gap-3">
+          <Link
+            key={c.id}
+            href={`/cards/${c.id}`}
+            className="rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+          >
             <div className="flex items-start justify-between gap-3">
-              <Link href={`/cards/${c.id}`} className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-4 w-4 text-muted-foreground" />
                   <h3 className="truncate font-semibold">{c.name}</h3>
@@ -63,12 +115,24 @@ export default function CardsPage() {
                   {c.supportsUpi ? " · UPI" : ""}
                   {c.last4 ? ` · ••${c.last4}` : ""}
                 </div>
-              </Link>
-              <div className="flex gap-1">
+              </div>
+              {/* Action buttons sit above the link via relative+z-10 so
+                  they're clickable without bubbling into navigation. */}
+              <div
+                className="relative z-10 flex gap-1"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+              >
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setEditOpen(c)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditOpen(c);
+                  }}
                   aria-label="Edit"
                 >
                   <Pencil className="h-4 w-4" />
@@ -76,7 +140,9 @@ export default function CardsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     if (!confirm(`Delete ${c.name}?`)) return;
                     const res = await fetch(`/api/cards/${c.id}`, { method: "DELETE" });
                     if (!res.ok) {
@@ -159,7 +225,7 @@ export default function CardsPage() {
                 </div>
               </div>
             )}
-          </div>
+          </Link>
         ))}
         {(data?.cards ?? []).length === 0 && !isLoading && (
           <div className="col-span-full rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
@@ -180,6 +246,38 @@ export default function CardsPage() {
           />
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  hint,
+  tone = "muted",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "muted" | "gain" | "loss";
+}) {
+  const valueClass =
+    tone === "gain"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : tone === "loss"
+        ? "text-destructive"
+        : "";
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        {label}
+      </div>
+      <div className={`mt-1 text-xl font-semibold tabular-nums ${valueClass}`}>
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>
+      )}
     </div>
   );
 }

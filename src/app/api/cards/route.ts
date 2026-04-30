@@ -56,7 +56,7 @@ export async function GET() {
       },
     });
 
-    const [availableLimits, debitBalances, creditBalances] = await Promise.all([
+    const [availableLimits, debitBalances, creditBalances, upcomingBills] = await Promise.all([
       Promise.all(
         cards.map((c) => {
           if (c.kind !== "CREDIT") return Promise.resolve(null);
@@ -104,6 +104,35 @@ export async function GET() {
             : Promise.resolve(null),
         ),
       ),
+      // For CREDIT cards: the upcoming bill amount the user owes next.
+      // Resolution order matches the card-detail page: manual override
+      // (Account.nextBillAmount) wins, otherwise the oldest unpaid
+      // CardStatement's outstanding (totalDue − tagged payments). Cards
+      // with no statement materialised yet and no manual override return
+      // null — they roll up as 0 in the page summary, which is correct
+      // for the "you owe nothing yet" case.
+      Promise.all(
+        cards.map(async (c) => {
+          if (c.kind !== "CREDIT" || !c.accountId) return null;
+          if (c.account?.nextBillAmount != null) {
+            return Number(c.account.nextBillAmount);
+          }
+          const unpaid = await prisma.cardStatement.findFirst({
+            where: { accountId: c.accountId, paidAt: null },
+            orderBy: { dueDate: "asc" },
+            select: {
+              totalDue: true,
+              payments: { select: { amount: true } },
+            },
+          });
+          if (!unpaid) return null;
+          const paid = unpaid.payments.reduce(
+            (s, p) => s + Number(p.amount),
+            0,
+          );
+          return Math.max(0, Number(unpaid.totalDue) - paid);
+        }),
+      ),
     ]);
 
     return NextResponse.json({
@@ -139,6 +168,7 @@ export async function GET() {
           availableLimit: availableLimits[i],
           linkedBalance: debitBalances[i],
           currentBalance: creditBalances[i],
+          upcomingBillAmount: upcomingBills[i],
           sharedWithUserIds: c.sharedWithUserIds,
         };
       }),
