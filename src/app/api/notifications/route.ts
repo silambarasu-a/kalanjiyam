@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -17,6 +18,10 @@ export type Notification = {
   label: string;
   dueDate: string;
   amount: number | null;
+  /** Original bill total — only set on CARD_STATEMENT entries that have
+   * been partially paid, so the UI can render "X paid of Y". */
+  total?: number;
+  paid?: number;
   href: string;
   overdue: boolean;
 };
@@ -164,7 +169,8 @@ export async function GET(request: Request) {
     const accountsWithStatement = new Set<string>();
     for (const s of statements) {
       const paid = s.payments.reduce((a, p) => a + Number(p.amount), 0);
-      const outstanding = Math.max(0, Number(s.totalDue) - paid);
+      const total = Number(s.totalDue);
+      const outstanding = Math.max(0, total - paid);
       accountsWithStatement.add(s.account.id);
       if (outstanding === 0) continue;
       const cardId = s.account.linkedCard?.id ?? null;
@@ -175,16 +181,24 @@ export async function GET(request: Request) {
         label: s.account.name,
         dueDate: s.dueDate.toISOString(),
         amount: round2(outstanding),
+        ...(paid > 0
+          ? { total: round2(total), paid: round2(Math.min(total, paid)) }
+          : {}),
         href: cardId ? `/cards/${cardId}` : "/cards",
         overdue: s.dueDate < today,
       });
     }
     // Manual-override card bills for accounts without a materialised stmt.
+    // Subtract untagged transfers landing on the account so partial
+    // payments toward the override show through.
     for (const a of cardAccounts) {
       if (accountsWithStatement.has(a.id)) continue;
       if (!a.nextBillDue || a.nextBillAmount == null) continue;
       const amount = Number(a.nextBillAmount);
       if (amount <= 0) continue;
+      const paidUntagged = await untaggedPaymentsToCard(a.id, a.nextBillDue);
+      const outstanding = Math.max(0, amount - paidUntagged);
+      if (outstanding === 0) continue;
       const cardId = a.linkedCard?.id ?? null;
       items.push({
         id: `card-manual:${a.id}`,
@@ -192,7 +206,13 @@ export async function GET(request: Request) {
         kind: "CARD_BILL",
         label: a.name,
         dueDate: a.nextBillDue.toISOString(),
-        amount: round2(amount),
+        amount: round2(outstanding),
+        ...(paidUntagged > 0
+          ? {
+              total: round2(amount),
+              paid: round2(Math.min(amount, paidUntagged)),
+            }
+          : {}),
         href: cardId ? `/cards/${cardId}` : "/cards",
         overdue: a.nextBillDue < today,
       });

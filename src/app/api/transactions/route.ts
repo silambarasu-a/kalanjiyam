@@ -59,24 +59,63 @@ export async function GET(request: Request) {
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
         memberCharge: { select: { id: true, status: true } },
+        // Pull both sides of the transfer so we can label each leg as
+        // OUT (this account funded the transfer) or IN (this account
+        // received it). Without this the UI shows two identical-looking
+        // rows for a self-transfer with no direction cue.
+        transfer: {
+          select: {
+            fromAccountId: true,
+            toAccountId: true,
+            fromAccount: { select: { id: true, name: true, kind: true } },
+            toAccount: { select: { id: true, name: true, kind: true } },
+            fromContact: { select: { id: true, name: true } },
+            toContact: { select: { id: true, name: true } },
+          },
+        },
       },
     });
 
     return NextResponse.json({
-      transactions: transactions.map((t) => ({
-        id: t.id,
-        type: t.type,
-        amount: Number(t.amount),
-        description: t.description,
-        date: t.date.toISOString(),
-        category: t.category,
-        account: t.account,
-        card: t.card,
-        beneficiary: t.beneficiaryContact,
-        memberChargeType: t.memberChargeType,
-        memberCharge: t.memberCharge,
-        transferId: t.transferId,
-      })),
+      transactions: transactions.map((t) => {
+        let transferDirection: "OUT" | "IN" | null = null;
+        let transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null = null;
+        if (t.transfer && t.accountId) {
+          if (t.transfer.fromAccountId === t.accountId) {
+            transferDirection = "OUT";
+            // Counterparty = the OTHER side. Could be another account or a
+            // contact, so check both.
+            if (t.transfer.toAccount) {
+              transferCounterparty = { name: t.transfer.toAccount.name, kind: "ACCOUNT" };
+            } else if (t.transfer.toContact) {
+              transferCounterparty = { name: t.transfer.toContact.name, kind: "CONTACT" };
+            }
+          } else if (t.transfer.toAccountId === t.accountId) {
+            transferDirection = "IN";
+            if (t.transfer.fromAccount) {
+              transferCounterparty = { name: t.transfer.fromAccount.name, kind: "ACCOUNT" };
+            } else if (t.transfer.fromContact) {
+              transferCounterparty = { name: t.transfer.fromContact.name, kind: "CONTACT" };
+            }
+          }
+        }
+        return {
+          id: t.id,
+          type: t.type,
+          amount: Number(t.amount),
+          description: t.description,
+          date: t.date.toISOString(),
+          category: t.category,
+          account: t.account,
+          card: t.card,
+          beneficiary: t.beneficiaryContact,
+          memberChargeType: t.memberChargeType,
+          memberCharge: t.memberCharge,
+          transferId: t.transferId,
+          transferDirection,
+          transferCounterparty,
+        };
+      }),
     });
   } catch (e) {
     return err(e);

@@ -103,17 +103,18 @@ export default function CardsPage() {
             key={c.id}
             className="relative rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30"
           >
-            {/* Stretched link covers the whole card. Action buttons sit
-                above it via relative+z-10 so they stay clickable without
-                being nested inside the <a> (which is invalid HTML and
-                breaks the mobile layout — child blocks silently disappear
-                on some browsers/devices). */}
+            {/* Stretched link covers the whole card. Body content uses
+                pointer-events-none so clicks pass through to the link;
+                the action buttons override with pointer-events-auto so
+                they stay clickable. The link can't wrap the buttons —
+                nested <a><button> is invalid HTML and breaks layout on
+                some mobile browsers. */}
             <Link
               href={`/cards/${c.id}`}
               aria-label={`Open ${c.name}`}
               className="absolute inset-0 z-0 rounded-lg focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
             />
-            <div className="relative flex items-start justify-between gap-3">
+            <div className="relative flex items-start justify-between gap-3 pointer-events-none">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-4 w-4 text-muted-foreground" />
@@ -125,7 +126,7 @@ export default function CardsPage() {
                   {c.last4 ? ` · ••${c.last4}` : ""}
                 </div>
               </div>
-              <div className="relative z-10 flex gap-1">
+              <div className="relative z-10 flex gap-1 pointer-events-auto">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -153,7 +154,7 @@ export default function CardsPage() {
               </div>
             </div>
             {c.kind === "CREDIT" && c.creditLimit != null && (
-              <div className="relative">
+              <div className="relative pointer-events-none">
                 {(() => {
                   const avail = c.availableLimit ?? c.creditLimit;
                   const outstanding = Math.max(0, c.creditLimit - avail);
@@ -201,7 +202,7 @@ export default function CardsPage() {
               </div>
             )}
             {c.kind === "DEBIT" && c.parentAccount && (
-              <div className="relative">
+              <div className="relative pointer-events-none">
                 <div className="text-xs text-muted-foreground">Available balance</div>
                 <MoneyValue
                   tone={

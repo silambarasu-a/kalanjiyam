@@ -5,7 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { canAccessRecord } from "@/lib/permissions";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { computeAccountAvailableLimit } from "@/lib/card-available-limit";
-import { materializeStatementsFor } from "@/lib/card-statement-service";
+import {
+  materializeStatementsFor,
+  untaggedPaymentsToCard,
+} from "@/lib/card-statement-service";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   calendarMonthPeriods,
@@ -23,6 +26,10 @@ import {
   CategoryBreakdown,
   type CategorySlice,
 } from "@/components/cards/category-breakdown";
+import {
+  PayBillButton,
+  PayBillAutoOpener,
+} from "@/components/cards/card-bill-payer";
 
 export default async function CardDetailPage({
   params,
@@ -130,6 +137,11 @@ export default async function CardDetailPage({
 
   let paymentDueBy: Date | null = null;
   let amountDueNow = 0;
+  // Original bill total + cumulative paid for the active bill, so the UI
+  // can show "₹X due of ₹Y · ₹Z paid" when a partial payment has been made.
+  // Null when there's no active bill at all.
+  let billTotal: number | null = null;
+  let billPaidSoFar = 0;
 
   const manualBillDue = card.account?.nextBillDue ?? null;
   const manualBillAmount =
@@ -138,14 +150,25 @@ export default async function CardDetailPage({
       : null;
   if (manualBillDue && manualBillAmount != null && manualBillAmount > 0) {
     paymentDueBy = manualBillDue;
-    amountDueNow = manualBillAmount;
+    // Subtract untagged transfers landing on this card account up to the
+    // manual due date — there's no CardStatement row to tag against, so
+    // payments toward the override are tracked via this fallback.
+    const paidUntagged = card.accountId
+      ? await untaggedPaymentsToCard(card.accountId, manualBillDue)
+      : 0;
+    billTotal = manualBillAmount;
+    billPaidSoFar = Math.min(manualBillAmount, paidUntagged);
+    amountDueNow = Math.max(0, manualBillAmount - paidUntagged);
   } else if (upcomingStatement) {
     paymentDueBy = upcomingStatement.dueDate;
-    amountDueNow = Math.max(
+    const total = Number(upcomingStatement.totalDue);
+    const paid = upcomingStatement.payments.reduce(
+      (s, p) => s + Number(p.amount),
       0,
-      Number(upcomingStatement.totalDue) -
-        upcomingStatement.payments.reduce((s, p) => s + Number(p.amount), 0),
     );
+    billTotal = total;
+    billPaidSoFar = Math.min(total, paid);
+    amountDueNow = Math.max(0, total - paid);
   } else if (isCredit && stmtDay && card.accountId && balance) {
     // Fallback compute. Most recent close = sd of this month if today is
     // past sd, otherwise sd of previous month. Due = close + grace.
@@ -279,13 +302,16 @@ export default async function CardDetailPage({
     }
   }
 
-  // Transactions tagged to THIS card (works for both CREDIT and DEBIT —
-  // debit cards don't own a companion Account but every txn paid via the
-  // card carries `cardId`).
+  // Transactions for the period. For CREDIT cards we query by the
+  // companion accountId so bill-payment transfer legs (which land on the
+  // account but carry no cardId) show up alongside swipe expenses. For
+  // DEBIT cards there's no companion account, so we fall back to cardId.
   const transactions = activeRange
     ? await prisma.transaction.findMany({
         where: {
-          cardId: id,
+          ...(isCredit && card.accountId
+            ? { accountId: card.accountId }
+            : { cardId: id }),
           workspaceId: card.workspaceId,
           date: rangeToPrismaFilter(activeRange),
         },
@@ -302,10 +328,13 @@ export default async function CardDetailPage({
       })
     : [];
 
-  const periodSpend = transactions.reduce(
-    (s, t) => s + (t.type === "EXPENSE" ? Number(t.amount) : -Number(t.amount)),
-    0,
-  );
+  // Period spend excludes TRANSFER legs — those are bill payments, not
+  // spending. INCOME (refunds) still subtracts from the net.
+  const periodSpend = transactions.reduce((s, t) => {
+    if (t.type === "EXPENSE") return s + Number(t.amount);
+    if (t.type === "INCOME") return s - Number(t.amount);
+    return s;
+  }, 0);
 
   // ── Chart data ───────────────────────────────────────────────────────
   const trendPeriods = periods.slice(0, 6);
@@ -372,8 +401,42 @@ export default async function CardDetailPage({
   // ── DEBIT 30-day average + last-txn ──────────────────────────────────
   const lastTxnDate = transactions[0]?.date ?? null;
 
+  // Pick the oldest unpaid statement (if any) as the auto-open fallback
+  // when the user lands here from a Pay shortcut on the dashboard /
+  // notifications and there's no headline outstanding to use.
+  const fallbackStatement = (() => {
+    for (const s of statements) {
+      if (s.paidAt) continue;
+      const paid = s.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+      const remaining = Math.max(0, Number(s.totalDue) - paid);
+      if (remaining > 0) {
+        return {
+          outstanding: remaining,
+          dueDate: s.dueDate.toISOString(),
+          periodLabel: `${formatDate(s.periodStart)} — ${formatDate(s.periodEnd)}`,
+        };
+      }
+    }
+    return null;
+  })();
+
   return (
     <div className="space-y-6">
+      {isCredit && card.accountId && (
+        <PayBillAutoOpener
+          cardName={card.name}
+          toAccountId={card.accountId}
+          headline={
+            amountDueNow > 0
+              ? {
+                  outstanding: amountDueNow,
+                  dueDate: paymentDueBy?.toISOString() ?? null,
+                }
+              : null
+          }
+          fallbackStatement={fallbackStatement}
+        />
+      )}
       <div>
         <Link href="/cards" className="text-xs text-muted-foreground">
           ← Cards
@@ -530,9 +593,15 @@ export default async function CardDetailPage({
               value={formatINR(amountDueNow)}
               tone={amountDueNow > 0 ? "loss" : "gain"}
               hint={
-                amountDueNow > 0
-                  ? "Last closed bill (excl. open cycle)"
-                  : "Nothing owed"
+                billTotal != null && billPaidSoFar > 0 && amountDueNow > 0
+                  ? `${formatINR(billPaidSoFar)} paid of ${formatINR(billTotal)} bill`
+                  : billTotal != null && billPaidSoFar > 0 && amountDueNow === 0
+                    ? `Cleared · ${formatINR(billTotal)} bill paid in full`
+                    : amountDueNow > 0
+                      ? billTotal != null
+                        ? `Bill total ${formatINR(billTotal)}`
+                        : "Last closed bill (excl. open cycle)"
+                      : "Nothing owed"
               }
             />
             <DueStat
@@ -547,6 +616,16 @@ export default async function CardDetailPage({
               }
             />
           </div>
+          {amountDueNow > 0 && card.accountId && (
+            <div className="mt-3 flex justify-end">
+              <PayBillButton
+                cardName={card.name}
+                toAccountId={card.accountId}
+                outstanding={amountDueNow}
+                dueDate={paymentDueBy?.toISOString() ?? null}
+              />
+            </div>
+          )}
         </section>
       )}
 
@@ -585,25 +664,38 @@ export default async function CardDetailPage({
                             : ""}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div
-                        className={`text-base font-semibold tabular-nums ${
-                          isPaid
-                            ? "text-emerald-700 dark:text-emerald-400"
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <div
+                          className={`text-base font-semibold tabular-nums ${
+                            isPaid
+                              ? "text-emerald-700 dark:text-emerald-400"
+                              : remaining > 0
+                                ? "text-destructive"
+                                : ""
+                          }`}
+                        >
+                          {formatINR(totalDue)}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                          {isPaid
+                            ? "Paid"
                             : remaining > 0
-                              ? "text-destructive"
-                              : ""
-                        }`}
-                      >
-                        {formatINR(totalDue)}
+                              ? `${formatINR(remaining)} due`
+                              : "Settled"}
+                        </div>
                       </div>
-                      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                        {isPaid
-                          ? "Paid"
-                          : remaining > 0
-                            ? `${formatINR(remaining)} due`
-                            : "Settled"}
-                      </div>
+                      {!isPaid && remaining > 0 && card.accountId && (
+                        <PayBillButton
+                          cardName={card.name}
+                          toAccountId={card.accountId}
+                          outstanding={remaining}
+                          dueDate={s.dueDate.toISOString()}
+                          contextLabel={`${formatDate(s.periodStart)} — ${formatDate(s.periodEnd)}`}
+                          variant="outline"
+                          label="Pay"
+                        />
+                      )}
                     </div>
                   </div>
                   {s.payments.length > 0 && (
@@ -819,7 +911,7 @@ export default async function CardDetailPage({
             {/* Mobile: stacked card-list — table cells don't fit in <400px */}
             <ul className="divide-y md:hidden">
               {transactions.map((t) => {
-                const isIncome = t.type === "INCOME";
+                const tone = txTone(t.type);
                 return (
                   <li key={t.id} className="px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
@@ -829,22 +921,27 @@ export default async function CardDetailPage({
                         </div>
                         <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                           <span className="tabular-nums">{formatDate(t.date)}</span>
-                          {t.category?.name && (
+                          {t.type === "TRANSFER" ? (
                             <>
                               <span>·</span>
-                              <span className="truncate">{t.category.name}</span>
+                              <span className="font-medium text-emerald-700 dark:text-emerald-400">
+                                Bill payment
+                              </span>
                             </>
+                          ) : (
+                            t.category?.name && (
+                              <>
+                                <span>·</span>
+                                <span className="truncate">{t.category.name}</span>
+                              </>
+                            )
                           )}
                         </div>
                       </div>
                       <div
-                        className={`text-sm font-semibold tabular-nums whitespace-nowrap shrink-0 ${
-                          isIncome
-                            ? "text-emerald-700 dark:text-emerald-400"
-                            : "text-destructive"
-                        }`}
+                        className={`text-sm font-semibold tabular-nums whitespace-nowrap shrink-0 ${tone.cls}`}
                       >
-                        {isIncome ? "+" : "−"}
+                        {tone.sign}
                         {formatINR(Number(t.amount))}
                       </div>
                     </div>
@@ -864,7 +961,7 @@ export default async function CardDetailPage({
               </thead>
               <tbody>
                 {transactions.map((t) => {
-                  const isIncome = t.type === "INCOME";
+                  const tone = txTone(t.type);
                   return (
                     <tr key={t.id} className="border-b last:border-0 hover:bg-muted/20">
                       <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
@@ -874,7 +971,11 @@ export default async function CardDetailPage({
                         <div className="font-medium truncate">{t.description}</div>
                       </td>
                       <td className="px-5 py-2.5">
-                        {t.category?.name ? (
+                        {t.type === "TRANSFER" ? (
+                          <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                            Bill payment
+                          </span>
+                        ) : t.category?.name ? (
                           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                             {t.category.name}
                           </span>
@@ -883,13 +984,9 @@ export default async function CardDetailPage({
                         )}
                       </td>
                       <td
-                        className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
-                          isIncome
-                            ? "text-emerald-700 dark:text-emerald-400"
-                            : "text-destructive"
-                        }`}
+                        className={`px-5 py-2.5 text-right font-semibold tabular-nums ${tone.cls}`}
                       >
-                        {isIncome ? "+" : "−"}
+                        {tone.sign}
                         {formatINR(Number(t.amount))}
                       </td>
                     </tr>
@@ -902,6 +999,16 @@ export default async function CardDetailPage({
       </section>
     </div>
   );
+}
+
+function txTone(type: string): { sign: string; cls: string } {
+  if (type === "INCOME") {
+    return { sign: "+", cls: "text-emerald-700 dark:text-emerald-400" };
+  }
+  if (type === "TRANSFER") {
+    return { sign: "+", cls: "text-emerald-700 dark:text-emerald-400" };
+  }
+  return { sign: "−", cls: "text-destructive" };
 }
 
 function SubStat({
