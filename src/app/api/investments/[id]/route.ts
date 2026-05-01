@@ -59,6 +59,8 @@ export async function GET(
         symbol: inv.symbol,
         quantity: inv.quantity == null ? null : Number(inv.quantity),
         purchasePrice: inv.purchasePrice == null ? null : Number(inv.purchasePrice),
+        purchaseExchangeRate:
+          inv.purchaseExchangeRate == null ? null : Number(inv.purchaseExchangeRate),
         dividends: inv.dividends == null ? null : Number(inv.dividends),
         exchange: inv.exchange,
         currency: inv.currency,
@@ -131,6 +133,8 @@ export async function PATCH(
         symbol: parsed.data.symbol ?? inv.symbol,
         quantity: parsed.data.quantity ?? inv.quantity,
         purchasePrice: parsed.data.purchasePrice ?? inv.purchasePrice,
+        purchaseExchangeRate:
+          parsed.data.purchaseExchangeRate ?? inv.purchaseExchangeRate,
         dividends: parsed.data.dividends ?? inv.dividends,
         exchange: parsed.data.exchange ?? inv.exchange,
         currency: parsed.data.currency ?? inv.currency,

@@ -32,6 +32,7 @@ interface HoldingData {
   currency: string | null;
   quantity: number | null;
   purchasePrice: number | null;
+  purchaseExchangeRate: number | null;
   dividends: number | null;
   institution: string | null;
   startedAt: string;
@@ -112,12 +113,16 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   const { buyTxns, sellTxns, totalInvested, realisedPL, realisedPLPct } = useMemo(() => {
     const buys = transactions.filter((t) => t.action === "BUY");
     const sells = transactions.filter((t) => t.action === "SELL");
+    // Transaction.amount is always stored in INR (the actual account debit
+    // / credit), regardless of the holding's native currency.
     const invested = buys.reduce((s, t) => s + t.amount, 0);
     const proceeds = sells.reduce((s, t) => s + t.amount, 0);
     const avgCost = holding?.purchasePrice ?? 0;
+    const costRate =
+      holding?.currency === "USD" ? (holding?.purchaseExchangeRate ?? 1) : 1;
     const costOfSold = sells.reduce((s, t) => {
       const qty = t.quantity ?? 0;
-      return s + qty * avgCost;
+      return s + qty * avgCost * costRate;
     }, 0);
     const pl = proceeds - costOfSold;
     const plPct = costOfSold > 0 ? (pl / costOfSold) * 100 : null;
@@ -236,7 +241,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
             </p>
             <p className="text-lg font-bold mt-0.5">
               {qty > 0
-                ? qty.toLocaleString("en-IN", { maximumFractionDigits: 4 })
+                ? qty.toLocaleString("en-IN", { maximumFractionDigits: 6 })
                 : "—"}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">shares held</p>
@@ -261,7 +266,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
               Total invested
             </p>
             <p className="text-lg font-bold mt-0.5">
-              {fmtPrice(totalInvested, cur)}
+              {formatINR(totalInvested)}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">cost basis</p>
           </CardContent>
@@ -282,7 +287,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                   )}
                 >
                   {realisedPL >= 0 ? "+" : ""}
-                  {fmtPrice(realisedPL, cur)}
+                  {formatINR(realisedPL)}
                 </p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">
                   {realisedPLPct != null
@@ -376,7 +381,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                         <td className="py-3 px-4 text-right tabular-nums text-muted-foreground">
                           {t.quantity != null
                             ? t.quantity.toLocaleString("en-IN", {
-                                maximumFractionDigits: 4,
+                                maximumFractionDigits: 6,
                               })
                             : "—"}
                         </td>
@@ -390,7 +395,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                           )}
                         >
                           {isBuy ? "−" : "+"}
-                          {fmtPrice(t.amount, cur)}
+                          {formatINR(t.amount)}
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {t.account?.name ?? "—"}
@@ -452,7 +457,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                         Total invested
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums">
-                        {fmtPrice(totalInvested, cur)}
+                        {formatINR(totalInvested)}
                       </td>
                       <td colSpan={3} />
                     </tr>

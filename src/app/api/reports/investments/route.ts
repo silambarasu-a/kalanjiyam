@@ -13,6 +13,10 @@ function err(e: unknown) {
 /**
  * Investment portfolio: every holding with cost basis, current value,
  * unrealised P&L, and dividends received. Splits by `kind`.
+ *
+ * Currency model: `amount`, `currentValue` are stored in INR. `dividends`
+ * is in the holding's native currency, so USD dividends are converted to
+ * INR using today's USD/INR rate before summing.
  */
 export async function GET() {
   try {
@@ -22,10 +26,13 @@ export async function GET() {
       orderBy: [{ active: "desc" }, { kind: "asc" }, { name: "asc" }],
     });
 
+    const usdInrRate = await fetchUsdInrRate();
+
     const rows = investments.map((i) => {
       const cost = Number(i.amount);
       const current = i.currentValue == null ? cost : Number(i.currentValue);
-      const dividends = i.dividends == null ? 0 : Number(i.dividends);
+      const divsNative = i.dividends == null ? 0 : Number(i.dividends);
+      const dividends = i.currency === "USD" ? divsNative * usdInrRate : divsNative;
       const pnl = current + dividends - cost;
       const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
       return {
@@ -67,4 +74,19 @@ export async function GET() {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+async function fetchUsdInrRate(): Promise<number> {
+  try {
+    const res = await fetch(
+      "https://api.frankfurter.app/latest?from=USD&to=INR",
+      { next: { revalidate: 3600 } },
+    );
+    if (!res.ok) return 1;
+    const json = (await res.json()) as { rates?: { INR?: number } };
+    const rate = json?.rates?.INR;
+    return typeof rate === "number" && rate > 0 ? rate : 1;
+  } catch {
+    return 1;
+  }
 }

@@ -55,6 +55,8 @@ export async function GET(request: Request) {
         symbol: i.symbol,
         quantity: i.quantity == null ? null : Number(i.quantity),
         purchasePrice: i.purchasePrice == null ? null : Number(i.purchasePrice),
+        purchaseExchangeRate:
+          i.purchaseExchangeRate == null ? null : Number(i.purchaseExchangeRate),
         dividends: i.dividends == null ? null : Number(i.dividends),
         exchange: i.exchange,
         currency: i.currency,
@@ -112,6 +114,7 @@ export async function POST(request: Request) {
           symbol: data.symbol,
           quantity: data.quantity ?? null,
           purchasePrice: data.purchasePrice ?? null,
+          purchaseExchangeRate: data.purchaseExchangeRate ?? null,
           dividends: data.dividends ?? null,
           exchange: data.exchange,
           currency: data.currency ?? "INR",

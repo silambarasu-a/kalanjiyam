@@ -990,6 +990,7 @@ model Investment {
   symbol               String?
   quantity             Decimal?              @db.Decimal(18, 6)
   purchasePrice        Decimal?              @db.Decimal(14, 4)
+  purchaseExchangeRate Decimal?              @db.Decimal(10, 4)
   dividends            Decimal?              @db.Decimal(14, 2)
   exchange             String?
   currency             String?               @default("INR")
