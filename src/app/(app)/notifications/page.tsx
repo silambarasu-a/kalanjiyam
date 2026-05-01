@@ -28,6 +28,7 @@ type Item = {
   total?: number;
   paid?: number;
   href: string;
+  payHref?: string;
   overdue: boolean;
 };
 type Payload = {
@@ -251,20 +252,17 @@ export default function NotificationsPage() {
                           {formatINR(it.amount)}
                         </div>
                       )}
-                      {it.source === "CARD_STATEMENT" &&
-                        it.href !== "/cards" &&
-                        it.href.startsWith("/cards/") &&
-                        (it.amount ?? 0) > 0 && (
-                          <Link
-                            href={`${it.href}?pay=1`}
-                            onClick={() => {
-                              if (!dismissed) dismiss(it.id, it.dueDate);
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
-                          >
-                            <Wallet className="h-3 w-3" /> Pay
-                          </Link>
-                        )}
+                      {it.payHref && (it.amount ?? 0) > 0 && (
+                        <Link
+                          href={it.payHref}
+                          onClick={() => {
+                            if (!dismissed) dismiss(it.id, it.dueDate);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                        >
+                          <Wallet className="h-3 w-3" /> Pay
+                        </Link>
+                      )}
                       <Link
                         href={it.href}
                         onClick={() => {

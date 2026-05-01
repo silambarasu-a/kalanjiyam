@@ -223,6 +223,10 @@ export async function GET(request: Request) {
       total?: number;
       paid?: number;
       href: string;
+      /** Deep link that opens the relevant Pay/Confirm dialog on the
+       * detail page. Absent only when the due type has no payment flow
+       * we can deep-link into. UI shows a "Pay" button when present. */
+      payHref?: string;
     };
     const dues: Due[] = [];
     for (const r of upcomingReminders) {
@@ -236,6 +240,7 @@ export async function GET(request: Request) {
         dueDate: r.dueDate.toISOString(),
         amount: r.amount == null ? null : Number(r.amount),
         href: "/reminders",
+        payHref: `/reminders?confirm=${r.id}`,
       });
     }
     for (const l of upcomingLoanDues) {
@@ -247,19 +252,24 @@ export async function GET(request: Request) {
         label: l.lender,
         dueDate: l.nextDueDate.toISOString(),
         amount: l.emiAmount == null ? null : Number(l.emiAmount),
-        href: l.source === "CARD_EMI" ? "/cards" : "/loans/bank",
+        href: `/loans/${l.id}`,
+        payHref: `/loans/${l.id}?pay=1`,
       });
     }
     // Track which card-account-ids already produced a CardStatement-based
-    // due so the manual/fallback path doesn't double-count them.
+    // due so the manual/fallback path doesn't double-count them. Only mark
+    // the account when we actually push a due — a materialised-but-cleared
+    // statement (outstanding=0 with stale paidAt) shouldn't suppress a
+    // separate manual override for a future bill.
     const cardAccountsWithStatement = new Set<string>();
     for (const s of upcomingCardBills) {
       const paid = s.payments.reduce((acc, p) => acc + Number(p.amount), 0);
       const total = Number(s.totalDue);
       const outstanding = Math.max(0, total - paid);
-      cardAccountsWithStatement.add(s.account.id);
       if (outstanding === 0) continue;
+      cardAccountsWithStatement.add(s.account.id);
       const cardId = s.account.linkedCard?.id ?? null;
+      const cardHref = cardId ? `/cards/${cardId}` : "/cards";
       dues.push({
         id: `card-statement:${s.id}`,
         source: "CARD_STATEMENT",
@@ -268,7 +278,8 @@ export async function GET(request: Request) {
         dueDate: s.dueDate.toISOString(),
         amount: outstanding,
         ...(paid > 0 ? { total, paid: Math.min(total, paid) } : {}),
-        href: cardId ? `/cards/${cardId}` : "/cards",
+        href: cardHref,
+        ...(cardId ? { payHref: `${cardHref}?pay=1` } : {}),
       });
     }
     // Manual-override + computed fallback for credit-card accounts that
@@ -297,6 +308,7 @@ export async function GET(request: Request) {
         const paidUntagged = await untaggedPaymentsToCard(a.id, manualDue);
         const outstanding = Math.max(0, manualAmount - paidUntagged);
         if (outstanding > 0) {
+          const cardHref = linkedCardId ? `/cards/${linkedCardId}` : "/cards";
           dues.push({
             id: `card-manual:${a.id}`,
             source: "CARD_STATEMENT",
@@ -310,7 +322,8 @@ export async function GET(request: Request) {
                   paid: Math.min(manualAmount, paidUntagged),
                 }
               : {}),
-            href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
+            href: cardHref,
+            ...(linkedCardId ? { payHref: `${cardHref}?pay=1` } : {}),
           });
         }
         continue;
@@ -356,6 +369,7 @@ export async function GET(request: Request) {
         cardBalanceNow - Number(chargesAfterClose._sum.amount ?? 0),
       );
       if (computedAmount <= 0) continue;
+      const cardHref = linkedCardId ? `/cards/${linkedCardId}` : "/cards";
       dues.push({
         id: `card-computed:${a.id}`,
         source: "CARD_STATEMENT",
@@ -363,7 +377,8 @@ export async function GET(request: Request) {
         label: a.name,
         dueDate: computedDue.toISOString(),
         amount: computedAmount,
-        href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
+        href: cardHref,
+        ...(linkedCardId ? { payHref: `${cardHref}?pay=1` } : {}),
       });
     }
     for (const s of upcomingLeaseDues) {
@@ -379,6 +394,7 @@ export async function GET(request: Request) {
         dueDate: s.dueDate.toISOString(),
         amount: Number(s.amount),
         href: `/leases/${s.lease.id}`,
+        payHref: `/leases/${s.lease.id}?confirm=${s.id}`,
       });
     }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate));

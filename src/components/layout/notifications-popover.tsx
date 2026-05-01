@@ -21,6 +21,7 @@ type Item = {
   total?: number;
   paid?: number;
   href: string;
+  payHref?: string;
   overdue: boolean;
 };
 type Payload = {
@@ -148,11 +149,7 @@ export function NotificationsPopover() {
             <ul className="divide-y">
               {orderedItems.slice(0, 12).map((it) => {
                 const dismissed = isDismissed(it.id, it.dueDate);
-                const canPay =
-                  it.source === "CARD_STATEMENT" &&
-                  it.href !== "/cards" &&
-                  it.href.startsWith("/cards/") &&
-                  (it.amount ?? 0) > 0;
+                const canPay = it.payHref != null && (it.amount ?? 0) > 0;
                 return (
                   <li
                     key={`${it.id}|${it.dueDate}`}
@@ -216,14 +213,14 @@ export function NotificationsPopover() {
                           )}
                         </div>
                       </Link>
-                      {canPay && (
+                      {canPay && it.payHref && (
                         <Link
-                          href={`${it.href}?pay=1`}
+                          href={it.payHref}
                           onClick={() => {
                             if (!dismissed) dismiss(it.id, it.dueDate);
                           }}
-                          title="Pay this bill"
-                          aria-label="Pay this bill"
+                          title="Pay / confirm"
+                          aria-label="Pay / confirm"
                           className="shrink-0 flex items-center gap-1 self-stretch border-l px-3 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
                         >
                           <Wallet className="h-3 w-3" /> Pay
