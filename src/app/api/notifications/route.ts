@@ -23,6 +23,10 @@ export type Notification = {
   total?: number;
   paid?: number;
   href: string;
+  /** Deep link that opens the relevant Pay/Confirm dialog on the detail
+   * page. Absent only when the due type has no flow we can deep-link
+   * into. UI shows a "Pay" button when present. */
+  payHref?: string;
   overdue: boolean;
 };
 
@@ -134,6 +138,7 @@ export async function GET(request: Request) {
         dueDate: r.dueDate.toISOString(),
         amount: r.amount == null ? null : Number(r.amount),
         href: "/reminders",
+        payHref: `/reminders?confirm=${r.id}`,
         overdue: r.dueDate < today,
       });
     }
@@ -147,6 +152,7 @@ export async function GET(request: Request) {
         dueDate: l.nextDueDate.toISOString(),
         amount: l.emiAmount == null ? null : Number(l.emiAmount),
         href: `/loans/${l.id}`,
+        payHref: `/loans/${l.id}?pay=1`,
         overdue: l.nextDueDate < today,
       });
     }
@@ -161,19 +167,23 @@ export async function GET(request: Request) {
         dueDate: s.dueDate.toISOString(),
         amount: s.amount == null ? null : Number(s.amount),
         href: `/leases/${s.lease.id}`,
+        payHref: `/leases/${s.lease.id}?confirm=${s.id}`,
         overdue: s.dueDate < today,
       });
     }
     // Card statements — outstanding = totalDue − Σ payments. Skip rows
-    // already paid in full.
+    // already paid in full. Only mark the account when we actually emit
+    // a notification — a cleared statement shouldn't suppress a separate
+    // manual override for a future bill.
     const accountsWithStatement = new Set<string>();
     for (const s of statements) {
       const paid = s.payments.reduce((a, p) => a + Number(p.amount), 0);
       const total = Number(s.totalDue);
       const outstanding = Math.max(0, total - paid);
-      accountsWithStatement.add(s.account.id);
       if (outstanding === 0) continue;
+      accountsWithStatement.add(s.account.id);
       const cardId = s.account.linkedCard?.id ?? null;
+      const cardHref = cardId ? `/cards/${cardId}` : "/cards";
       items.push({
         id: `card-statement:${s.id}`,
         source: "CARD_STATEMENT",
@@ -184,7 +194,8 @@ export async function GET(request: Request) {
         ...(paid > 0
           ? { total: round2(total), paid: round2(Math.min(total, paid)) }
           : {}),
-        href: cardId ? `/cards/${cardId}` : "/cards",
+        href: cardHref,
+        ...(cardId ? { payHref: `${cardHref}?pay=1` } : {}),
         overdue: s.dueDate < today,
       });
     }
@@ -200,6 +211,7 @@ export async function GET(request: Request) {
       const outstanding = Math.max(0, amount - paidUntagged);
       if (outstanding === 0) continue;
       const cardId = a.linkedCard?.id ?? null;
+      const cardHref = cardId ? `/cards/${cardId}` : "/cards";
       items.push({
         id: `card-manual:${a.id}`,
         source: "CARD_STATEMENT",
@@ -213,7 +225,8 @@ export async function GET(request: Request) {
               paid: round2(Math.min(amount, paidUntagged)),
             }
           : {}),
-        href: cardId ? `/cards/${cardId}` : "/cards",
+        href: cardHref,
+        ...(cardId ? { payHref: `${cardHref}?pay=1` } : {}),
         overdue: a.nextBillDue < today,
       });
     }

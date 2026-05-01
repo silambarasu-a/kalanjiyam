@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Bell, Clock, Check, X } from "lucide-react";
@@ -49,11 +50,36 @@ export default function RemindersPage() {
     fetcher
   );
   const [confirmRow, setConfirmRow] = useState<Reminder | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [consumedConfirm, setConsumedConfirm] = useState(false);
 
-  const reminders = data?.reminders ?? [];
+  // Memoised so the deep-link auto-open effect's deps are stable —
+  // `data?.reminders ?? []` would otherwise produce a fresh array each
+  // render and re-trigger the effect.
+  const reminders = useMemo(() => data?.reminders ?? [], [data]);
   const now = new Date();
   const overdue = reminders.filter((r) => new Date(r.dueDate) < now);
   const upcoming = reminders.filter((r) => new Date(r.dueDate) >= now);
+
+  // Deep-link auto-open: `?confirm=<reminderId>` opens the Confirm dialog
+  // for that reminder (used by Pay shortcuts on the dashboard / notif).
+  useEffect(() => {
+    if (consumedConfirm) return;
+    const target = searchParams.get("confirm");
+    if (!target) return;
+    const match = reminders.find((r) => r.id === target);
+    if (!match) return; // wait for the list to load
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot URL trigger */
+    setConsumedConfirm(true);
+    setConfirmRow(match);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("confirm");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, reminders, consumedConfirm, pathname, router]);
 
   return (
     <div className="space-y-6">

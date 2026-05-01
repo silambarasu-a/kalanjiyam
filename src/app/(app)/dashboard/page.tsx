@@ -35,6 +35,7 @@ type Due = {
   total?: number;
   paid?: number;
   href: string;
+  payHref?: string;
 };
 
 type Summary = {
@@ -324,14 +325,10 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
       : days <= 3
         ? "text-amber-600 dark:text-amber-400"
         : "text-muted-foreground";
-  // CARD_STATEMENT dues that resolve to a card detail page (i.e. href has
-  // a card id, not the bare /cards listing) get a Pay shortcut that deep
-  // links via ?pay=1, opening the bill-payer dialog on arrival.
-  const showPay =
-    due.source === "CARD_STATEMENT" &&
-    due.href !== "/cards" &&
-    due.href.startsWith("/cards/") &&
-    (due.amount ?? 0) > 0;
+  // Any due that exposes a payHref gets a Pay shortcut. payHref deep-links
+  // into the relevant detail page with the right query param so the Pay/
+  // Confirm dialog auto-opens on arrival.
+  const showPay = due.payHref != null && (due.amount ?? 0) > 0;
   return (
     <div className="group relative flex items-center gap-3 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition">
       <Link
@@ -365,9 +362,9 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
         )}
         <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
       </div>
-      {showPay && (
+      {showPay && due.payHref && (
         <Link
-          href={`${due.href}?pay=1`}
+          href={due.payHref}
           className="relative z-10 inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors shrink-0"
           onClick={(e) => e.stopPropagation()}
         >

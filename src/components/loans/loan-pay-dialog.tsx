@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -299,7 +299,9 @@ export function LoanPayDialog({
 /**
  * Self-contained Pay button + dialog for use on the loan detail page.
  * Refreshes the server-rendered route on success so the page picks up
- * the new outstanding, schedule, and payment history.
+ * the new outstanding, schedule, and payment history. Also auto-opens
+ * when the page is loaded with `?pay=1` (used by Pay shortcuts on the
+ * dashboard / notifications dues lists).
  */
 export function LoanPayButton({
   loan,
@@ -309,7 +311,24 @@ export function LoanPayButton({
   className?: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+  const [consumed, setConsumed] = useState(false);
+
+  useEffect(() => {
+    if (consumed) return;
+    if (searchParams.get("pay") !== "1") return;
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot URL trigger */
+    setConsumed(true);
+    setOpen(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("pay");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, consumed, pathname, router]);
+
   return (
     <>
       <Button onClick={() => setOpen(true)} className={className}>

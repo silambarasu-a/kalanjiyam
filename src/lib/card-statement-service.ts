@@ -251,7 +251,7 @@ export async function untaggedPaymentsToCard(
 export async function recomputeStatementPaidAt(statementId: string): Promise<void> {
   const stmt = await prisma.cardStatement.findUnique({
     where: { id: statementId },
-    select: { totalDue: true, paidAt: true },
+    select: { totalDue: true, paidAt: true, closedAt: true, createdAt: true },
   });
   if (!stmt) return;
   const payments = await prisma.transfer.findMany({
@@ -262,11 +262,19 @@ export async function recomputeStatementPaidAt(statementId: string): Promise<voi
   const totalDue = Number(stmt.totalDue);
   let cumulative = 0;
   let paidAt: Date | null = null;
-  for (const p of payments) {
-    cumulative += Number(p.amount);
-    if (cumulative + 0.5 >= totalDue) {
-      paidAt = p.date;
-      break;
+  // Empty cycle (totalDue ≤ 0) — nothing was owed, so the statement is
+  // implicitly paid as soon as the cycle closes. Without this, a $0
+  // statement stays paidAt:null forever and silently blocks manual-
+  // override / fallback paths in the dashboard + notifications.
+  if (totalDue <= 0) {
+    paidAt = stmt.closedAt ?? stmt.createdAt;
+  } else {
+    for (const p of payments) {
+      cumulative += Number(p.amount);
+      if (cumulative + 0.5 >= totalDue) {
+        paidAt = p.date;
+        break;
+      }
     }
   }
   // No-op when the stored value already matches the recomputed one.

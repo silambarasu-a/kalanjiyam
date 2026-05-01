@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { CalendarCheck, CalendarX, Clock, Trash2 } from "lucide-react";
@@ -66,6 +71,28 @@ export default function LeaseDetailPage() {
   const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
 
   const [confirmRow, setConfirmRow] = useState<ScheduleRow | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [consumedConfirm, setConsumedConfirm] = useState(false);
+
+  // Deep-link auto-open: `?confirm=<scheduleId>` opens the Confirm dialog
+  // for that schedule row (used by Pay shortcuts on the dashboard / notif).
+  useEffect(() => {
+    if (consumedConfirm) return;
+    const target = searchParams.get("confirm");
+    if (!target) return;
+    const match = data?.schedule.find((s) => s.id === target);
+    if (!match) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot URL trigger */
+    setConsumedConfirm(true);
+    setConfirmRow(match);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("confirm");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, data, consumedConfirm, pathname, router]);
 
   if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>;
   const { lease, schedule } = data;
