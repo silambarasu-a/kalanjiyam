@@ -123,9 +123,14 @@ export default function InvestmentsPage() {
       const qty = i.quantity ?? 0;
       const pp = i.purchasePrice ?? 0;
       const isUsd = i.currency === "USD";
-      const costRate = isUsd ? (i.purchaseExchangeRate ?? usdInrRate) : 1;
       const liveRate = isUsd ? usdInrRate : 1;
-      const investedInr = qty * pp * costRate;
+      // Cost basis = stored INR `amount` (server-side maintained as
+      // weighted-avg total cost). Fall back to qty × pp × stored rate for
+      // legacy rows without amount.
+      const investedInr =
+        i.amount > 0
+          ? i.amount
+          : qty * pp * (isUsd ? (i.purchaseExchangeRate ?? usdInrRate) : 1);
       const quote = i.symbol ? quoteMap.get(i.symbol) : undefined;
       const livePrice = quote?.price ?? 0;
       const hasLive = livePrice > 0 && qty > 0;

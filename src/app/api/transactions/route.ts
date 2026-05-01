@@ -8,6 +8,7 @@ import {
   TransactionType,
   MemberChargeType,
   MemberChargeStatus,
+  Prisma,
 } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -177,6 +178,9 @@ export async function POST(request: Request) {
       id: string;
       amount: number;
       quantity: number | null;
+      purchasePrice: number | null;
+      purchaseExchangeRate: number | null;
+      currency: string | null;
       currentValue: number | null;
     } | null = null;
     if (data.investmentId) {
@@ -193,6 +197,10 @@ export async function POST(request: Request) {
         id: inv.id,
         amount: Number(inv.amount),
         quantity: inv.quantity == null ? null : Number(inv.quantity),
+        purchasePrice: inv.purchasePrice == null ? null : Number(inv.purchasePrice),
+        purchaseExchangeRate:
+          inv.purchaseExchangeRate == null ? null : Number(inv.purchaseExchangeRate),
+        currency: inv.currency,
         currentValue: inv.currentValue == null ? null : Number(inv.currentValue),
       };
     }
@@ -248,23 +256,57 @@ export async function POST(request: Request) {
           data: { originTransaction: { connect: { id: txn.id } } },
         });
       }
-      // Side effect: update the linked investment's amount + quantity.
+      // Side effect: update the linked investment's summary fields.
       // BUY adds; SELL subtracts (clamped at 0). currentValue tracks the
       // last-known market value — we don't touch it here.
+      // On BUY we also recompute weighted-average purchasePrice (in native
+      // currency) and, for USD holdings, weighted-average
+      // purchaseExchangeRate. SELL leaves cost basis of remaining shares
+      // unchanged (standard accounting convention — proceeds realize gains
+      // against the existing avg cost).
       if (investmentForUpdate && data.investmentAction) {
         const sign = data.investmentAction === "BUY" ? 1 : -1;
         const newAmount = Math.max(0, investmentForUpdate.amount + sign * data.amount);
         const qtyDelta = data.investmentQty ?? 0;
+        const oldQty = investmentForUpdate.quantity ?? 0;
         const newQty =
           investmentForUpdate.quantity == null && qtyDelta === 0
             ? null
-            : Math.max(0, (investmentForUpdate.quantity ?? 0) + sign * qtyDelta);
+            : Math.max(0, oldQty + sign * qtyDelta);
+
+        const updateData: Prisma.InvestmentUpdateInput = {
+          amount: newAmount,
+          quantity: newQty,
+        };
+
+        if (
+          sign === 1 &&
+          qtyDelta > 0 &&
+          data.investmentPrice != null &&
+          newQty != null &&
+          newQty > 0
+        ) {
+          const oldPP = investmentForUpdate.purchasePrice ?? 0;
+          const tradePrice = data.investmentPrice;
+          const newPP =
+            oldQty > 0 && oldPP > 0
+              ? (oldQty * oldPP + qtyDelta * tradePrice) / newQty
+              : tradePrice;
+          updateData.purchasePrice = newPP;
+
+          if (
+            investmentForUpdate.currency === "USD" &&
+            newAmount > 0 &&
+            newPP > 0
+          ) {
+            // Derived from the cost identity: amount = qty × pp × rate.
+            updateData.purchaseExchangeRate = newAmount / (newQty * newPP);
+          }
+        }
+
         await tx.investment.update({
           where: { id: investmentForUpdate.id },
-          data: {
-            amount: newAmount,
-            quantity: newQty,
-          },
+          data: updateData,
         });
       }
       return txn;

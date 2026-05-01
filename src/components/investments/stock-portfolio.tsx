@@ -455,10 +455,12 @@ export function StockPortfolio() {
       const divs = h.dividends ?? 0;
       const cur = h.currency === "USD" ? "USD" : "INR";
       const liveConversion = cur === "USD" ? usdInrRate : 1;
-      const costConversion =
-        cur === "USD" ? (h.purchaseExchangeRate ?? usdInrRate) : 1;
 
-      const costInr = qty * pp * costConversion;
+      // Cost basis = stored INR `amount` (server-side maintained as
+      // weighted-avg total cost). Falls back to qty × pp × rate for
+      // legacy rows without amount.
+      const costInr =
+        h.amount > 0 ? h.amount : qty * pp * (h.purchaseExchangeRate ?? liveConversion);
       const quote = h.symbol ? quoteMap.get(h.symbol) : undefined;
       const livePrice = quote?.price ?? 0;
       const valueInr = qty * livePrice * liveConversion;
