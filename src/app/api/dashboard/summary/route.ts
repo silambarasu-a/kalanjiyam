@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { computeAccountBalance } from "@/lib/account-balance";
+import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
 import { parsePeriodId, rangeToPrismaFilter } from "@/lib/statement-period";
 
 function err(e: unknown) {
@@ -217,6 +218,10 @@ export async function GET(request: Request) {
       label: string;
       dueDate: string;
       amount: number | null;
+      /** Original bill total — only set on CARD_STATEMENT entries that
+       * have been partially paid, so the UI can render "X paid of Y". */
+      total?: number;
+      paid?: number;
       href: string;
     };
     const dues: Due[] = [];
@@ -250,7 +255,8 @@ export async function GET(request: Request) {
     const cardAccountsWithStatement = new Set<string>();
     for (const s of upcomingCardBills) {
       const paid = s.payments.reduce((acc, p) => acc + Number(p.amount), 0);
-      const outstanding = Math.max(0, Number(s.totalDue) - paid);
+      const total = Number(s.totalDue);
+      const outstanding = Math.max(0, total - paid);
       cardAccountsWithStatement.add(s.account.id);
       if (outstanding === 0) continue;
       const cardId = s.account.linkedCard?.id ?? null;
@@ -261,6 +267,7 @@ export async function GET(request: Request) {
         label: s.account.name,
         dueDate: s.dueDate.toISOString(),
         amount: outstanding,
+        ...(paid > 0 ? { total, paid: Math.min(total, paid) } : {}),
         href: cardId ? `/cards/${cardId}` : "/cards",
       });
     }
@@ -274,7 +281,10 @@ export async function GET(request: Request) {
       const linkedCardId = a.linkedCard?.id ?? null;
       const cardBal = cardBalances.find((b) => b.accountId === a.id);
       const cardBalanceNow = cardBal?.balance ?? 0;
-      // 1. Manual override wins.
+      // 1. Manual override wins. Subtract any untagged payments to this
+      //    card account dated on/before the manual due date — without a
+      //    materialised statement, transfers can't be tagged, so this is
+      //    the only signal that partial payments have been made.
       const manualDue = a.nextBillDue;
       const manualAmount =
         a.nextBillAmount != null ? Number(a.nextBillAmount) : null;
@@ -284,15 +294,25 @@ export async function GET(request: Request) {
         manualAmount > 0 &&
         manualDue.getTime() <= in30Days.getTime()
       ) {
-        dues.push({
-          id: `card-manual:${a.id}`,
-          source: "CARD_STATEMENT",
-          kind: "CARD BILL",
-          label: a.name,
-          dueDate: manualDue.toISOString(),
-          amount: manualAmount,
-          href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
-        });
+        const paidUntagged = await untaggedPaymentsToCard(a.id, manualDue);
+        const outstanding = Math.max(0, manualAmount - paidUntagged);
+        if (outstanding > 0) {
+          dues.push({
+            id: `card-manual:${a.id}`,
+            source: "CARD_STATEMENT",
+            kind: "CARD BILL",
+            label: a.name,
+            dueDate: manualDue.toISOString(),
+            amount: outstanding,
+            ...(paidUntagged > 0
+              ? {
+                  total: manualAmount,
+                  paid: Math.min(manualAmount, paidUntagged),
+                }
+              : {}),
+            href: linkedCardId ? `/cards/${linkedCardId}` : "/cards",
+          });
+        }
         continue;
       }
       // 2. Compute from current balance + statementDate when no manual

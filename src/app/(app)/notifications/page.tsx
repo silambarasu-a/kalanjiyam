@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ExternalLink,
   Undo2,
+  Wallet,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,8 @@ type Item = {
   label: string;
   dueDate: string;
   amount: number | null;
+  total?: number;
+  paid?: number;
   href: string;
   overdue: boolean;
 };
@@ -230,6 +233,17 @@ export default function NotificationsPage() {
                         </div>
                         <div className="text-xs text-muted-foreground">
                           Due {formatDate(it.dueDate)}
+                          {it.total != null &&
+                            it.paid != null &&
+                            it.paid > 0 && (
+                              <>
+                                {" · "}
+                                <span className="text-emerald-700 dark:text-emerald-400">
+                                  {formatINR(it.paid)} paid
+                                </span>{" "}
+                                of {formatINR(it.total)}
+                              </>
+                            )}
                         </div>
                       </div>
                       {it.amount != null && (
@@ -237,6 +251,20 @@ export default function NotificationsPage() {
                           {formatINR(it.amount)}
                         </div>
                       )}
+                      {it.source === "CARD_STATEMENT" &&
+                        it.href !== "/cards" &&
+                        it.href.startsWith("/cards/") &&
+                        (it.amount ?? 0) > 0 && (
+                          <Link
+                            href={`${it.href}?pay=1`}
+                            onClick={() => {
+                              if (!dismissed) dismiss(it.id, it.dueDate);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                          >
+                            <Wallet className="h-3 w-3" /> Pay
+                          </Link>
+                        )}
                       <Link
                         href={it.href}
                         onClick={() => {

@@ -27,6 +27,8 @@ type Txn = {
   memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
   memberCharge: { id: string; status: string } | null;
   transferId: string | null;
+  transferDirection: "OUT" | "IN" | null;
+  transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -92,20 +94,34 @@ export default function TransactionsPage() {
                 {(data?.transactions ?? []).map((t) => {
                   // Negative-amount EXPENSE = contra-expense (e.g. wage
                   // advance return). Treat as inflow: green, "+", abs value.
+                  // For TRANSFER legs, direction is leg-specific: OUT side
+                  // is outflow (red, "−"), IN side is inflow (green, "+").
+                  const isTransferOut =
+                    t.transferId != null && t.transferDirection === "OUT";
+                  const isTransferIn =
+                    t.transferId != null && t.transferDirection === "IN";
                   const isInflow =
                     t.type === "INCOME" ||
-                    (t.type === "EXPENSE" && t.amount < 0);
-                  const Icon = t.transferId
-                    ? ArrowLeftRight
-                    : isInflow
-                      ? ArrowDownLeft
-                      : ArrowUpRight;
-                  const sign = t.transferId ? "" : isInflow ? "+" : "−";
-                  const color = t.transferId
-                    ? "text-muted-foreground"
-                    : isInflow
-                      ? "text-emerald-700 dark:text-emerald-400"
-                      : "text-destructive";
+                    (t.type === "EXPENSE" && t.amount < 0) ||
+                    isTransferIn;
+                  const isOutflow =
+                    !isInflow &&
+                    (t.type === "EXPENSE" || isTransferOut);
+                  const Icon = isTransferIn
+                    ? ArrowDownLeft
+                    : isTransferOut
+                      ? ArrowUpRight
+                      : t.transferId
+                        ? ArrowLeftRight
+                        : isInflow
+                          ? ArrowDownLeft
+                          : ArrowUpRight;
+                  const sign = isInflow ? "+" : isOutflow ? "−" : "";
+                  const color = isInflow
+                    ? "text-emerald-700 dark:text-emerald-400"
+                    : isOutflow
+                      ? "text-destructive"
+                      : "text-muted-foreground";
                   const displayAmount = Math.abs(t.amount);
                   const accountLabel = t.account?.name ?? t.card?.name ?? "—";
                   return (
@@ -123,21 +139,34 @@ export default function TransactionsPage() {
                         <div className="font-medium truncate">
                           {t.description}
                         </div>
-                        {(t.beneficiary ||
-                          t.memberChargeType === "RECOVERABLE") && (
+                        {t.transferCounterparty ? (
                           <div className="text-[11px] text-muted-foreground truncate">
-                            {t.beneficiary ? `for ${t.beneficiary.name}` : ""}
-                            {t.memberChargeType === "RECOVERABLE"
-                              ? " (recover)"
-                              : ""}
+                            {isTransferOut ? "→ to " : "← from "}
+                            {t.transferCounterparty.name}
                           </div>
+                        ) : (
+                          (t.beneficiary ||
+                            t.memberChargeType === "RECOVERABLE") && (
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {t.beneficiary ? `for ${t.beneficiary.name}` : ""}
+                              {t.memberChargeType === "RECOVERABLE"
+                                ? " (recover)"
+                                : ""}
+                            </div>
+                          )
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
                         {accountLabel}
                       </td>
                       <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
-                        {t.category?.name ?? "—"}
+                        {t.transferId ? (
+                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            {isTransferOut ? "Transfer out" : isTransferIn ? "Transfer in" : "Transfer"}
+                          </span>
+                        ) : (
+                          t.category?.name ?? "—"
+                        )}
                       </td>
                       <td
                         className={`px-3 py-2.5 text-right font-semibold tabular-nums whitespace-nowrap ${color}`}

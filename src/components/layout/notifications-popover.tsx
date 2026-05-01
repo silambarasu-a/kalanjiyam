@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import useSWR from "swr";
-import { Bell, X, CheckCheck, Undo2 } from "lucide-react";
+import { Bell, X, CheckCheck, Undo2, Wallet } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -18,6 +18,8 @@ type Item = {
   label: string;
   dueDate: string;
   amount: number | null;
+  total?: number;
+  paid?: number;
   href: string;
   overdue: boolean;
 };
@@ -146,54 +148,88 @@ export function NotificationsPopover() {
             <ul className="divide-y">
               {orderedItems.slice(0, 12).map((it) => {
                 const dismissed = isDismissed(it.id, it.dueDate);
+                const canPay =
+                  it.source === "CARD_STATEMENT" &&
+                  it.href !== "/cards" &&
+                  it.href.startsWith("/cards/") &&
+                  (it.amount ?? 0) > 0;
                 return (
                   <li
                     key={`${it.id}|${it.dueDate}`}
                     className="group relative hover:bg-accent transition-colors"
                   >
-                    <Link
-                      href={it.href}
-                      onClick={() => {
-                        if (!dismissed) dismiss(it.id, it.dueDate);
-                      }}
-                      className={cn(
-                        "block px-4 py-2.5 pr-10",
-                        dismissed && "opacity-55",
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        <div
-                          className={cn(
-                            "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                            dismissed
-                              ? "bg-muted-foreground/40"
-                              : it.overdue
-                                ? "bg-destructive"
-                                : "bg-primary",
-                          )}
-                        />
-                        <div className="flex-1 min-w-0">
+                    {/* Main row: details + amount on the left, Pay column
+                        as a sibling on the right (separate <a>, not nested
+                        inside the row link). */}
+                    <div className="flex items-stretch">
+                      <Link
+                        href={it.href}
+                        onClick={() => {
+                          if (!dismissed) dismiss(it.id, it.dueDate);
+                        }}
+                        className={cn(
+                          "min-w-0 flex-1 block px-4 py-2.5 pr-7",
+                          dismissed && "opacity-55",
+                        )}
+                      >
+                        <div className="flex items-start gap-2">
                           <div
                             className={cn(
-                              "text-sm truncate",
-                              dismissed ? "font-normal" : "font-medium",
+                              "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
+                              dismissed
+                                ? "bg-muted-foreground/40"
+                                : it.overdue
+                                  ? "bg-destructive"
+                                  : "bg-primary",
                             )}
-                          >
-                            {it.label}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div
+                              className={cn(
+                                "text-sm truncate",
+                                dismissed ? "font-normal" : "font-medium",
+                              )}
+                            >
+                              {it.label}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {sourceLabel(it.source)} · {formatDate(it.dueDate)}
+                              {it.overdue && !dismissed ? " · overdue" : ""}
+                              {dismissed ? " · read" : ""}
+                              {it.total != null &&
+                                it.paid != null &&
+                                it.paid > 0 && (
+                                  <>
+                                    {" · "}
+                                    <span className="text-emerald-700 dark:text-emerald-400">
+                                      {formatINR(it.paid)} paid
+                                    </span>{" "}
+                                    of {formatINR(it.total)}
+                                  </>
+                                )}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {sourceLabel(it.source)} · {formatDate(it.dueDate)}
-                            {it.overdue && !dismissed ? " · overdue" : ""}
-                            {dismissed ? " · read" : ""}
-                          </div>
+                          {it.amount != null && (
+                            <div className="text-sm font-semibold tabular-nums shrink-0">
+                              {formatINR(it.amount)}
+                            </div>
+                          )}
                         </div>
-                        {it.amount != null && (
-                          <div className="text-sm font-semibold tabular-nums shrink-0">
-                            {formatINR(it.amount)}
-                          </div>
-                        )}
-                      </div>
-                    </Link>
+                      </Link>
+                      {canPay && (
+                        <Link
+                          href={`${it.href}?pay=1`}
+                          onClick={() => {
+                            if (!dismissed) dismiss(it.id, it.dueDate);
+                          }}
+                          title="Pay this bill"
+                          aria-label="Pay this bill"
+                          className="shrink-0 flex items-center gap-1 self-stretch border-l px-3 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                        >
+                          <Wallet className="h-3 w-3" /> Pay
+                        </Link>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -204,12 +240,12 @@ export function NotificationsPopover() {
                       }}
                       title={dismissed ? "Mark as unread" : "Mark as read"}
                       aria-label={dismissed ? "Mark as unread" : "Mark as read"}
-                      className="absolute top-1/2 right-2 -translate-y-1/2 h-6 w-6 rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background hover:text-foreground transition-opacity flex items-center justify-center"
+                      className="absolute top-1 right-1 z-10 h-5 w-5 rounded-md bg-card/90 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-background hover:text-foreground transition-opacity flex items-center justify-center"
                     >
                       {dismissed ? (
-                        <Undo2 className="h-3.5 w-3.5" />
+                        <Undo2 className="h-3 w-3" />
                       ) : (
-                        <X className="h-3.5 w-3.5" />
+                        <X className="h-3 w-3" />
                       )}
                     </button>
                   </li>

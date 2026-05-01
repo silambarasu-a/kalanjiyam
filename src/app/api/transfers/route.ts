@@ -163,7 +163,7 @@ export async function POST(request: Request) {
     let statementIdToTag: string | null = null;
     if (toAccount && toAccount.kind === "CARD") {
       await materializeStatementsFor(toAccount.id, date);
-      statementIdToTag = await findStatementForPayment(toAccount.id, date);
+      statementIdToTag = await findStatementForPayment(toAccount.id);
     }
 
     const transfer = await prisma.$transaction(async (tx) => {

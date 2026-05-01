@@ -15,7 +15,8 @@ export function mutateBalances() {
         key.startsWith("/api/cards") ||
         key.startsWith("/api/contacts") ||
         key.startsWith("/api/member-charges") ||
-        key.startsWith("/api/dashboard")
+        key.startsWith("/api/dashboard") ||
+        key.startsWith("/api/notifications")
       );
     },
     undefined,

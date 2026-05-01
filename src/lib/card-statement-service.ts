@@ -202,25 +202,45 @@ export async function materializeStatementsFor(
 
 /**
  * Pick the right statement to tag a card-account-bound transfer to.
- * Strategy: the oldest unpaid statement whose `dueDate` is on or after
- * the payment date — i.e. the bill the user was almost certainly paying.
- * Returns null if no matching statement exists (e.g. the cycle hasn't
- * been materialised yet, or this is an over-payment ahead of any bill).
+ * Strategy: the oldest unpaid statement on the account, regardless of
+ * whether the payment lands before or after its due date — overdue
+ * payments still clear the bill they were owed against. Returns null if
+ * no unpaid statement exists yet (e.g. the cycle hasn't been
+ * materialised, or this is an over-payment ahead of any bill).
  */
 export async function findStatementForPayment(
   accountId: string,
-  paidAt: Date,
 ): Promise<string | null> {
   const candidate = await prisma.cardStatement.findFirst({
-    where: {
-      accountId,
-      paidAt: null,
-      dueDate: { gte: paidAt },
-    },
+    where: { accountId, paidAt: null },
     orderBy: { periodStart: "asc" },
     select: { id: true },
   });
   return candidate?.id ?? null;
+}
+
+/**
+ * Sum of transfers landing on a card account that aren't tagged to any
+ * materialised statement. Used to net out partial payments against a
+ * manual-override or computed-fallback bill — those paths can't rely on
+ * `Transfer.statementId` because no `CardStatement` row exists yet.
+ *
+ * `upToDate` clamps to payments at-or-before the bill due date so we
+ * don't bleed future payments back into the current bill.
+ */
+export async function untaggedPaymentsToCard(
+  accountId: string,
+  upToDate: Date,
+): Promise<number> {
+  const agg = await prisma.transfer.aggregate({
+    where: {
+      toAccountId: accountId,
+      statementId: null,
+      date: { lte: upToDate },
+    },
+    _sum: { amount: true },
+  });
+  return Number(agg._sum.amount ?? 0);
 }
 
 /**

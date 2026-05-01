@@ -11,6 +11,7 @@ import { auth } from "@/lib/auth";
 import { accountCreateSchema } from "@/lib/validators-domain";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { computeAccountAvailableLimit } from "@/lib/card-available-limit";
+import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -49,7 +50,12 @@ export async function GET() {
       Promise.all(
         accounts.map(async (a) => {
           if (a.kind !== "CARD") return null;
-          if (a.nextBillAmount != null) return Number(a.nextBillAmount);
+          if (a.nextBillAmount != null) {
+            const manualAmount = Number(a.nextBillAmount);
+            const cutoff = a.nextBillDue ?? new Date();
+            const paidUntagged = await untaggedPaymentsToCard(a.id, cutoff);
+            return Math.max(0, manualAmount - paidUntagged);
+          }
           const unpaid = await prisma.cardStatement.findFirst({
             where: { accountId: a.id, paidAt: null },
             orderBy: { dueDate: "asc" },

@@ -19,6 +19,7 @@ import {
   AlertCircle,
   CalendarClock,
   Hourglass,
+  Wallet,
 } from "lucide-react";
 import { formatINR, formatDate } from "@/lib/utils";
 import { calendarMonthPeriods } from "@/lib/statement-period";
@@ -31,6 +32,8 @@ type Due = {
   label: string;
   dueDate: string;
   amount: number | null;
+  total?: number;
+  paid?: number;
   href: string;
 };
 
@@ -321,19 +324,40 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
       : days <= 3
         ? "text-amber-600 dark:text-amber-400"
         : "text-muted-foreground";
+  // CARD_STATEMENT dues that resolve to a card detail page (i.e. href has
+  // a card id, not the bare /cards listing) get a Pay shortcut that deep
+  // links via ?pay=1, opening the bill-payer dialog on arrival.
+  const showPay =
+    due.source === "CARD_STATEMENT" &&
+    due.href !== "/cards" &&
+    due.href.startsWith("/cards/") &&
+    (due.amount ?? 0) > 0;
   return (
-    <Link
-      href={due.href}
-      className="flex items-center gap-3 py-2.5 hover:bg-accent/30 -mx-2 px-2 rounded transition"
-    >
-      <DueIcon source={due.source} overdue={days < 0} />
-      <div className="flex-1 min-w-0">
+    <div className="group relative flex items-center gap-3 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition">
+      <Link
+        href={due.href}
+        aria-label={`Open ${due.label}`}
+        className="absolute inset-0 z-0 rounded focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+      />
+      <div className="relative">
+        <DueIcon source={due.source} overdue={days < 0} />
+      </div>
+      <div className="relative flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{due.label}</div>
         <div className="text-[11px] text-muted-foreground tabular-nums">
           {due.kind.replace(/_/g, " ")} · {formatDate(dueDate)}
+          {due.total != null && due.paid != null && due.paid > 0 && (
+            <>
+              {" · "}
+              <span className="text-emerald-700 dark:text-emerald-400">
+                {formatINR(due.paid)} paid
+              </span>{" "}
+              of {formatINR(due.total)}
+            </>
+          )}
         </div>
       </div>
-      <div className="text-right shrink-0">
+      <div className="relative text-right shrink-0">
         {due.amount != null && (
           <div className="text-sm font-semibold tabular-nums">
             {formatINR(due.amount)}
@@ -341,7 +365,16 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
         )}
         <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
       </div>
-    </Link>
+      {showPay && (
+        <Link
+          href={`${due.href}?pay=1`}
+          className="relative z-10 inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Wallet className="h-3 w-3" /> Pay
+        </Link>
+      )}
+    </div>
   );
 }
 
