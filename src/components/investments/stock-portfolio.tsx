@@ -434,7 +434,8 @@ export function StockPortfolio() {
       const livePrice = quote?.price ?? 0;
       const valueInr = qty * livePrice * conversion;
       const capGains = valueInr - costInr;
-      const totalReturn = costInr > 0 ? ((capGains + divs) / costInr) * 100 : 0;
+      const divsInr = divs * conversion;
+      const totalReturn = costInr > 0 ? ((capGains + divsInr) / costInr) * 100 : 0;
       const dayChange = quote?.change ?? 0;
       const dayChangePct = quote?.changePercent ?? 0;
 
@@ -443,6 +444,7 @@ export function StockPortfolio() {
         qty,
         pp,
         divs,
+        divsInr,
         cur,
         livePrice,
         valueInr,
@@ -458,7 +460,7 @@ export function StockPortfolio() {
 
   const totalValueInr = portfolioRows.reduce((s, r) => s + r.valueInr, 0);
   const totalCapGains = portfolioRows.reduce((s, r) => s + r.capGains, 0);
-  const totalDivs = portfolioRows.reduce((s, r) => s + r.divs, 0);
+  const totalDivs = portfolioRows.reduce((s, r) => s + r.divsInr, 0);
   const totalCostInr = portfolioRows.reduce((s, r) => s + r.costInr, 0);
   const overallReturn =
     totalCostInr > 0 ? ((totalCapGains + totalDivs) / totalCostInr) * 100 : 0;
@@ -617,7 +619,7 @@ export function StockPortfolio() {
                     <Input
                       type="number"
                       min="0"
-                      step="0.0001"
+                      step="0.000001"
                       placeholder="e.g. 10"
                       value={holdingForm.quantity}
                       onChange={(e) => setHoldingField("quantity", e.target.value)}
@@ -649,7 +651,9 @@ export function StockPortfolio() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>Total dividends received (₹)</Label>
+                    <Label>
+                      Total dividends received ({holdingForm.currency === "USD" ? "$" : "₹"})
+                    </Label>
                     <Input
                       type="number"
                       min="0"
@@ -768,7 +772,7 @@ export function StockPortfolio() {
                           holding: h,
                           qty,
                           pp,
-                          divs,
+                          divsInr,
                           cur,
                           livePrice,
                           valueInr,
@@ -873,7 +877,7 @@ export function StockPortfolio() {
                               )}
                             </td>
                             <td className="py-3 px-3 text-right tabular-nums text-emerald-700 dark:text-emerald-400">
-                              {divs > 0 ? `+${formatINR(divs)}` : "—"}
+                              {divsInr > 0 ? `+${formatINR(divsInr)}` : "—"}
                             </td>
                             <td className="py-3 px-3 text-right">
                               {valueInr > 0 ? (
