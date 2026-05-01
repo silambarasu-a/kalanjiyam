@@ -46,6 +46,7 @@ interface StockHolding {
   symbol: string | null;
   quantity: number | null;
   purchasePrice: number | null;
+  purchaseExchangeRate: number | null;
   dividends: number | null;
   exchange: string | null;
   currency: string | null;
@@ -68,6 +69,7 @@ interface HoldingForm {
   currency: "INR" | "USD";
   quantity: string;
   purchasePrice: string;
+  purchaseExchangeRate: string;
   dividends: string;
   institution: string;
   startedAt: string;
@@ -111,6 +113,7 @@ const emptyHoldingForm: HoldingForm = {
   currency: "INR",
   quantity: "",
   purchasePrice: "",
+  purchaseExchangeRate: "",
   dividends: "",
   institution: "",
   startedAt: isoDate(new Date()),
@@ -252,6 +255,17 @@ export function StockPortfolio() {
     setWishlistForm((f) => ({ ...f, [k]: v }));
   }
 
+  async function fetchHistoricalRate(date: string): Promise<number | null> {
+    try {
+      const res = await fetch(`/api/market/rate?from=USD&to=INR&date=${date}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return typeof data?.rate === "number" && data.rate > 0 ? data.rate : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function fetchAndFillPrice(sym: string) {
     const cached = quoteMap.get(sym);
     if (cached && cached.price > 0) {
@@ -284,6 +298,8 @@ export function StockPortfolio() {
       currency: (h.currency as "INR" | "USD") ?? "INR",
       quantity: h.quantity != null ? String(h.quantity) : "",
       purchasePrice: h.purchasePrice != null ? String(h.purchasePrice) : "",
+      purchaseExchangeRate:
+        h.purchaseExchangeRate != null ? String(h.purchaseExchangeRate) : "",
       dividends: h.dividends != null ? String(h.dividends) : "",
       institution: h.institution ?? "",
       startedAt: h.startedAt.slice(0, 10),
@@ -307,8 +323,17 @@ export function StockPortfolio() {
 
     const qty = parseFloat(holdingForm.quantity) || 0;
     const pp = parseFloat(holdingForm.purchasePrice) || 0;
-    const conversion = holdingForm.currency === "USD" ? usdInrRate : 1;
-    const invested = qty * pp * conversion;
+    let resolvedRate = 1;
+    if (holdingForm.currency === "USD") {
+      const entered = parseFloat(holdingForm.purchaseExchangeRate);
+      if (entered > 0) {
+        resolvedRate = entered;
+      } else {
+        const historical = await fetchHistoricalRate(holdingForm.startedAt);
+        resolvedRate = historical ?? usdInrRate;
+      }
+    }
+    const invested = qty * pp * resolvedRate;
 
     const payload: Record<string, unknown> = {
       kind: "STOCK",
@@ -319,6 +344,8 @@ export function StockPortfolio() {
       symbol: holdingForm.symbol || undefined,
       quantity: holdingForm.quantity ? Number(holdingForm.quantity) : undefined,
       purchasePrice: holdingForm.purchasePrice ? Number(holdingForm.purchasePrice) : undefined,
+      purchaseExchangeRate:
+        holdingForm.currency === "USD" ? resolvedRate : undefined,
       dividends: holdingForm.dividends ? Number(holdingForm.dividends) : undefined,
       exchange: holdingForm.exchange || undefined,
       currency: holdingForm.currency,
@@ -427,14 +454,16 @@ export function StockPortfolio() {
       const pp = h.purchasePrice ?? 0;
       const divs = h.dividends ?? 0;
       const cur = h.currency === "USD" ? "USD" : "INR";
-      const conversion = cur === "USD" ? usdInrRate : 1;
+      const liveConversion = cur === "USD" ? usdInrRate : 1;
+      const costConversion =
+        cur === "USD" ? (h.purchaseExchangeRate ?? usdInrRate) : 1;
 
-      const costInr = qty * pp * conversion;
+      const costInr = qty * pp * costConversion;
       const quote = h.symbol ? quoteMap.get(h.symbol) : undefined;
       const livePrice = quote?.price ?? 0;
-      const valueInr = qty * livePrice * conversion;
+      const valueInr = qty * livePrice * liveConversion;
       const capGains = valueInr - costInr;
-      const divsInr = divs * conversion;
+      const divsInr = divs * liveConversion;
       const totalReturn = costInr > 0 ? ((capGains + divsInr) / costInr) * 100 : 0;
       const dayChange = quote?.change ?? 0;
       const dayChangePct = quote?.changePercent ?? 0;
@@ -650,6 +679,26 @@ export function StockPortfolio() {
                     </div>
                   </div>
 
+                  {holdingForm.currency === "USD" && (
+                    <div className="space-y-1.5">
+                      <Label>USD/INR rate at purchase</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        placeholder={`auto from ${holdingForm.startedAt}`}
+                        value={holdingForm.purchaseExchangeRate}
+                        onChange={(e) =>
+                          setHoldingField("purchaseExchangeRate", e.target.value)
+                        }
+                      />
+                      <p className="text-[10px] text-muted-foreground">
+                        Locks the INR cost basis. Leave blank to fetch the rate
+                        for the purchase date.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="space-y-1.5">
                     <Label>
                       Total dividends received ({holdingForm.currency === "USD" ? "$" : "₹"})
@@ -685,7 +734,13 @@ export function StockPortfolio() {
                   {!editingHoldingId && (() => {
                     const qty = parseFloat(holdingForm.quantity) || 0;
                     const pp = parseFloat(holdingForm.purchasePrice) || 0;
-                    const conv = holdingForm.currency === "USD" ? usdInrRate : 1;
+                    const enteredRate = parseFloat(holdingForm.purchaseExchangeRate);
+                    const conv =
+                      holdingForm.currency === "USD"
+                        ? enteredRate > 0
+                          ? enteredRate
+                          : usdInrRate
+                        : 1;
                     const investedNow = qty * pp * conv;
                     return (
                     <div className="space-y-1.5">
@@ -826,7 +881,7 @@ export function StockPortfolio() {
                             </td>
                             <td className="py-3 px-3 text-right tabular-nums">
                               {qty > 0
-                                ? qty.toLocaleString("en-IN", { maximumFractionDigits: 4 })
+                                ? qty.toLocaleString("en-IN", { maximumFractionDigits: 6 })
                                 : "—"}
                             </td>
                             <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">

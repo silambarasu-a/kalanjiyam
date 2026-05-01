@@ -1,13 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { Plus, LineChart, TrendingUp } from "lucide-react";
+import {
+  Plus,
+  LineChart,
+  TrendingUp,
+  ArrowUpRight,
+  ArrowDownRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
-import { formatINR, formatDate } from "@/lib/utils";
+import { formatINR, formatDate, cn } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
+import type { StockQuote } from "@/app/api/market/quote/route";
 
 type Investment = {
   id: string;
@@ -22,6 +29,9 @@ type Investment = {
   active: boolean;
   symbol: string | null;
   quantity: number | null;
+  purchasePrice: number | null;
+  purchaseExchangeRate: number | null;
+  currency: string | null;
   policyNumber: string | null;
   premiumAmount: number | null;
   premiumFrequency: string | null;
@@ -56,13 +66,88 @@ export default function InvestmentsPage() {
   const { data, isLoading } = useSWR<{ investments: Investment[] }>(url, fetcher);
   const { openDialog } = useTransactionDialog();
 
-  const investments = data?.investments ?? [];
-  const totalInvested = investments.reduce((s, i) => s + i.amount, 0);
-  const totalCurrent = investments.reduce(
-    (s, i) => s + (i.currentValue ?? i.amount),
-    0
-  );
+  const investments = useMemo(() => data?.investments ?? [], [data]);
+
+  const { data: rateData } = useSWR<{ rate: number }>("/api/market/rate", fetcher);
+  const usdInrRate = rateData?.rate ?? 84;
+
+  const stockSymbols = useMemo(() => {
+    const s = new Set<string>();
+    investments.forEach((i) => {
+      if (i.kind === "STOCK" && i.symbol) s.add(i.symbol);
+    });
+    return [...s];
+  }, [investments]);
+
+  const quotesKey =
+    stockSymbols.length > 0 ? `/api/market/quote?symbols=${stockSymbols.join(",")}` : null;
+
+  const { data: quotes } = useSWR<StockQuote[]>(quotesKey, fetcher, {
+    refreshInterval: 300_000,
+  });
+
+  const quoteMap = useMemo(() => {
+    const m = new Map<string, StockQuote>();
+    if (Array.isArray(quotes)) quotes.forEach((q) => m.set(q.symbol, q));
+    return m;
+  }, [quotes]);
+
+  type Row = {
+    investment: Investment;
+    investedInr: number;
+    currentInr: number;
+    gain: number;
+    gainPct: number;
+    livePrice: number;
+    dayChangePct: number;
+    isLive: boolean;
+  };
+
+  const rows: Row[] = useMemo(() => {
+    return investments.map((i) => {
+      if (i.kind !== "STOCK") {
+        const investedInr = i.amount;
+        const currentInr = i.currentValue ?? i.amount;
+        const gain = currentInr - investedInr;
+        return {
+          investment: i,
+          investedInr,
+          currentInr,
+          gain,
+          gainPct: investedInr > 0 ? (gain / investedInr) * 100 : 0,
+          livePrice: 0,
+          dayChangePct: 0,
+          isLive: false,
+        };
+      }
+      const qty = i.quantity ?? 0;
+      const pp = i.purchasePrice ?? 0;
+      const isUsd = i.currency === "USD";
+      const costRate = isUsd ? (i.purchaseExchangeRate ?? usdInrRate) : 1;
+      const liveRate = isUsd ? usdInrRate : 1;
+      const investedInr = qty * pp * costRate;
+      const quote = i.symbol ? quoteMap.get(i.symbol) : undefined;
+      const livePrice = quote?.price ?? 0;
+      const hasLive = livePrice > 0 && qty > 0;
+      const currentInr = hasLive ? qty * livePrice * liveRate : investedInr;
+      const gain = currentInr - investedInr;
+      return {
+        investment: i,
+        investedInr,
+        currentInr,
+        gain,
+        gainPct: investedInr > 0 ? (gain / investedInr) * 100 : 0,
+        livePrice,
+        dayChangePct: quote?.changePercent ?? 0,
+        isLive: hasLive,
+      };
+    });
+  }, [investments, quoteMap, usdInrRate]);
+
+  const totalInvested = rows.reduce((s, r) => s + r.investedInr, 0);
+  const totalCurrent = rows.reduce((s, r) => s + r.currentInr, 0);
   const unrealised = totalCurrent - totalInvested;
+  const unrealisedPct = totalInvested > 0 ? (unrealised / totalInvested) * 100 : 0;
 
   return (
     <div className="space-y-6">
@@ -93,10 +178,21 @@ export default function InvestmentsPage() {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Invested" value={formatINR(totalInvested)} />
-        <Stat label="Current value" value={formatINR(totalCurrent)} />
+        <Stat
+          label="Current value"
+          value={formatINR(totalCurrent)}
+          sub={
+            stockSymbols.length > 0
+              ? quotes
+                ? "Live"
+                : "Loading quotes…"
+              : undefined
+          }
+        />
         <Stat
           label="Unrealised"
           value={`${unrealised >= 0 ? "+" : "−"}${formatINR(Math.abs(unrealised))}`}
+          sub={totalInvested > 0 ? `${unrealised >= 0 ? "+" : ""}${unrealisedPct.toFixed(2)}%` : undefined}
           tone={unrealised >= 0 ? "primary" : "destructive"}
         />
         <Stat label="Holdings" value={String(investments.length)} />
@@ -118,49 +214,94 @@ export default function InvestmentsPage() {
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {investments.map((i) => (
-          <Link
-            key={i.id}
-            href={`/investments/${i.id}`}
-            className="rounded-xl border bg-card p-5 hover:bg-accent/40 transition"
-          >
-            <div className="flex items-start gap-3">
-              <LineChart className="h-5 w-5 mt-0.5 text-sky-600 dark:text-sky-400 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold truncate">{i.name}</span>
-                  <ToneBadge tone="invested" label={i.kind} />
+        {rows.map((row) => {
+          const i = row.investment;
+          const isStock = i.kind === "STOCK";
+          const isUsd = i.currency === "USD";
+          const qtyDisplay =
+            i.quantity != null
+              ? i.quantity.toLocaleString("en-IN", { maximumFractionDigits: 6 })
+              : null;
+          const showGain = row.investedInr > 0 && row.gain !== 0 && (isStock ? row.isLive : true);
+          return (
+            <Link
+              key={i.id}
+              href={`/investments/${i.id}`}
+              className="rounded-xl border bg-card p-5 hover:bg-accent/40 transition"
+            >
+              <div className="flex items-start gap-3">
+                <LineChart className="h-5 w-5 mt-0.5 text-sky-600 dark:text-sky-400 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold truncate">{i.name}</span>
+                    <ToneBadge tone="invested" label={i.kind} />
+                    {isStock && isUsd && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                        USD
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground truncate">
+                    {i.institution ? `${i.institution} · ` : ""}
+                    {i.symbol ? `${i.symbol} · ` : ""}
+                    {qtyDisplay ? `${qtyDisplay} ${isStock ? "shares" : "units"}` : ""}
+                    {i.premiumFrequency ? ` · ${i.premiumFrequency} premium` : ""}
+                  </div>
+                  {isStock && row.isLive && (
+                    <div className="mt-1 flex items-center gap-2 text-[11px] tabular-nums">
+                      <span className="text-muted-foreground">
+                        {isUsd ? "$" : "₹"}
+                        {row.livePrice.toLocaleString(isUsd ? "en-US" : "en-IN", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-0.5 font-semibold",
+                          row.dayChangePct >= 0
+                            ? "text-emerald-700 dark:text-emerald-400"
+                            : "text-red-700 dark:text-red-400",
+                        )}
+                      >
+                        {row.dayChangePct >= 0 ? (
+                          <ArrowUpRight className="h-3 w-3" />
+                        ) : (
+                          <ArrowDownRight className="h-3 w-3" />
+                        )}
+                        {row.dayChangePct >= 0 ? "+" : ""}
+                        {row.dayChangePct.toFixed(2)}%
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="mt-0.5 text-xs text-muted-foreground truncate">
-                  {i.institution ? `${i.institution} · ` : ""}
-                  {i.symbol ? `${i.symbol} · ` : ""}
-                  {i.quantity != null ? `${i.quantity} units · ` : ""}
-                  {i.premiumFrequency ? `${i.premiumFrequency} premium` : ""}
+                <div className="text-right shrink-0">
+                  <div className="font-semibold tabular-nums">
+                    {formatINR(row.currentInr)}
+                  </div>
+                  {showGain && (
+                    <MoneyValue
+                      tone={row.gain >= 0 ? "gain" : "loss"}
+                      value={`${row.gain >= 0 ? "+" : "−"}${formatINR(Math.abs(row.gain))} · ${row.gain >= 0 ? "+" : ""}${row.gainPct.toFixed(2)}%`}
+                      className="text-[11px] mt-0.5"
+                      iconClassName="h-3 w-3"
+                    />
+                  )}
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    invested {formatINR(row.investedInr)}
+                  </div>
                 </div>
               </div>
-              <div className="text-right">
-                <div className="font-semibold tabular-nums">
-                  {formatINR(i.currentValue ?? i.amount)}
+              {i.nextDueDate && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Next due {formatDate(i.nextDueDate)}
+                  {i.premiumAmount ? ` · ${formatINR(i.premiumAmount)}` : ""}
                 </div>
-                {i.currentValue != null && i.currentValue !== i.amount && (
-                  <MoneyValue
-                    tone={i.currentValue > i.amount ? "gain" : "loss"}
-                    value={`${i.currentValue > i.amount ? "+" : "−"}${formatINR(Math.abs(i.currentValue - i.amount))}`}
-                    className="text-[11px] mt-0.5"
-                    iconClassName="h-3 w-3"
-                  />
-                )}
-              </div>
-            </div>
-            {i.nextDueDate && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                Next due {formatDate(i.nextDueDate)}
-                {i.premiumAmount ? ` · ${formatINR(i.premiumAmount)}` : ""}
-              </div>
-            )}
-          </Link>
-        ))}
-        {investments.length === 0 && !isLoading && (
+              )}
+            </Link>
+          );
+        })}
+        {rows.length === 0 && !isLoading && (
           <div className="col-span-full rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
             No investments yet. Add stocks, SIPs, FDs, or insurance to start tracking.
           </div>
@@ -174,10 +315,12 @@ export default function InvestmentsPage() {
 function Stat({
   label,
   value,
+  sub,
   tone = "default",
 }: {
   label: string;
   value: string;
+  sub?: string;
   tone?: "default" | "primary" | "destructive";
 }) {
   const color =
@@ -192,6 +335,7 @@ function Stat({
         {label}
       </div>
       <div className={`mt-1 text-xl font-semibold ${color}`}>{value}</div>
+      {sub && <div className={`mt-0.5 text-[11px] ${color}`}>{sub}</div>}
     </div>
   );
 }

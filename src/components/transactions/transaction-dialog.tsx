@@ -1681,6 +1681,10 @@ function InvestmentForm({
             amount: amt,
             quantity: quantity ? Number(quantity) : undefined,
             purchasePrice: price ? Number(price) : undefined,
+            purchaseExchangeRate:
+              isForeignCurrency && exchangeRate
+                ? Number(exchangeRate)
+                : undefined,
             startedAt: date,
             accountId,
             isExisting: false,
