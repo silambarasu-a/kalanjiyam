@@ -330,43 +330,42 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
   // Confirm dialog auto-opens on arrival.
   const showPay = due.payHref != null && (due.amount ?? 0) > 0;
   return (
-    <div className="group relative flex items-center gap-3 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition">
+    <div className="group flex items-center gap-2 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition">
       <Link
         href={due.href}
         aria-label={`Open ${due.label}`}
-        className="absolute inset-0 z-0 rounded focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
-      />
-      <div className="relative">
+        className="flex flex-1 items-center gap-3 min-w-0 rounded focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+      >
         <DueIcon source={due.source} overdue={days < 0} />
-      </div>
-      <div className="relative flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{due.label}</div>
-        <div className="text-[11px] text-muted-foreground tabular-nums">
-          {due.kind.replace(/_/g, " ")} · {formatDate(dueDate)}
-          {due.total != null && due.paid != null && due.paid > 0 && (
-            <>
-              {" · "}
-              <span className="text-emerald-700 dark:text-emerald-400">
-                {formatINR(due.paid)} paid
-              </span>{" "}
-              of {formatINR(due.total)}
-            </>
-          )}
-        </div>
-      </div>
-      <div className="relative text-right shrink-0">
-        {due.amount != null && (
-          <div className="text-sm font-semibold tabular-nums">
-            {formatINR(due.amount)}
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium truncate">{due.label}</div>
+          <div className="text-[11px] text-muted-foreground tabular-nums">
+            {due.kind.replace(/_/g, " ")} · {formatDate(dueDate)}
+            {due.total != null && due.paid != null && due.paid > 0 && (
+              <>
+                {" · "}
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  {formatINR(due.paid)} paid
+                </span>{" "}
+                of {formatINR(due.total)}
+              </>
+            )}
           </div>
-        )}
-        <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
-      </div>
+        </div>
+        <div className="text-right shrink-0">
+          {due.amount != null && (
+            <div className="text-sm font-semibold tabular-nums">
+              {formatINR(due.amount)}
+            </div>
+          )}
+          <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
+        </div>
+      </Link>
       {showPay && due.payHref && (
         <Link
           href={due.payHref}
-          className="relative z-10 inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors shrink-0"
-          onClick={(e) => e.stopPropagation()}
+          aria-label={`Pay ${due.label}`}
+          className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground active:scale-95 transition-all shrink-0"
         >
           <Wallet className="h-3 w-3" /> Pay
         </Link>
