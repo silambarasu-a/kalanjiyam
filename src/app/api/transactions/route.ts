@@ -103,6 +103,7 @@ export async function GET(request: Request) {
         return {
           id: t.id,
           type: t.type,
+          kind: t.kind,
           amount: Number(t.amount),
           description: t.description,
           date: t.date.toISOString(),
@@ -115,6 +116,7 @@ export async function GET(request: Request) {
           transferId: t.transferId,
           transferDirection,
           transferCounterparty,
+          refundForTransactionId: t.refundForTransactionId,
         };
       }),
     });
@@ -138,10 +140,18 @@ export async function POST(request: Request) {
     // transaction through the card's companion account so balance math works.
     let resolvedAccountId: string | null = data.accountId ?? null;
     const resolvedCardId: string | null = data.cardId ?? null;
+    let resolvedCardKind: "DEBIT" | "CREDIT" | null = null;
     if (resolvedCardId) {
       const card = await prisma.card.findUnique({
         where: { id: resolvedCardId },
-        select: { id: true, workspaceId: true, accountId: true, ownerUserId: true, sharedWithUserIds: true },
+        select: {
+          id: true,
+          workspaceId: true,
+          accountId: true,
+          kind: true,
+          ownerUserId: true,
+          sharedWithUserIds: true,
+        },
       });
       if (!card || card.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Card not found" }, { status: 404 });
@@ -150,6 +160,48 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
       resolvedAccountId = card.accountId ?? resolvedAccountId;
+      resolvedCardKind = card.kind;
+    }
+
+    // Refund-specific validation. The Zod refine() only enforces shape; this
+    // checks workspace + ownership + that the linked original is a refundable
+    // expense on the same card.
+    if (data.kind === "REFUND") {
+      if (resolvedCardKind !== "CREDIT") {
+        return NextResponse.json(
+          { error: "Refunds can only be posted to a credit card" },
+          { status: 400 },
+        );
+      }
+      if (data.refundForTransactionId) {
+        const original = await prisma.transaction.findUnique({
+          where: { id: data.refundForTransactionId },
+          select: {
+            workspaceId: true,
+            type: true,
+            cardId: true,
+            amount: true,
+          },
+        });
+        if (!original || original.workspaceId !== ctx.workspaceId) {
+          return NextResponse.json(
+            { error: "Original transaction not found" },
+            { status: 404 },
+          );
+        }
+        if (original.type !== "EXPENSE") {
+          return NextResponse.json(
+            { error: "A refund must reverse an expense" },
+            { status: 400 },
+          );
+        }
+        if (original.cardId !== resolvedCardId) {
+          return NextResponse.json(
+            { error: "Refund must be on the same card as the original purchase" },
+            { status: 400 },
+          );
+        }
+      }
     }
     if (resolvedAccountId) {
       const account = await prisma.account.findUnique({
@@ -228,6 +280,7 @@ export async function POST(request: Request) {
         data: {
           workspaceId: ctx.workspaceId,
           type: data.type as TransactionType,
+          kind: data.kind ?? null,
           amount: data.amount,
           description: data.description,
           date: txDate,
@@ -243,6 +296,7 @@ export async function POST(request: Request) {
           investmentQty: data.investmentQty ?? null,
           investmentPrice: data.investmentPrice ?? null,
           exchangeRate: data.exchangeRate ?? null,
+          refundForTransactionId: data.refundForTransactionId ?? null,
           beneficiaryContactId: data.beneficiaryContactId ?? null,
           memberChargeType: (data.memberChargeType as MemberChargeType) ?? "NONE",
           memberChargeId,
