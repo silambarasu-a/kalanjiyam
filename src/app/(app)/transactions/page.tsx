@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Plus, Pencil, Trash2, ArrowLeftRight, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowLeftRight, ArrowDownLeft, ArrowUpRight, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import {
@@ -17,6 +17,7 @@ import { formatINR, formatDate } from "@/lib/utils";
 type Txn = {
   id: string;
   type: "INCOME" | "EXPENSE" | "INVESTMENT" | "HAND_LOAN" | "TRANSFER";
+  kind: string | null;
   amount: number;
   description: string;
   date: string;
@@ -29,6 +30,7 @@ type Txn = {
   transferId: string | null;
   transferDirection: "OUT" | "IN" | null;
   transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
+  refundForTransactionId: string | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -107,7 +109,10 @@ export default function TransactionsPage() {
                   const isOutflow =
                     !isInflow &&
                     (t.type === "EXPENSE" || isTransferOut);
-                  const Icon = isTransferIn
+                  const isRefund = t.kind === "REFUND";
+                  const Icon = isRefund
+                    ? RotateCcw
+                    : isTransferIn
                     ? ArrowDownLeft
                     : isTransferOut
                       ? ArrowUpRight
@@ -136,8 +141,13 @@ export default function TransactionsPage() {
                         {formatDate(t.date)}
                       </td>
                       <td className="px-3 py-2.5 max-w-[20rem]">
-                        <div className="font-medium truncate">
-                          {t.description}
+                        <div className="font-medium truncate flex items-center gap-1.5">
+                          {isRefund && (
+                            <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Refund
+                            </span>
+                          )}
+                          <span className="truncate">{t.description}</span>
                         </div>
                         {t.transferCounterparty ? (
                           <div className="text-[11px] text-muted-foreground truncate">

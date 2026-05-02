@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw, RotateCcw } from "lucide-react";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,6 +103,7 @@ function insurerCategoriesForPolicyType(
 const TABS: { value: TransactionDefault; label: string; icon: React.ElementType; disabled?: boolean }[] = [
   { value: "INCOME", label: "Income", icon: ArrowDownLeft },
   { value: "EXPENSE", label: "Expense", icon: ArrowUpRight },
+  { value: "REFUND", label: "Refund", icon: RotateCcw },
   { value: "TRANSFER", label: "Transfer", icon: ArrowLeftRight },
   { value: "LOAN", label: "Loan", icon: HandCoins },
   { value: "INVESTMENT", label: "Invest", icon: LineChart },
@@ -238,6 +239,8 @@ function DialogBody({
           defaultCreatingNew={defaultCreatingNew}
           onClose={onClose}
         />
+      ) : type === "REFUND" ? (
+        <RefundForm cards={cards} onClose={onClose} />
       ) : (
         <IncomeExpenseForm
           type={type}
@@ -763,6 +766,249 @@ function WorkersPanel({
       )}
     </div>
   );
+}
+
+type RefundOriginalTxn = {
+  id: string;
+  amount: number;
+  description: string;
+  date: string;
+  cardId: string | null;
+};
+
+type CardStatementSummary = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  closedAt: string | null;
+};
+
+/**
+ * Refund flow — posts type=INCOME, kind=REFUND on a CREDIT card so the
+ * existing statement math (which already subtracts INCOME from totalDue)
+ * applies the credit to the cycle covering the refund's date.
+ *
+ * The user can optionally link the refund to the original purchase. We
+ * also surface a status line telling them which statement cycle the
+ * refund will land in (current open / next / a previously-closed one)
+ * so they're not surprised by retroactive adjustments.
+ */
+function RefundForm({ cards, onClose }: { cards: Card[]; onClose: () => void }) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [cardId, setCardId] = useState(cards[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState("");
+  const [date, setDate] = useState(today);
+  const [refundForTransactionId, setRefundForTransactionId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Recent expenses on the selected card — gives the user a quick way to
+  // link the refund back to the original purchase. Capped at the 20 most
+  // recent so the dropdown stays usable.
+  const { data: recentTxnsData } = useSWR<{ transactions: RefundOriginalTxn[] }>(
+    cardId ? `/api/transactions?cardId=${cardId}&type=EXPENSE&limit=20` : null,
+    fetcher,
+  );
+  const recentExpenses = recentTxnsData?.transactions ?? [];
+
+  // Statement summaries for the selected card — used to show the user
+  // exactly which billing cycle this refund will affect.
+  const selectedCard = cards.find((c) => c.id === cardId);
+  const { data: statementsData } = useSWR<{ statements: CardStatementSummary[] }>(
+    selectedCard?.accountId
+      ? `/api/cards/${cardId}/statements`
+      : null,
+    fetcher,
+  );
+  const statements = statementsData?.statements ?? [];
+
+  const cycleHint = useMemo(() => {
+    if (!date || statements.length === 0) return null;
+    const d = new Date(date).toISOString().slice(0, 10);
+    const matching = statements.find(
+      (s) => s.periodStart.slice(0, 10) <= d && d <= s.periodEnd.slice(0, 10),
+    );
+    if (!matching) {
+      // Date is outside any materialised statement → falls in the
+      // currently-open cycle (or a future one that hasn't been generated).
+      return {
+        tone: "info" as const,
+        text: "Will reduce your current statement once it closes.",
+      };
+    }
+    if (matching.closedAt) {
+      return {
+        tone: "warn" as const,
+        text: `Date falls in a closed statement (${formatPeriod(matching)}). The refund will retroactively shrink that bill — only do this if your bank has actually credited the amount.`,
+      };
+    }
+    return {
+      tone: "info" as const,
+      text: `Will be applied to the open statement (${formatPeriod(matching)}).`,
+    };
+  }, [date, statements]);
+
+  function pickOriginal(id: string) {
+    setRefundForTransactionId(id);
+    if (!id) return;
+    const orig = recentExpenses.find((t) => t.id === id);
+    if (!orig) return;
+    if (!amount) setAmount(String(orig.amount));
+    if (!description) setDescription(`Refund: ${orig.description}`);
+  }
+
+  async function submit() {
+    setError(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      setError("Enter the refund amount");
+      return;
+    }
+    if (!cardId) {
+      setError("Pick a credit card");
+      return;
+    }
+    if (!description.trim()) {
+      setError("Add a short description");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "INCOME",
+          kind: "REFUND",
+          amount: amt,
+          description: description.trim(),
+          date,
+          cardId,
+          refundForTransactionId: refundForTransactionId || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error ?? "Failed to record refund");
+        return;
+      }
+      toast.success("Refund recorded");
+      await mutateBalances();
+      globalMutate(
+        (k) =>
+          typeof k === "string" &&
+          (k.startsWith("/api/transactions") ||
+            k.startsWith("/api/cards") ||
+            k.startsWith("/api/dashboard")),
+        undefined,
+        { revalidate: true },
+      );
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (cards.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+        Add a credit card first — refunds can only be posted to a card.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium">Credit card</label>
+        <NativeSelect
+          value={cardId}
+          onChange={(v) => {
+            setCardId(v);
+            setRefundForTransactionId("");
+          }}
+          options={cards.map((c) => ({
+            value: c.id,
+            label: c.last4 ? `${c.name} · ••${c.last4}` : c.name,
+          }))}
+        />
+      </div>
+
+      {recentExpenses.length > 0 && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">
+            Refund of (optional)
+          </label>
+          <NativeSelect
+            value={refundForTransactionId}
+            onChange={pickOriginal}
+            options={[
+              { value: "", label: "— Standalone refund —" },
+              ...recentExpenses.map((t) => ({
+                value: t.id,
+                label: `${t.date.slice(0, 10)} · ${formatINR(t.amount)} · ${t.description}`,
+              })),
+            ]}
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Linking helps reports net the refund against the original expense.
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Amount</label>
+          <AmountInput value={amount} onChange={setAmount} />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Date</label>
+          <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium">Description</label>
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="e.g. Refund: Amazon order #ABC123"
+          maxLength={200}
+        />
+      </div>
+
+      {cycleHint && (
+        <div
+          className={cn(
+            "rounded-md border px-3 py-2 text-[11px]",
+            cycleHint.tone === "warn"
+              ? "border-amber-500/40 bg-amber-50 text-amber-900 dark:bg-amber-900/20 dark:text-amber-300"
+              : "border-border bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {cycleHint.text}
+        </div>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <DialogFooter className="pt-2">
+        <Button variant="outline" type="button" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={submit} disabled={submitting}>
+          {submitting ? "Saving…" : "Record refund"}
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+function formatPeriod(s: { periodStart: string; periodEnd: string }) {
+  const fmt = (d: string) =>
+    new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  return `${fmt(s.periodStart)} – ${fmt(s.periodEnd)}`;
 }
 
 function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {

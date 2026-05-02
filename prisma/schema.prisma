@@ -41,6 +41,7 @@ enum TransactionKind {
   INVESTMENT
   LOAN_PAYMENT
   OTHER_EXPENSE
+  REFUND
 }
 
 enum MemberChargeType {
@@ -601,6 +602,13 @@ model Transaction {
   transferId        String?
   transfer          Transfer?         @relation("TransferLegs", fields: [transferId], references: [id], onDelete: Cascade)
 
+  // Refund linkage: an income-side transaction with kind=REFUND can point
+  // to the original expense it reverses. SET NULL on delete so the refund
+  // record survives if the original purchase is deleted.
+  refundForTransactionId String?
+  refundForTransaction   Transaction?  @relation("RefundOfTransaction", fields: [refundForTransactionId], references: [id], onDelete: SetNull)
+  refundsReceived        Transaction[] @relation("RefundOfTransaction")
+
   userId            String
   user              User              @relation("TransactionAuthor", fields: [userId], references: [id], onDelete: Cascade)
   createdByUserId   String?
@@ -639,6 +647,7 @@ model Transaction {
   @@index([investmentId])
   @@index([transferId])
   @@index([beneficiaryContactId])
+  @@index([refundForTransactionId])
 }
 
 model MemberCharge {

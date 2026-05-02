@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from "react
 export type TransactionDefault =
   | "INCOME"
   | "EXPENSE"
+  | "REFUND"
   | "TRANSFER"
   | "LOAN"
   | "INVESTMENT";

@@ -73,9 +73,28 @@ export const cardUpdateSchema = cardCreateSchema.partial().extend({
   active: z.boolean().optional(),
 });
 
+const transactionKindEnum = z.enum([
+  "SALARY",
+  "INTEREST",
+  "AGRI_INCOME",
+  "LEASE_INCOME",
+  "OTHER_INCOME",
+  "HOUSEHOLD",
+  "GROCERY",
+  "FARM_DEV",
+  "WAGE",
+  "FEED",
+  "VACCINATION",
+  "INVESTMENT",
+  "LOAN_PAYMENT",
+  "OTHER_EXPENSE",
+  "REFUND",
+]);
+
 export const transactionCreateSchema = z
   .object({
     type: z.enum(["INCOME", "EXPENSE", "INVESTMENT"]),
+    kind: transactionKindEnum.optional().nullable(),
     amount: z.number().positive(),
     description: z.string().trim().min(1).max(200),
     date: z.string(),
@@ -91,6 +110,7 @@ export const transactionCreateSchema = z
     investmentQty: z.number().positive().optional().nullable(),
     investmentPrice: z.number().positive().optional().nullable(),
     exchangeRate: z.number().positive().optional().nullable(),
+    refundForTransactionId: z.string().uuid().optional().nullable(),
     beneficiaryContactId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
   })
@@ -105,6 +125,10 @@ export const transactionCreateSchema = z
   .refine((d) => d.type !== "INVESTMENT" || (!!d.investmentId && !!d.investmentAction), {
     message: "Investment transaction needs a holding and action",
     path: ["investmentId"],
+  })
+  .refine((d) => d.kind !== "REFUND" || (d.type === "INCOME" && !!d.cardId), {
+    message: "A refund must be income posted to a card",
+    path: ["cardId"],
   });
 
 export const transactionUpdateSchema = z.object({
