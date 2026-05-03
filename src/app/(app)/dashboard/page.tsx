@@ -390,6 +390,14 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
   // into the relevant detail page with the right query param so the Pay/
   // Confirm dialog auto-opens on arrival.
   const showPay = due.payHref != null && (due.amount ?? 0) > 0;
+  // Settled this cycle: row carries a total + paid that fully covers it,
+  // and there's nothing left outstanding. Replaces the Pay button with
+  // a confirmation tick so the user sees the EMI / bill is squared away.
+  const isPaid =
+    (due.amount ?? 0) === 0 &&
+    due.total != null &&
+    due.paid != null &&
+    due.paid >= due.total;
   return (
     <div className="group flex items-center gap-2 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition">
       <Link
@@ -422,14 +430,24 @@ function DueRow({ due, today }: { due: Due; today: Date }) {
           <div className={`text-[10px] tabular-nums ${dayClass}`}>{dayLabel}</div>
         </div>
       </Link>
-      {showPay && due.payHref && (
-        <Link
-          href={due.payHref}
-          aria-label={`Pay ${due.label}`}
-          className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground active:scale-95 transition-all shrink-0"
+      {isPaid ? (
+        <span
+          aria-label="Paid"
+          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-900/30 px-2.5 py-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 shrink-0"
         >
-          <Wallet className="h-3 w-3" /> Pay
-        </Link>
+          <CheckCircle2 className="h-3 w-3" /> Paid
+        </span>
+      ) : (
+        showPay &&
+        due.payHref && (
+          <Link
+            href={due.payHref}
+            aria-label={`Pay ${due.label}`}
+            className="inline-flex items-center gap-1 rounded-md border bg-card px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground active:scale-95 transition-all shrink-0"
+          >
+            <Wallet className="h-3 w-3" /> Pay
+          </Link>
+        )
       )}
     </div>
   );

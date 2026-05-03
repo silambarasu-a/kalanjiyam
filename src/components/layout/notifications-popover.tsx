@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import useSWR from "swr";
-import { Bell, X, CheckCheck, Undo2, Wallet } from "lucide-react";
+import { Bell, X, CheckCheck, Undo2, Wallet, CheckCircle2 } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -150,6 +150,11 @@ export function NotificationsPopover() {
               {orderedItems.slice(0, 12).map((it) => {
                 const dismissed = isDismissed(it.id, it.dueDate);
                 const canPay = it.payHref != null && (it.amount ?? 0) > 0;
+                const isPaid =
+                  (it.amount ?? 0) === 0 &&
+                  it.total != null &&
+                  it.paid != null &&
+                  it.paid >= it.total;
                 return (
                   <li
                     key={`${it.id}|${it.dueDate}`}
@@ -213,18 +218,29 @@ export function NotificationsPopover() {
                           )}
                         </div>
                       </Link>
-                      {canPay && it.payHref && (
-                        <Link
-                          href={it.payHref}
-                          onClick={() => {
-                            if (!dismissed) dismiss(it.id, it.dueDate);
-                          }}
-                          title="Pay / confirm"
-                          aria-label="Pay / confirm"
-                          className="shrink-0 flex items-center gap-1 self-stretch border-l px-3 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                      {isPaid ? (
+                        <span
+                          title="Paid"
+                          aria-label="Paid"
+                          className="shrink-0 flex items-center gap-1 self-stretch border-l px-3 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50/70 dark:bg-emerald-900/20"
                         >
-                          <Wallet className="h-3 w-3" /> Pay
-                        </Link>
+                          <CheckCircle2 className="h-3 w-3" /> Paid
+                        </span>
+                      ) : (
+                        canPay &&
+                        it.payHref && (
+                          <Link
+                            href={it.payHref}
+                            onClick={() => {
+                              if (!dismissed) dismiss(it.id, it.dueDate);
+                            }}
+                            title="Pay / confirm"
+                            aria-label="Pay / confirm"
+                            className="shrink-0 flex items-center gap-1 self-stretch border-l px-3 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                          >
+                            <Wallet className="h-3 w-3" /> Pay
+                          </Link>
+                        )
                       )}
                     </div>
                     <button

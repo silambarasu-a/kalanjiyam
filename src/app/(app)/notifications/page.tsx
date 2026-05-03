@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   Bell,
   CheckCheck,
+  CheckCircle2,
   ChevronRight,
   ExternalLink,
   Undo2,
@@ -252,16 +253,26 @@ export default function NotificationsPage() {
                           {formatINR(it.amount)}
                         </div>
                       )}
-                      {it.payHref && (it.amount ?? 0) > 0 && (
-                        <Link
-                          href={it.payHref}
-                          onClick={() => {
-                            if (!dismissed) dismiss(it.id, it.dueDate);
-                          }}
-                          className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
-                        >
-                          <Wallet className="h-3 w-3" /> Pay
-                        </Link>
+                      {(it.amount ?? 0) === 0 &&
+                      it.total != null &&
+                      it.paid != null &&
+                      it.paid >= it.total ? (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle2 className="h-3 w-3" /> Paid
+                        </span>
+                      ) : (
+                        it.payHref &&
+                        (it.amount ?? 0) > 0 && (
+                          <Link
+                            href={it.payHref}
+                            onClick={() => {
+                              if (!dismissed) dismiss(it.id, it.dueDate);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                          >
+                            <Wallet className="h-3 w-3" /> Pay
+                          </Link>
+                        )
                       )}
                       <Link
                         href={it.href}
