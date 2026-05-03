@@ -31,7 +31,10 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
-    const loan = await prisma.loan.findUnique({ where: { id } });
+    const loan = await prisma.loan.findUnique({
+      where: { id },
+      include: { lenderContact: { select: { name: true } } },
+    });
     if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const ctx = await requireWorkspace(featureForSource(loan.source), "write");
     const session = await auth();
@@ -142,7 +145,7 @@ export async function POST(
           type: TransactionType.EXPENSE,
           kind: TransactionKind.LOAN_PAYMENT,
           amount: data.amount,
-          description: `Loan payment · ${loan.lender}${data.notes ? ` · ${data.notes}` : ""}`,
+          description: `Loan payment · ${loan.lenderContact?.name ?? loan.lender}${data.notes ? ` · ${data.notes}` : ""}`,
           date: new Date(data.paidAt),
           accountId: resolvedAccountId,
           cardId: data.cardId ?? null,

@@ -64,14 +64,17 @@ export async function PATCH(
     }
     const t = loaded.transaction;
 
-    // Edit-window check (statement-closed for card txns, N-day window for
-    // others). OWNER/ADMIN can pass `force: true` to bypass.
+    // Edit-window check (closed-loan, statement-closed, then N-day window).
+    // OWNER/ADMIN can pass `force: true` to bypass.
     const lock = await checkTransactionEditAllowed({
       transaction: {
         id: t.id,
         date: t.date,
         accountId: t.accountId,
         workspaceId: t.workspaceId,
+        loanId: t.loanId,
+        type: t.type,
+        kind: t.kind,
       },
       role: ctx.role,
       force: body?.force === true,
@@ -274,6 +277,9 @@ export async function DELETE(
         date: loaded.transaction.date,
         accountId: loaded.transaction.accountId,
         workspaceId: loaded.transaction.workspaceId,
+        loanId: loaded.transaction.loanId,
+        type: loaded.transaction.type,
+        kind: loaded.transaction.kind,
       },
       role: ctx.role,
       force,

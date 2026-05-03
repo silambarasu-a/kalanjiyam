@@ -398,6 +398,7 @@ model Contact {
   memberCharges     MemberCharge[]
   lessorLeases      Lease[]        @relation("LeaseLessor")
   lesseeLeases      Lease[]        @relation("LeaseLessee")
+  lenderLoans       Loan[]         @relation("LoanLenderContact")
 
   @@index([workspaceId, active])
 }
@@ -906,7 +907,15 @@ model Loan {
   sharedWithUserIds String[]    @default([])
   kind            LoanKind
   source          LoanSource    @default(BANK)
+  // Free-form lender display name. For HAND_FORMAL loans this is the
+  // contact's name (denormalized so old loans still render if the contact
+  // is later archived/renamed); other sources store the bank/NBFC name.
   lender          String
+  // For HAND_FORMAL loans: the workspace contact who lent the money.
+  // Optional because legacy hand loans (created before contacts existed)
+  // only have the free-text `lender` field.
+  lenderContactId String?
+  lenderContact   Contact?      @relation("LoanLenderContact", fields: [lenderContactId], references: [id], onDelete: SetNull)
   borrower        String?
   principal       Decimal       @db.Decimal(14, 2)
   outstanding     Decimal       @db.Decimal(14, 2)
@@ -951,6 +960,7 @@ model Loan {
   @@index([workspaceId, active, source])
   @@index([workspaceId, ownerUserId])
   @@index([cardId])
+  @@index([workspaceId, lenderContactId])
 }
 
 // Gold pledged as collateral for a GOLD loan. Each row is one type of

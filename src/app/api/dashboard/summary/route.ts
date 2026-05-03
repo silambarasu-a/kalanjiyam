@@ -4,6 +4,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
 import { parsePeriodId, rangeToPrismaFilter } from "@/lib/statement-period";
+import { TIMING } from "@/lib/timing";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -47,28 +48,36 @@ export async function GET(request: Request) {
     }
     const periodFilter = rangeToPrismaFilter({ start: periodStart, end: periodEnd });
 
-    // Window for "upcoming dues" — 30 days starting from today (not from
-    // the period filter, since dues are forward-looking regardless of
-    // which month the user is reviewing).
+    // Window for "upcoming dues" — TIMING.dashboardUpcomingDuesDays
+    // starting from today (not from the period filter, since dues are
+    // forward-looking regardless of which month the user is reviewing).
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const in30Days = new Date(today);
-    in30Days.setUTCDate(in30Days.getUTCDate() + 30);
+    in30Days.setUTCDate(in30Days.getUTCDate() + TIMING.dashboardUpcomingDuesDays);
+
+    // Strict current-calendar-month boundaries for the "card bills paid
+    // this month" stat — independent of the period filter so the number
+    // doesn't shift when the user looks at a different month.
+    const monthStart = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
+    );
+    const nextMonthBegin = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1),
+    );
 
     const [
       accounts,
-      activeCropBatches,
-      activeLivestockBatches,
       upcomingReminders,
       upcomingLoanDues,
       upcomingLeaseDues,
       upcomingCardBills,
-      pendingSettlements,
       outstandingCharges,
       activeLoans,
       investmentsTotal,
       monthIncomeAgg,
       monthExpenseAgg,
+      paidCardStatementsThisMonth,
     ] = await Promise.all([
       prisma.account.findMany({
         where: { workspaceId: wsId },
@@ -83,19 +92,19 @@ export async function GET(request: Request) {
           linkedCard: { select: { id: true } },
         },
       }),
-      prisma.cropBatch.count({
-        where: { active: true, crop: { workspaceId: wsId } },
-      }),
-      prisma.livestockBatch.count({
-        where: { active: true, livestock: { workspaceId: wsId } },
-      }),
       prisma.investmentReminder.findMany({
         where: { workspaceId: wsId, status: "UPCOMING", dueDate: { lte: in30Days } },
         orderBy: { dueDate: "asc" },
         take: 20,
         include: {
           investment: { select: { name: true, kind: true } },
-          loan: { select: { lender: true, kind: true } },
+          loan: {
+            select: {
+              lender: true,
+              kind: true,
+              lenderContact: { select: { name: true } },
+            },
+          },
         },
       }),
       prisma.loan.findMany({
@@ -113,6 +122,7 @@ export async function GET(request: Request) {
           source: true,
           emiAmount: true,
           nextDueDate: true,
+          lenderContact: { select: { name: true } },
         },
       }),
       prisma.leasePaymentSchedule.findMany({
@@ -158,9 +168,6 @@ export async function GET(request: Request) {
           payments: { select: { amount: true } },
         },
       }),
-      prisma.wageSettlement.count({
-        where: { worker: { workspaceId: wsId }, status: "PENDING" },
-      }),
       prisma.memberCharge.aggregate({
         where: { workspaceId: wsId, status: { in: ["OUTSTANDING", "PARTIAL"] } },
         _sum: { amount: true, settledAmount: true },
@@ -191,6 +198,19 @@ export async function GET(request: Request) {
         },
         _sum: { amount: true },
       }),
+      // Card statements settled within the current calendar month — both
+      // count and total paid, sourced from each statement's payments.
+      prisma.cardStatement.findMany({
+        where: {
+          workspaceId: wsId,
+          paidAt: { gte: monthStart, lt: nextMonthBegin },
+        },
+        select: {
+          id: true,
+          totalDue: true,
+          payments: { select: { amount: true } },
+        },
+      }),
     ]);
 
     const bankCashBalances = await Promise.all(
@@ -209,6 +229,21 @@ export async function GET(request: Request) {
     const chargesOutstanding =
       Number(outstandingCharges._sum.amount ?? 0) -
       Number(outstandingCharges._sum.settledAmount ?? 0);
+
+    // Sum of payments recorded against statements that closed (paidAt set)
+    // this calendar month. Capped at totalDue per statement so a one-off
+    // overpayment doesn't inflate the figure.
+    const cardBillsPaidThisMonth = paidCardStatementsThisMonth.reduce(
+      (sum, s) => {
+        const paid = s.payments.reduce(
+          (acc, p) => acc + Number(p.amount),
+          0,
+        );
+        return sum + Math.min(Number(s.totalDue), paid);
+      },
+      0,
+    );
+    const cardBillsPaidThisMonthCount = paidCardStatementsThisMonth.length;
 
     // ── Merge upcoming-dues into one chronological list ────────────────
     type Due = {
@@ -231,7 +266,10 @@ export async function GET(request: Request) {
     const dues: Due[] = [];
     for (const r of upcomingReminders) {
       const label =
-        r.investment?.name ?? r.loan?.lender ?? r.kind.replace(/_/g, " ");
+        r.investment?.name ??
+        r.loan?.lenderContact?.name ??
+        r.loan?.lender ??
+        r.kind.replace(/_/g, " ");
       dues.push({
         id: `reminder:${r.id}`,
         source: "REMINDER",
@@ -249,7 +287,7 @@ export async function GET(request: Request) {
         id: `loan:${l.id}`,
         source: "LOAN",
         kind: l.source === "CARD_EMI" ? "CARD EMI" : "LOAN EMI",
-        label: l.lender,
+        label: l.lenderContact?.name ?? l.lender,
         dueDate: l.nextDueDate.toISOString(),
         amount: l.emiAmount == null ? null : Number(l.emiAmount),
         href: `/loans/${l.id}`,
@@ -445,9 +483,8 @@ export async function GET(request: Request) {
       chargesOutstanding,
       currentMonthDue,
       nextMonthDue,
-      activeCropBatches,
-      activeLivestockBatches,
-      pendingSettlements,
+      cardBillsPaidThisMonth,
+      cardBillsPaidThisMonthCount,
       dues,
     });
   } catch (e) {

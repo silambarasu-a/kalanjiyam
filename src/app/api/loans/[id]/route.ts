@@ -40,6 +40,7 @@ export async function GET(
       include: {
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
+        lenderContact: { select: { id: true, name: true } },
         goldItems: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -72,7 +73,8 @@ export async function GET(
         id: loan.id,
         kind: loan.kind,
         source: loan.source,
-        lender: loan.lender,
+        lender: loan.lenderContact?.name ?? loan.lender,
+        lenderContact: loan.lenderContact,
         borrower: loan.borrower,
         principal: Number(loan.principal),
         outstanding: Number(loan.outstanding),
@@ -139,6 +141,31 @@ export async function PATCH(
     }
     const data = parsed.data;
 
+    // Closed loans are immutable. The closing EMI itself can still be
+    // adjusted (or reversed) inside its 3-day grace window via the
+    // transaction PATCH/DELETE — re-opening the loan that way is the
+    // supported path back to editing the loan record.
+    // OWNER/ADMIN can override with `force: true` to correct historical
+    // mistakes (e.g. wrong principal entered before the loan was closed).
+    if (!loan.active) {
+      const force = body?.force === true;
+      const isAdmin =
+        ctx.role === "OWNER" ||
+        ctx.role === "ADMIN" ||
+        ctx.role === "SUPER_ADMIN";
+      if (!force || !isAdmin) {
+        return NextResponse.json(
+          {
+            error: isAdmin
+              ? "This loan is closed. Re-submit with force=true to override."
+              : "This loan is closed and locked. Ask an Owner or Admin to override.",
+            canForce: isAdmin,
+          },
+          { status: 423 },
+        );
+      }
+    }
+
     // Source change is unsupported — different feature/UI per source. The
     // form locks this, so a mismatch is a programmer error, not a user one.
     if (data.source && data.source !== loan.source) {
@@ -204,6 +231,30 @@ export async function PATCH(
       if (!canAccessRecord(session, account)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+    }
+
+    // lenderContactId is only meaningful for HAND_FORMAL — reject the
+    // field outright on other sources so a stray client (or future bug)
+    // can't attach a contact to a bank loan.
+    if (data.lenderContactId !== undefined && loan.source !== "HAND_FORMAL") {
+      return NextResponse.json(
+        { error: "Lender contact only applies to hand loans" },
+        { status: 400 },
+      );
+    }
+    // For HAND_FORMAL, when the client picks (or changes) the contact,
+    // resolve the canonical name from it so the denormalised `lender`
+    // column stays in sync. Picking a contact wins over any free-text
+    // `lender` the client also sent.
+    let resolvedLenderName: string | null = null;
+    if (loan.source === "HAND_FORMAL" && data.lenderContactId) {
+      const contact = await prisma.contact.findUnique({
+        where: { id: data.lenderContactId },
+      });
+      if (!contact || contact.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
+      resolvedLenderName = contact.name;
     }
 
     // chargeBreakdown handling: undefined → leave alone; null/empty → clear;
@@ -338,7 +389,11 @@ export async function PATCH(
         where: { id },
         data: {
           kind: data.kind ?? loan.kind,
-          lender: data.lender ?? loan.lender,
+          lender: resolvedLenderName ?? data.lender ?? loan.lender,
+          lenderContactId:
+            data.lenderContactId !== undefined
+              ? data.lenderContactId
+              : loan.lenderContactId,
           borrower:
             data.borrower !== undefined ? data.borrower : loan.borrower,
           principal: data.principal ?? loan.principal,
@@ -394,15 +449,21 @@ export async function PATCH(
           nextDueDate: computedNextDueDate,
           notes: data.notes !== undefined ? data.notes : loan.notes,
           active: data.active ?? loan.active,
+          // Reopening (active flips false → true) clears the closure
+          // timestamp so the loan doesn't carry an inconsistent
+          // active=true + foreclosedAt=<old date>.
+          foreclosedAt:
+            !loan.active && data.active === true ? null : loan.foreclosedAt,
         },
       });
 
-      // BANK loans with isExisting=false carry an auto disbursement INCOME
-      // (and optionally a charges EXPENSE) pinned to this loanId. Reconcile
-      // those rows against the post-update state — sync amounts when the
-      // flag stays off, delete them when the user flips on, recreate them
-      // when the user flips off, and leave everything alone otherwise.
-      if (loan.source === "BANK") {
+      // BANK and HAND_FORMAL loans with isExisting=false carry an auto
+      // disbursement INCOME (and BANK additionally an upfront charges
+      // EXPENSE) pinned to this loanId. Reconcile those rows against the
+      // post-update state — sync amounts when the flag stays off, delete
+      // them when the user flips on, recreate them when the user flips
+      // off, and leave everything alone otherwise.
+      if (loan.source === "BANK" || loan.source === "HAND_FORMAL") {
         const newPrincipal = Number(updatedLoan.principal);
         const newAccountId = updatedLoan.accountId;
         const newDate = updatedLoan.startedAt;
@@ -414,6 +475,10 @@ export async function PATCH(
             ? breakdown.map((c) => c.label).join(", ")
             : "Processing & other charges";
         const wantAutoTxns = !newIsExisting;
+        const disbursementDescription =
+          loan.source === "HAND_FORMAL"
+            ? `Hand loan from ${updatedLoan.lender}`
+            : `Loan disbursement · ${updatedLoan.lender}`;
 
         const disbursement = await tx.transaction.findFirst({
           where: {
@@ -431,7 +496,7 @@ export async function PATCH(
                 amount: newPrincipal,
                 date: newDate,
                 accountId: newAccountId,
-                description: `Loan disbursement · ${updatedLoan.lender}`,
+                description: disbursementDescription,
               },
             });
           } else if (newAccountId) {
@@ -441,7 +506,7 @@ export async function PATCH(
                 type: TransactionType.INCOME,
                 kind: TransactionKind.LOAN_PAYMENT,
                 amount: newPrincipal,
-                description: `Loan disbursement · ${updatedLoan.lender}`,
+                description: disbursementDescription,
                 date: newDate,
                 accountId: newAccountId,
                 loanId: id,
@@ -454,43 +519,48 @@ export async function PATCH(
           await tx.transaction.delete({ where: { id: disbursement.id } });
         }
 
-        const chargeTxn = await tx.transaction.findFirst({
-          where: {
-            loanId: id,
-            type: TransactionType.EXPENSE,
-            kind: TransactionKind.OTHER_EXPENSE,
-          },
-          orderBy: { createdAt: "asc" },
-        });
-        if (wantAutoTxns && newCharges > 0) {
-          if (chargeTxn) {
-            await tx.transaction.update({
-              where: { id: chargeTxn.id },
-              data: {
-                amount: newCharges,
-                date: newDate,
-                accountId: newAccountId,
-                description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
-              },
-            });
-          } else if (newAccountId) {
-            await tx.transaction.create({
-              data: {
-                workspaceId: ctx.workspaceId,
-                type: TransactionType.EXPENSE,
-                kind: TransactionKind.OTHER_EXPENSE,
-                amount: newCharges,
-                description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
-                date: newDate,
-                accountId: newAccountId,
-                loanId: id,
-                userId: ctx.userId,
-                createdByUserId: ctx.userId,
-              },
-            });
+        // Upfront charges only exist on BANK loans — skip the lookup
+        // entirely for HAND_FORMAL so we don't accidentally delete an
+        // unrelated OTHER_EXPENSE that happens to share the loanId.
+        if (loan.source === "BANK") {
+          const chargeTxn = await tx.transaction.findFirst({
+            where: {
+              loanId: id,
+              type: TransactionType.EXPENSE,
+              kind: TransactionKind.OTHER_EXPENSE,
+            },
+            orderBy: { createdAt: "asc" },
+          });
+          if (wantAutoTxns && newCharges > 0) {
+            if (chargeTxn) {
+              await tx.transaction.update({
+                where: { id: chargeTxn.id },
+                data: {
+                  amount: newCharges,
+                  date: newDate,
+                  accountId: newAccountId,
+                  description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
+                },
+              });
+            } else if (newAccountId) {
+              await tx.transaction.create({
+                data: {
+                  workspaceId: ctx.workspaceId,
+                  type: TransactionType.EXPENSE,
+                  kind: TransactionKind.OTHER_EXPENSE,
+                  amount: newCharges,
+                  description: `Loan charges · ${updatedLoan.lender} · ${labelList}`,
+                  date: newDate,
+                  accountId: newAccountId,
+                  loanId: id,
+                  userId: ctx.userId,
+                  createdByUserId: ctx.userId,
+                },
+              });
+            }
+          } else if (chargeTxn) {
+            await tx.transaction.delete({ where: { id: chargeTxn.id } });
           }
-        } else if (chargeTxn) {
-          await tx.transaction.delete({ where: { id: chargeTxn.id } });
         }
       }
 
@@ -541,11 +611,19 @@ export async function DELETE(
     if (!canModifyRecord(session, loan)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+    // Loans with any payment history (active or closed) cannot be
+    // deleted — the linked transactions would either cascade away
+    // (losing real money movement) or dangle. Closed loans are
+    // permanently locked: there's no "archive" toggle to flip back to.
     const txCount = await prisma.transaction.count({ where: { loanId: id } });
     if (txCount > 0) {
       return NextResponse.json(
-        { error: "Loan has payment history — archive (active=false) instead." },
-        { status: 400 }
+        {
+          error: loan.active
+            ? "Loan has payment history — archive (active=false) instead."
+            : "Loan is closed and locked. Delete the closing EMI within its grace window to re-open the loan first.",
+        },
+        { status: 400 },
       );
     }
     await prisma.loan.delete({ where: { id } });

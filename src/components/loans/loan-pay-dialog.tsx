@@ -23,6 +23,7 @@ import {
   cyclesPerYear,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { TIMING } from "@/lib/timing";
 
 export type LoanForPayment = {
   id: string;
@@ -145,7 +146,16 @@ export function LoanPayDialog({
       const body = await res.json();
       if (!res.ok) setError(body.error ?? "Failed");
       else {
-        toast.success("EMI paid");
+        // Surface the 3-day grace window when this payment closed the
+        // loan — it's the user's only chance to undo a wrong final
+        // amount before the row goes immutable.
+        if (body.outstanding === 0) {
+          toast.success("Loan closed", {
+            description: `You have ${TIMING.loanEmiGraceDays} days to edit or delete this final EMI from the transactions list if needed.`,
+          });
+        } else {
+          toast.success("EMI paid");
+        }
         await onPaid?.();
         await mutateBalances();
         onClose();

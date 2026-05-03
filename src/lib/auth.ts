@@ -4,6 +4,7 @@ import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { mergeWithDefaults, type MemberPermissions } from "@/lib/permissions";
 import { getClientIp, rateLimit } from "@/lib/auth/rate-limit";
+import { TIMING } from "@/lib/timing";
 import type { WorkspaceRole } from "@/generated/prisma/client";
 
 class TooManyAttemptsError extends CredentialsSignin {
@@ -35,18 +36,18 @@ async function loadWorkspaceContext(userId: string, workspaceIdHint?: string | n
 }
 
 export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
-  session: { strategy: "jwt", maxAge: 15 * 60 },
+  session: { strategy: "jwt", maxAge: TIMING.sessionMaxAgeMinutes * 60 },
   // Trust the proxy Host header (Vercel / any reverse proxy). Without this
   // NextAuth v5 rejects the credentials callback on Vercel deployments and
   // the session cookie never gets set.
   trustHost: true,
   // Override the sessionToken cookie so it's a *session cookie* — no
   // `maxAge` / `expires`, which means browsers drop it on close. The JWT
-  // itself still expires after `session.maxAge` (15 min), so within a
-  // single browser session the user is still logged out at the 15-min
-  // mark. Without this override, NextAuth defaults the cookie's maxAge
-  // to session.maxAge, which makes it a persistent cookie that survives
-  // browser restarts (within the 15-min window).
+  // itself still expires after `session.maxAge` (TIMING.sessionMaxAgeMinutes),
+  // so within a single browser session the user is still logged out at
+  // the configured mark. Without this override, NextAuth defaults the
+  // cookie's maxAge to session.maxAge, which makes it a persistent
+  // cookie that survives browser restarts.
   cookies: {
     sessionToken: {
       name:
@@ -161,7 +162,15 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         }
 
         if (s?.extend) {
-          token.sessionStartedAt = Date.now() - 5 * 60 * 1000;
+          // Give the user `sessionExtendMinutes` of fresh time. Done by
+          // back-dating sessionStartedAt so that `startedAt + maxAge`
+          // lands `extendMinutes` from now. If extend ≥ maxAge the
+          // offset clamps at 0 → full session reset.
+          const offsetMs = Math.max(
+            0,
+            (TIMING.sessionMaxAgeMinutes - TIMING.sessionExtendMinutes) * 60 * 1000,
+          );
+          token.sessionStartedAt = Date.now() - offsetMs;
         }
         if (s?.lock) {
           token.reverifyRequiredAt = Date.now();
@@ -191,7 +200,7 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         session.user.lastLoginAt = (token.lastLoginAt as string | null) ?? null;
       }
       const startedAt = (token.sessionStartedAt as number) || Date.now();
-      session.expiresAt = startedAt + 15 * 60 * 1000;
+      session.expiresAt = startedAt + TIMING.sessionMaxAgeMinutes * 60 * 1000;
       session.reverifyRequiredAt = (token.reverifyRequiredAt as number | null) ?? null;
       return session;
     },

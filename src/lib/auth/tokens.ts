@@ -1,8 +1,6 @@
 import { randomBytes, createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
-
-const VERIFICATION_TTL_HOURS = Number(process.env.EMAIL_VERIFICATION_TTL_HOURS ?? 24);
-const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES ?? 60);
+import { TIMING } from "@/lib/timing";
 
 export function generateRawToken() {
   return randomBytes(32).toString("base64url");
@@ -16,7 +14,9 @@ export async function createEmailVerificationToken(userId: string) {
   await prisma.emailVerificationToken.deleteMany({ where: { userId } });
   const raw = generateRawToken();
   const tokenHash = hashToken(raw);
-  const expiresAt = new Date(Date.now() + VERIFICATION_TTL_HOURS * 60 * 60 * 1000);
+  const expiresAt = new Date(
+    Date.now() + TIMING.emailVerificationTtlHours * 60 * 60 * 1000,
+  );
   await prisma.emailVerificationToken.create({ data: { userId, tokenHash, expiresAt } });
   return raw;
 }
@@ -43,7 +43,9 @@ export async function createPasswordResetToken(userId: string) {
   await prisma.passwordResetToken.deleteMany({ where: { userId } });
   const raw = generateRawToken();
   const tokenHash = hashToken(raw);
-  const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60 * 1000);
+  const expiresAt = new Date(
+    Date.now() + TIMING.passwordResetTtlMinutes * 60 * 1000,
+  );
   await prisma.passwordResetToken.create({ data: { userId, tokenHash, expiresAt } });
   return raw;
 }

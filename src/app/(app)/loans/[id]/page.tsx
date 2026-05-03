@@ -24,6 +24,7 @@ import {
 import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
 import { LoanEditButton } from "@/components/loans/loan-edit-button";
 import { nextStatementDueDate } from "@/lib/statement-period";
+import { TIMING, ONE_DAY_MS } from "@/lib/timing";
 
 const SOURCE_PATH = {
   BANK: "/loans/bank",
@@ -73,6 +74,7 @@ export default async function LoanDetailPage({
           },
         },
       },
+      lenderContact: { select: { id: true, name: true } },
       ownerUser: { select: { name: true } },
       goldItems: { orderBy: { createdAt: "asc" } },
     },
@@ -212,6 +214,22 @@ export default async function LoanDetailPage({
     });
   }
 
+  // Grace-window state for the closed-loan banner. Server-component, so
+  // `new Date()` is computed once per render on the server.
+  const closureGrace =
+    !loan.active && loan.foreclosedAt
+      ? (() => {
+          const ageDays = Math.floor(
+            (new Date().getTime() - loan.foreclosedAt.getTime()) / ONE_DAY_MS,
+          );
+          return {
+            ageDays,
+            daysLeft: TIMING.loanEmiGraceDays - ageDays,
+            inGrace: ageDays <= TIMING.loanEmiGraceDays,
+          };
+        })()
+      : null;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -220,7 +238,9 @@ export default async function LoanDetailPage({
             ← {SOURCE_LABEL[sourceKey]}
           </Link>
           <div className="mt-1 flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">{loan.lender}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {loan.lenderContact?.name ?? loan.lender}
+            </h1>
             <span
               className={`text-[10px] font-semibold uppercase tracking-widest ${status.tone}`}
             >
@@ -233,49 +253,57 @@ export default async function LoanDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <LoanEditButton
-            loan={{
-              id: loan.id,
-              kind: loan.kind,
-              source: loan.source,
-              lender: loan.lender,
-              principal,
-              outstanding,
-              interestRate:
-                loan.interestRate != null ? Number(loan.interestRate) : null,
-              gstOnInterest:
-                loan.gstOnInterest != null ? Number(loan.gstOnInterest) : null,
-              emiAmount:
-                loan.emiAmount != null ? Number(loan.emiAmount) : null,
-              tenure: loan.tenure,
-              frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
-              charges: loan.charges != null ? Number(loan.charges) : null,
-              chargeBreakdown: chargeBreakdown.map((c) => ({
-                label: c.label,
-                amount: Number(c.amount) || 0,
-              })),
-              accountId: loan.accountId,
-              cardId: loan.cardId,
-              loanAccountNumber: loan.loanAccountNumber,
-              loanStatementDate: loan.loanStatementDate,
-              loanGracePeriod: loan.loanGracePeriod,
-              isExisting: loan.isExisting,
-              startedAt: loan.startedAt.toISOString(),
-              notes: loan.notes,
-              goldItems: loan.goldItems.map((g) => ({
-                name: g.name,
-                quantity: g.quantity,
-                weightGrams: Number(g.weightGrams),
-                purity: g.purity,
-                notes: g.notes,
-              })),
-            }}
-          />
+          {/* Closed loans are immutable. The only path back to editing is
+              reversing the closing EMI within its 3-day grace, which
+              re-opens the loan automatically. */}
+          {loan.active && (
+            <LoanEditButton
+              loan={{
+                id: loan.id,
+                kind: loan.kind,
+                source: loan.source,
+                lender: loan.lender,
+                lenderContact: loan.lenderContact,
+                principal,
+                outstanding,
+                interestRate:
+                  loan.interestRate != null ? Number(loan.interestRate) : null,
+                gstOnInterest:
+                  loan.gstOnInterest != null
+                    ? Number(loan.gstOnInterest)
+                    : null,
+                emiAmount:
+                  loan.emiAmount != null ? Number(loan.emiAmount) : null,
+                tenure: loan.tenure,
+                frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
+                charges: loan.charges != null ? Number(loan.charges) : null,
+                chargeBreakdown: chargeBreakdown.map((c) => ({
+                  label: c.label,
+                  amount: Number(c.amount) || 0,
+                })),
+                accountId: loan.accountId,
+                cardId: loan.cardId,
+                loanAccountNumber: loan.loanAccountNumber,
+                loanStatementDate: loan.loanStatementDate,
+                loanGracePeriod: loan.loanGracePeriod,
+                isExisting: loan.isExisting,
+                startedAt: loan.startedAt.toISOString(),
+                notes: loan.notes,
+                goldItems: loan.goldItems.map((g) => ({
+                  name: g.name,
+                  quantity: g.quantity,
+                  weightGrams: Number(g.weightGrams),
+                  purity: g.purity,
+                  notes: g.notes,
+                })),
+              }}
+            />
+          )}
           {loan.active && outstanding > 0 && (
             <LoanPayButton
               loan={{
                 id: loan.id,
-                lender: loan.lender,
+                lender: loan.lenderContact?.name ?? loan.lender,
                 outstanding,
                 emiAmount: loan.emiAmount != null ? Number(loan.emiAmount) : null,
                 interestRate:
@@ -288,6 +316,45 @@ export default async function LoanDetailPage({
           )}
         </div>
       </div>
+
+      {closureGrace && (
+        <div
+          className={`rounded-lg border p-3 text-sm ${
+            closureGrace.inGrace
+              ? "border-amber-500/40 bg-amber-500/5 text-amber-900 dark:text-amber-200"
+              : "border-border bg-muted/40 text-muted-foreground"
+          }`}
+        >
+          {closureGrace.inGrace ? (
+            <>
+              <strong className="font-semibold">
+                Loan closed{" "}
+                {closureGrace.ageDays === 0
+                  ? "today"
+                  : `${closureGrace.ageDays}d ago`}
+                .
+              </strong>{" "}
+              You have{" "}
+              {closureGrace.daysLeft === 0
+                ? "until end of day"
+                : `${closureGrace.daysLeft} day${closureGrace.daysLeft === 1 ? "" : "s"}`}{" "}
+              to edit or delete the closing EMI from the{" "}
+              <Link href="/transactions" className="underline">
+                transactions list
+              </Link>{" "}
+              if it was wrong. After that the loan and its history are
+              permanent.
+            </>
+          ) : (
+            <>
+              <strong className="font-semibold">Loan closed and locked.</strong>{" "}
+              The {TIMING.loanEmiGraceDays}-day grace window for the closing EMI
+              ended {closureGrace.ageDays - TIMING.loanEmiGraceDays}d ago.
+              Changes now require an Owner/Admin override.
+            </>
+          )}
+        </div>
+      )}
 
       <section className="rounded-2xl border bg-linear-to-br from-card to-muted/40 p-5 sm:p-6">
         <div className="grid gap-6 md:grid-cols-[1.4fr_1fr]">

@@ -45,6 +45,7 @@ export async function GET(request: Request) {
         ownerUser: { select: { id: true, name: true } },
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
+        lenderContact: { select: { id: true, name: true } },
         goldItems: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -63,7 +64,10 @@ export async function GET(request: Request) {
         id: l.id,
         kind: l.kind,
         source: l.source,
-        lender: l.lender,
+        // Always serve the contact's *current* name when one is linked,
+        // falling back to the denormalised string for legacy/bank loans.
+        lender: l.lenderContact?.name ?? l.lender,
+        lenderContact: l.lenderContact,
         borrower: l.borrower,
         principal: Number(l.principal),
         outstanding: Number(l.outstanding),
@@ -145,6 +149,30 @@ export async function POST(request: Request) {
       if (!canAccessRecord(session, account)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+    }
+
+    // lenderContactId only applies to HAND_FORMAL. Reject so a bad client
+    // can't attach a contact to a bank/card-EMI loan.
+    if (data.lenderContactId && data.source !== "HAND_FORMAL") {
+      return NextResponse.json(
+        { error: "Lender contact only applies to hand loans" },
+        { status: 400 },
+      );
+    }
+    // For HAND_FORMAL, the lender is a workspace contact. Resolve the name
+    // from the contact so the denormalised `lender` column always matches —
+    // ignore whatever string the client sent.
+    let resolvedLenderName = data.lender;
+    let resolvedLenderContactId: string | null = null;
+    if (data.source === "HAND_FORMAL" && data.lenderContactId) {
+      const contact = await prisma.contact.findUnique({
+        where: { id: data.lenderContactId },
+      });
+      if (!contact || contact.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
+      resolvedLenderName = contact.name;
+      resolvedLenderContactId = contact.id;
     }
 
     // tenure is the number of payment cycles (months for MONTHLY,
@@ -255,7 +283,8 @@ export async function POST(request: Request) {
           ownerUserId: ctx.userId,
           kind: data.kind as LoanKind,
           source: data.source as LoanSource,
-          lender: data.lender,
+          lender: resolvedLenderName,
+          lenderContactId: resolvedLenderContactId,
           borrower: data.borrower,
           principal: data.principal,
           outstanding: initialOutstanding,
@@ -301,19 +330,27 @@ export async function POST(request: Request) {
         },
       });
 
-      // BANK disbursement — full principal is credited to the account as
-      // INCOME, then upfront charges (processing fee, stamp duty, GST,
-      // insurance, etc.) post as a separate EXPENSE. Net account change is
-      // (principal − charges), matching how banks show it on the passbook
-      // and keeping fees discoverable as real expenses in reports.
-      if (!data.isExisting && data.source === "BANK" && data.accountId) {
+      // Disbursement INCOME — full principal credited to the chosen
+      // account. Applies to both BANK loans (passbook credit from the bank)
+      // and HAND_FORMAL loans (cash from a contact deposited into a bank
+      // account). Upfront charges only apply to BANK loans (processing
+      // fee, stamp duty, GST, insurance, etc.) and post as a separate
+      // EXPENSE so the net account change is (principal − charges).
+      if (
+        !data.isExisting &&
+        (data.source === "BANK" || data.source === "HAND_FORMAL") &&
+        data.accountId
+      ) {
         await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
             type: TransactionType.INCOME,
             kind: TransactionKind.LOAN_PAYMENT,
             amount: data.principal,
-            description: `Loan disbursement · ${data.lender}`,
+            description:
+              data.source === "HAND_FORMAL"
+                ? `Hand loan from ${resolvedLenderName}`
+                : `Loan disbursement · ${resolvedLenderName}`,
             date: new Date(data.startedAt),
             accountId: data.accountId,
             loanId: loan.id,
@@ -322,7 +359,7 @@ export async function POST(request: Request) {
           },
         });
 
-        if (chargesTotal > 0) {
+        if (data.source === "BANK" && chargesTotal > 0) {
           const chargeLabel =
             breakdown.length > 0
               ? breakdown.map((c) => c.label).join(", ")
@@ -333,7 +370,7 @@ export async function POST(request: Request) {
               type: TransactionType.EXPENSE,
               kind: TransactionKind.OTHER_EXPENSE,
               amount: chargesTotal,
-              description: `Loan charges · ${data.lender} · ${chargeLabel}`,
+              description: `Loan charges · ${resolvedLenderName} · ${chargeLabel}`,
               date: new Date(data.startedAt),
               accountId: data.accountId,
               loanId: loan.id,

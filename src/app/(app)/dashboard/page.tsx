@@ -11,13 +11,12 @@ import {
   Bell,
   CreditCard,
   Landmark,
-  Sprout,
-  PawPrint,
   Wallet2,
   Users,
   HardHat,
   AlertCircle,
   CalendarClock,
+  CheckCircle2,
   Hourglass,
   Wallet,
 } from "lucide-react";
@@ -55,9 +54,8 @@ type Summary = {
   chargesOutstanding: number;
   currentMonthDue: number;
   nextMonthDue: number;
-  activeCropBatches: number;
-  activeLivestockBatches: number;
-  pendingSettlements: number;
+  cardBillsPaidThisMonth: number;
+  cardBillsPaidThisMonthCount: number;
   dues: Due[];
 };
 
@@ -166,28 +164,21 @@ export default function DashboardPage() {
             icon={<Hourglass className="h-4 w-4" />}
           />
           <SmallCard
+            title="Card bills paid (this month)"
+            value={data ? formatINR(data.cardBillsPaidThisMonth) : "—"}
+            hint={
+              data && data.cardBillsPaidThisMonthCount > 0
+                ? `${data.cardBillsPaidThisMonthCount} statement${data.cardBillsPaidThisMonthCount === 1 ? "" : "s"} settled`
+                : undefined
+            }
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            href="/cards"
+          />
+          <SmallCard
             title="Member charges"
             value={data ? formatINR(data.chargesOutstanding) : "—"}
             icon={<Users className="h-4 w-4" />}
             href="/contacts"
-          />
-          <SmallCard
-            title="Active crop batches"
-            value={data ? String(data.activeCropBatches) : "—"}
-            icon={<Sprout className="h-4 w-4" />}
-            href="/crops"
-          />
-          <SmallCard
-            title="Active livestock batches"
-            value={data ? String(data.activeLivestockBatches) : "—"}
-            icon={<PawPrint className="h-4 w-4" />}
-            href="/livestock"
-          />
-          <SmallCard
-            title="Pending wage settlements"
-            value={data ? String(data.pendingSettlements) : "—"}
-            icon={<HardHat className="h-4 w-4" />}
-            href="/wages"
           />
         </section>
       </div>
@@ -429,11 +420,13 @@ function SmallCard({
   value,
   icon,
   href,
+  hint,
 }: {
   title: string;
   value: string;
   icon: React.ReactNode;
   href?: string;
+  hint?: string;
 }) {
   const inner = (
     <>
@@ -443,6 +436,9 @@ function SmallCard({
       <div className="flex-1 min-w-0">
         <div className="text-xs text-muted-foreground">{title}</div>
         <div className="text-lg font-semibold truncate">{value}</div>
+        {hint && (
+          <div className="text-[10px] text-muted-foreground truncate">{hint}</div>
+        )}
       </div>
     </>
   );

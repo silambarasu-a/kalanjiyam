@@ -1,7 +1,6 @@
 import { generateRawToken, hashToken } from "@/lib/auth/tokens";
 import { prisma } from "@/lib/prisma";
-
-const INVITE_TTL_DAYS = 7;
+import { TIMING, ONE_DAY_MS } from "@/lib/timing";
 
 export async function createWorkspaceInvite(args: {
   workspaceId: string;
@@ -12,7 +11,7 @@ export async function createWorkspaceInvite(args: {
 }) {
   const raw = generateRawToken();
   const tokenHash = hashToken(raw);
-  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + TIMING.inviteTtlDays * ONE_DAY_MS);
   const invite = await prisma.workspaceInvite.create({
     data: {
       workspaceId: args.workspaceId,

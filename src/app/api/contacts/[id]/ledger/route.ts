@@ -22,7 +22,7 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const [charges, transfers, expenses] = await Promise.all([
+    const [charges, transfers, expenses, loans] = await Promise.all([
       prisma.memberCharge.findMany({
         where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
         orderBy: { createdAt: "desc" },
@@ -62,6 +62,23 @@ export async function GET(
           card: { select: { id: true, name: true } },
         },
       }),
+      // Hand loans where this contact is the lender (i.e. money you
+      // borrowed from them and still owe back).
+      prisma.loan.findMany({
+        where: { workspaceId: ctx.workspaceId, lenderContactId: id },
+        orderBy: [{ active: "desc" }, { startedAt: "desc" }],
+        select: {
+          id: true,
+          kind: true,
+          principal: true,
+          outstanding: true,
+          startedAt: true,
+          nextDueDate: true,
+          active: true,
+          emiAmount: true,
+          interestRate: true,
+        },
+      }),
     ]);
 
     const totalOutstanding = charges.reduce(
@@ -79,6 +96,10 @@ export async function GET(
     }
     const netTransferred = round2(sentToContact - receivedFromContact);
     const spentOnThem = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    const loansOwed = loans.reduce(
+      (s, l) => s + (l.active ? Number(l.outstanding) : 0),
+      0,
+    );
 
     return NextResponse.json({
       member: { id: member.id, name: member.name },
@@ -89,6 +110,7 @@ export async function GET(
         receivedFromContact: round2(receivedFromContact),
         netTransferred,
         spentOnThem: round2(spentOnThem),
+        loansOwed: round2(loansOwed),
       },
       charges: charges.map((c) => ({
         id: c.id,
@@ -127,6 +149,17 @@ export async function GET(
         description: e.description,
         kind: e.memberChargeType,
         account: e.account ?? e.card,
+      })),
+      loans: loans.map((l) => ({
+        id: l.id,
+        kind: l.kind,
+        principal: Number(l.principal),
+        outstanding: Number(l.outstanding),
+        startedAt: l.startedAt.toISOString(),
+        nextDueDate: l.nextDueDate?.toISOString() ?? null,
+        active: l.active,
+        emiAmount: l.emiAmount == null ? null : Number(l.emiAmount),
+        interestRate: l.interestRate == null ? null : Number(l.interestRate),
       })),
     });
   } catch (e) {

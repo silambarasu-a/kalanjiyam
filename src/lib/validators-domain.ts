@@ -410,6 +410,7 @@ const loanFieldsSchema = z.object({
   kind: loanKindEnum.optional().default("PERSONAL"),
   source: loanSourceEnum,
   lender: z.string().trim().min(1).max(120),
+  lenderContactId: z.string().uuid().optional().nullable(),
   borrower: z.string().trim().max(120).optional().nullable(),
   principal: z.number().positive(),
   outstanding: z.number().nonnegative().optional(),
@@ -445,6 +446,10 @@ export const loanCreateSchema = loanFieldsSchema
   .refine((d) => d.source !== "CARD_EMI" || !!d.cardId, {
     message: "Card EMI needs a card",
     path: ["cardId"],
+  })
+  .refine((d) => d.source !== "HAND_FORMAL" || !!d.lenderContactId, {
+    message: "Pick the contact you borrowed from",
+    path: ["lenderContactId"],
   })
   // CREDIT_CARD_LOAN needs *either* a linked card (whose account provides
   // the billing cycle) *or* an explicit per-loan loanStatementDate (covers
