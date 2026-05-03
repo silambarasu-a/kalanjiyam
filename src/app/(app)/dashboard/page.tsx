@@ -185,11 +185,13 @@ export default function DashboardPage() {
             hint="Still owed this month"
             icon={<Hourglass className="h-4 w-4" />}
           />
-          <SmallCard
-            title="Due next month"
-            value={data ? formatINR(data.nextMonthDue) : "—"}
-            icon={<CalendarClock className="h-4 w-4" />}
-          />
+          {data && data.nextMonthDue > 0 && (
+            <SmallCard
+              title="Due next month"
+              value={formatINR(data.nextMonthDue)}
+              icon={<CalendarClock className="h-4 w-4" />}
+            />
+          )}
           <SmallCard
             title="Member charges"
             value={data ? formatINR(data.chargesOutstanding) : "—"}

@@ -65,6 +65,13 @@ export async function GET(request: Request) {
     const nextMonthBegin = new Date(
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1),
     );
+    // Only surface next-month dues when we're in the last 7 days of the
+    // current month — otherwise a bill due 25+ days out clutters the
+    // dashboard with stuff the user can't act on yet.
+    const daysInThisMonth = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const isNearMonthEnd = today.getUTCDate() > daysInThisMonth - 7;
 
     const [
       accounts,
@@ -435,9 +442,13 @@ export async function GET(request: Request) {
     // Catches the previously-missed cases of overdue bills paid this
     // month and partial payments to past-due statements.
 
-    // 1. CARDS — paid: sum of statement payments dated this month
-    // (tagged path) plus any untagged transfers to CARD accounts dated
-    // this month (manual-billing / computed-fallback path).
+    // PAID THIS MONTH — sum of every payment transaction dated in the
+    // current calendar month, across all sources. Real cashflow basis.
+    //   • Card statement payments (tagged via Transfer.statementId)
+    //   • Untagged transfers to CARD accounts (manual + computed paths)
+    //   • Loan EMI payments (LOAN_PAYMENT EXPENSE)
+    //   • Lease confirmations (Transaction.leaseScheduleId set)
+    //   • Reminder confirmations (InvestmentReminder.confirmedTransaction)
     let cardPaidThisMonth = 0;
     for (const s of cardStatementsTouchedThisMonth) {
       const paidThisMonth = s.payments
@@ -450,102 +461,27 @@ export async function GET(request: Request) {
     for (const t of untaggedCardPaymentsThisMonth) {
       cardPaidThisMonth += Number(t.amount);
     }
-    // CARDS — remaining (materialised path): per outstanding statement,
-    // totalDue minus all payments to date. Handles partial-paid bills.
-    let cardRemaining = 0;
-    const accountsWithStatementCovered = new Set<string>();
-    for (const s of outstandingCardBillsThisMonth) {
-      accountsWithStatementCovered.add(s.accountId);
-      const total = Number(s.totalDue);
-      const paidEver = s.payments.reduce(
-        (acc, p) => acc + Number(p.amount),
-        0,
-      );
-      cardRemaining += Math.max(0, total - paidEver);
-    }
-    // CARDS — remaining (manual path): for CARD accounts without an
-    // outstanding statement, fall back to Account.nextBillDue +
-    // nextBillAmount, netted against cumulative untagged payments at
-    // or before the bill due date. Mirrors how the dues array computes
-    // outstanding for manual bills.
-    const manualCardRemainingPromises = accounts
-      .filter(
-        (a) =>
-          a.kind === "CARD" &&
-          !accountsWithStatementCovered.has(a.id) &&
-          a.nextBillDue != null &&
-          a.nextBillAmount != null &&
-          Number(a.nextBillAmount) > 0 &&
-          a.nextBillDue.getTime() < nextMonthBegin.getTime(),
-      )
-      .map(async (a) => {
-        const paidUntagged = await untaggedPaymentsToCard(a.id, a.nextBillDue!);
-        const total = Number(a.nextBillAmount!);
-        return Math.max(0, total - paidUntagged);
-      });
-    const manualCardRemainingValues = await Promise.all(
-      manualCardRemainingPromises,
-    );
-    for (const v of manualCardRemainingValues) {
-      cardRemaining += v;
-    }
-
-    // 2. LOANS — paid: every LOAN_PAYMENT EXPENSE this month.
     const loanPaidThisMonth = loanPaymentsThisMonth.reduce(
       (acc, t) => acc + Number(t.amount),
       0,
     );
-    // LOANS — remaining: each outstanding loan's EMI, less any payment
-    // posted this month for that loan (collapses partial-pay scenarios).
-    const loanPaidByLoanId = new Map<string, number>();
-    for (const t of loanPaymentsThisMonth) {
-      if (!t.loanId) continue;
-      loanPaidByLoanId.set(
-        t.loanId,
-        (loanPaidByLoanId.get(t.loanId) ?? 0) + Number(t.amount),
-      );
-    }
-    let loanRemaining = 0;
-    for (const l of outstandingLoansThisMonth) {
-      if (!l.emiAmount) continue;
-      const emi = Number(l.emiAmount);
-      const paidForThis = loanPaidByLoanId.get(l.id) ?? 0;
-      loanRemaining += Math.max(0, emi - paidForThis);
-    }
-
-    // 3. LEASES — paid: every confirmation transaction this month.
     const leasePaidThisMonth = leasePaymentsThisMonth.reduce(
       (acc, t) => acc + Number(t.amount),
       0,
     );
-    // LEASES — remaining: every UPCOMING schedule due this month or
-    // earlier. Confirmed schedules are already excluded by the query.
-    let leaseRemaining = 0;
-    for (const s of outstandingLeasesThisMonth) {
-      leaseRemaining += Number(s.amount);
-    }
-
-    // 4. REMINDERS — paid: confirmed-this-month amounts.
     let reminderPaidThisMonth = 0;
     for (const r of confirmedRemindersThisMonth) {
       if (r.amount != null) reminderPaidThisMonth += Number(r.amount);
     }
-    // REMINDERS — remaining: UPCOMING with dueDate this month or
-    // earlier. Reminders without an amount are informational; skipped.
-    let reminderRemaining = 0;
-    for (const r of outstandingRemindersThisMonth) {
-      if (r.amount != null) reminderRemaining += Number(r.amount);
-    }
-
     const currentMonthDuePaid =
       cardPaidThisMonth +
       loanPaidThisMonth +
       leasePaidThisMonth +
       reminderPaidThisMonth;
-    const currentMonthDueRemaining =
-      cardRemaining + loanRemaining + leaseRemaining + reminderRemaining;
-    const currentMonthDueGross =
-      currentMonthDuePaid + currentMonthDueRemaining;
+    // currentMonthDueRemaining and currentMonthDueGross are derived from
+    // the dues array further below — the dues array already correctly
+    // handles all three card paths (materialised CardStatement, manual
+    // override on Account, and computed fallback from statementDate).
 
     // ── Merge upcoming-dues into one chronological list ────────────────
     type Due = {
@@ -739,6 +675,16 @@ export async function GET(request: Request) {
     }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
+    // Suppress next-month items unless we're in the last week of the
+    // current calendar month. Without this, a bill due in the first week
+    // of next month shows up on the 1st of this month — too far out to
+    // be actionable and clutters the upcoming-dues list.
+    const visibleDues = isNearMonthEnd
+      ? dues
+      : dues.filter(
+          (d) => new Date(d.dueDate).getTime() < nextMonthBegin.getTime(),
+        );
+
     // ── Settled this month ─────────────────────────────────────────────
     // What got paid this month, listed individually. Each source uses
     // the most-meaningful timestamp:
@@ -848,17 +794,23 @@ export async function GET(request: Request) {
     }
     settled.sort((a, b) => b.paidAt.localeCompare(a.paidAt));
 
-    // Next-month preview — sum of upcoming amounts whose dueDate sits
-    // in the next calendar month (within the 30-day lookahead). Uses the
-    // dues array (forward-looking only) since "next month" hasn't had
-    // any payments yet by definition.
+    // Single pass through the dues array splits remaining cashflow:
+    //   • dueDate in current calendar month or earlier → remaining
+    //     (this matches the items the user can still pay this month and
+    //     is the source of truth for the "Due remaining" card)
+    //   • dueDate in the next calendar month → next-month preview
+    // Each entry's `amount` is its current outstanding (already net of
+    // any partial payments), so this captures all card paths uniformly.
     const nextMonthStart = nextMonthBegin.getTime();
+    let currentMonthDueRemaining = 0;
     let nextMonthDue = 0;
-    for (const d of dues) {
+    for (const d of visibleDues) {
       if (d.amount == null) continue;
       const t = new Date(d.dueDate).getTime();
-      if (t >= nextMonthStart) nextMonthDue += d.amount;
+      if (t < nextMonthStart) currentMonthDueRemaining += d.amount;
+      else nextMonthDue += d.amount;
     }
+    const currentMonthDueGross = currentMonthDuePaid + currentMonthDueRemaining;
 
     return NextResponse.json({
       period: {
@@ -885,7 +837,7 @@ export async function GET(request: Request) {
       currentMonthDuePaid,
       currentMonthDueRemaining,
       nextMonthDue,
-      dues,
+      dues: visibleDues,
       settled,
     });
   } catch (e) {
