@@ -79,7 +79,8 @@ export async function GET(request: Request) {
       monthExpenseAgg,
       cardBillsDueThisMonth,
       loansDueThisMonth,
-      loanPaymentsAggThisMonth,
+      loanPaymentsThisMonth,
+      settledCardBills,
       leaseSchedulesThisMonth,
       remindersThisMonth,
     ] = await Promise.all([
@@ -232,9 +233,11 @@ export async function GET(request: Request) {
         },
         select: { id: true, emiAmount: true },
       }),
-      // Loan EMI payments posted this month — sums what you actually paid
-      // toward loans regardless of which scheduled EMI they covered.
-      prisma.transaction.aggregate({
+      // Loan EMI payments posted this month — used both to aggregate
+      // "loan paid this month" and to render the Settled list. The Loan
+      // join carries the lender for the row label; lenderContact wins
+      // for HAND_FORMAL loans where it's freshest.
+      prisma.transaction.findMany({
         where: {
           workspaceId: wsId,
           type: "EXPENSE",
@@ -242,7 +245,43 @@ export async function GET(request: Request) {
           date: { gte: monthStart, lt: nextMonthBegin },
           transferId: null,
         },
-        _sum: { amount: true },
+        orderBy: { date: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          amount: true,
+          date: true,
+          loanId: true,
+          loan: {
+            select: {
+              id: true,
+              lender: true,
+              source: true,
+              lenderContact: { select: { name: true } },
+            },
+          },
+        },
+      }),
+      // Card statements settled within the current calendar month —
+      // listed individually for the Settled section. Filtered to
+      // statements with paidAt set; dueDate may sit in any prior month.
+      prisma.cardStatement.findMany({
+        where: {
+          workspaceId: wsId,
+          paidAt: { gte: monthStart, lt: nextMonthBegin },
+        },
+        orderBy: { paidAt: "desc" },
+        take: 50,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+              linkedCard: { select: { id: true } },
+            },
+          },
+          payments: { select: { amount: true } },
+        },
       }),
       // Lease schedules due this month, paid or not.
       prisma.leasePaymentSchedule.findMany({
@@ -310,8 +349,9 @@ export async function GET(request: Request) {
     // partially paid this month we'd be slightly double-counting it on
     // the gross side, but that's a rare overlap and resolves itself once
     // the next refresh's nextDueDate advances.
-    const loanPaidThisMonth = Number(
-      loanPaymentsAggThisMonth._sum.amount ?? 0,
+    const loanPaidThisMonth = loanPaymentsThisMonth.reduce(
+      (acc, t) => acc + Number(t.amount),
+      0,
     );
     currentMonthDueGross += loanPaidThisMonth;
     currentMonthDuePaid += loanPaidThisMonth;
@@ -538,6 +578,77 @@ export async function GET(request: Request) {
     }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
+    // ── Settled this month ─────────────────────────────────────────────
+    // Forward-looking dues hide everything that's already paid; this list
+    // surfaces those so the user can confirm bills/EMIs they cleared.
+    // Card statements use paidAt; loan EMI payments use the txn date;
+    // lease/reminder use the schedule's own dueDate (no separate
+    // settled-at field on those rows).
+    type SettledItem = {
+      id: string;
+      source: "CARD_STATEMENT" | "LOAN" | "LEASE" | "REMINDER";
+      kind: string;
+      label: string;
+      amount: number;
+      paidAt: string;
+      href: string;
+    };
+    const settled: SettledItem[] = [];
+    for (const s of settledCardBills) {
+      const total = Number(s.totalDue);
+      const paid = s.payments.reduce((a, p) => a + Number(p.amount), 0);
+      const cardId = s.account.linkedCard?.id ?? null;
+      settled.push({
+        id: `card-statement:${s.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD BILL",
+        label: s.account.name,
+        amount: Math.min(total, paid),
+        paidAt: (s.paidAt ?? s.dueDate).toISOString(),
+        href: cardId ? `/cards/${cardId}` : "/cards",
+      });
+    }
+    for (const t of loanPaymentsThisMonth) {
+      const label =
+        t.loan?.lenderContact?.name ?? t.loan?.lender ?? "Loan payment";
+      settled.push({
+        id: `loan-payment:${t.id}`,
+        source: "LOAN",
+        kind: t.loan?.source === "CARD_EMI" ? "CARD EMI" : "LOAN EMI",
+        label,
+        amount: Number(t.amount),
+        paidAt: t.date.toISOString(),
+        href: t.loanId ? `/loans/${t.loanId}` : "/loans/bank",
+      });
+    }
+    for (const s of leaseSchedulesThisMonth) {
+      if (s.status !== "CONFIRMED") continue;
+      settled.push({
+        id: `lease-schedule:${s.id}`,
+        source: "LEASE",
+        kind: "LEASE PAYMENT",
+        label: "Lease",
+        amount: Number(s.amount),
+        // No paidAt on lease schedules — using dueDate as the closest
+        // available timestamp for sort ordering.
+        paidAt: monthStart.toISOString(),
+        href: "/leases",
+      });
+    }
+    for (const r of remindersThisMonth) {
+      if (r.status !== "CONFIRMED" || r.amount == null) continue;
+      settled.push({
+        id: `reminder:${r.id}`,
+        source: "REMINDER",
+        kind: "REMINDER",
+        label: "Reminder",
+        amount: Number(r.amount),
+        paidAt: monthStart.toISOString(),
+        href: "/reminders",
+      });
+    }
+    settled.sort((a, b) => b.paidAt.localeCompare(a.paidAt));
+
     // Next-month preview — sum of upcoming amounts whose dueDate sits
     // in the next calendar month (within the 30-day lookahead). Uses the
     // dues array (forward-looking only) since "next month" hasn't had
@@ -576,6 +687,7 @@ export async function GET(request: Request) {
       currentMonthDueRemaining,
       nextMonthDue,
       dues,
+      settled,
     });
   } catch (e) {
     return err(e);
