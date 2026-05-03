@@ -37,6 +37,16 @@ type Due = {
   payHref?: string;
 };
 
+type Settled = {
+  id: string;
+  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
+  kind: string;
+  label: string;
+  amount: number;
+  paidAt: string;
+  href: string;
+};
+
 type Summary = {
   period: {
     start: string;
@@ -57,6 +67,7 @@ type Summary = {
   currentMonthDueRemaining: number;
   nextMonthDue: number;
   dues: Due[];
+  settled: Settled[];
 };
 
 const fetcher = async (url: string) => {
@@ -138,7 +149,10 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
-        <UpcomingDues dues={data?.dues ?? null} />
+        <div className="space-y-4">
+          <UpcomingDues dues={data?.dues ?? null} />
+          <SettledThisMonth settled={data?.settled ?? null} />
+        </div>
 
         <section className="space-y-3">
           <SmallCard
@@ -264,6 +278,58 @@ function UpcomingDues({ dues }: { dues: Due[] | null }) {
         </div>
       )}
     </section>
+  );
+}
+
+function SettledThisMonth({ settled }: { settled: Settled[] | null }) {
+  // Hide entirely while loading or when there's nothing to show — keeps
+  // the dashboard quiet for fresh accounts.
+  if (settled === null) return null;
+  if (settled.length === 0) return null;
+
+  const totalPaid = settled.reduce((s, x) => s + x.amount, 0);
+
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />{" "}
+          Settled this month
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          {settled.length} item{settled.length === 1 ? "" : "s"}
+          {totalPaid > 0 ? ` · ${formatINR(totalPaid)} paid` : ""}
+        </p>
+      </div>
+      <div className="divide-y">
+        {settled.map((s) => (
+          <SettledRow key={s.id} item={s} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SettledRow({ item }: { item: Settled }) {
+  return (
+    <Link
+      href={item.href}
+      aria-label={`Open ${item.label}`}
+      className="group flex items-center gap-3 py-2.5 -mx-2 px-2 rounded hover:bg-accent/30 transition focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
+    >
+      <div className="h-8 w-8 shrink-0 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
+        <CheckCircle2 className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{item.label}</div>
+        <div className="text-[11px] text-muted-foreground tabular-nums">
+          {item.kind.replace(/_/g, " ")} · paid {formatDate(new Date(item.paidAt))}
+        </div>
+      </div>
+      <div className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400 shrink-0">
+        {formatINR(item.amount)}
+      </div>
+    </Link>
   );
 }
 
