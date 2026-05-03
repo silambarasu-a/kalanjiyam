@@ -90,6 +90,10 @@ export async function GET(request: Request) {
       cardStatementsTouchedThisMonth,
       // Card statements still owed for this month or earlier.
       outstandingCardBillsThisMonth,
+      // Untagged transfers to CARD accounts dated this month — covers
+      // the manual-billing and computed-fallback card paths where no
+      // CardStatement row exists.
+      untaggedCardPaymentsThisMonth,
       // Loan EMI payments dated this month.
       loanPaymentsThisMonth,
       // Active loans whose next EMI is in this month or already overdue.
@@ -257,8 +261,35 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          accountId: true,
           totalDue: true,
           payments: { select: { amount: true } },
+        },
+      }),
+      // Untagged transfers to CARD accounts dated this month — covers
+      // the manual-billing and computed-fallback card paths where no
+      // CardStatement row exists. Tagged payments (statementId set) are
+      // already handled via cardStatementsTouchedThisMonth.
+      prisma.transfer.findMany({
+        where: {
+          workspaceId: wsId,
+          statementId: null,
+          toAccount: { kind: "CARD" },
+          date: { gte: monthStart, lt: nextMonthBegin },
+        },
+        orderBy: { date: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          amount: true,
+          date: true,
+          toAccount: {
+            select: {
+              id: true,
+              name: true,
+              linkedCard: { select: { id: true } },
+            },
+          },
         },
       }),
       // Loan EMI payments posted this month — both aggregated into
@@ -404,7 +435,9 @@ export async function GET(request: Request) {
     // Catches the previously-missed cases of overdue bills paid this
     // month and partial payments to past-due statements.
 
-    // 1. CARDS — paid: sum of statement payments dated this month.
+    // 1. CARDS — paid: sum of statement payments dated this month
+    // (tagged path) plus any untagged transfers to CARD accounts dated
+    // this month (manual-billing / computed-fallback path).
     let cardPaidThisMonth = 0;
     for (const s of cardStatementsTouchedThisMonth) {
       const paidThisMonth = s.payments
@@ -414,16 +447,47 @@ export async function GET(request: Request) {
         .reduce((acc, p) => acc + Number(p.amount), 0);
       cardPaidThisMonth += paidThisMonth;
     }
-    // CARDS — remaining: per outstanding statement, totalDue minus all
-    // payments to date (handles partial-paid bills correctly).
+    for (const t of untaggedCardPaymentsThisMonth) {
+      cardPaidThisMonth += Number(t.amount);
+    }
+    // CARDS — remaining (materialised path): per outstanding statement,
+    // totalDue minus all payments to date. Handles partial-paid bills.
     let cardRemaining = 0;
+    const accountsWithStatementCovered = new Set<string>();
     for (const s of outstandingCardBillsThisMonth) {
+      accountsWithStatementCovered.add(s.accountId);
       const total = Number(s.totalDue);
       const paidEver = s.payments.reduce(
         (acc, p) => acc + Number(p.amount),
         0,
       );
       cardRemaining += Math.max(0, total - paidEver);
+    }
+    // CARDS — remaining (manual path): for CARD accounts without an
+    // outstanding statement, fall back to Account.nextBillDue +
+    // nextBillAmount, netted against cumulative untagged payments at
+    // or before the bill due date. Mirrors how the dues array computes
+    // outstanding for manual bills.
+    const manualCardRemainingPromises = accounts
+      .filter(
+        (a) =>
+          a.kind === "CARD" &&
+          !accountsWithStatementCovered.has(a.id) &&
+          a.nextBillDue != null &&
+          a.nextBillAmount != null &&
+          Number(a.nextBillAmount) > 0 &&
+          a.nextBillDue.getTime() < nextMonthBegin.getTime(),
+      )
+      .map(async (a) => {
+        const paidUntagged = await untaggedPaymentsToCard(a.id, a.nextBillDue!);
+        const total = Number(a.nextBillAmount!);
+        return Math.max(0, total - paidUntagged);
+      });
+    const manualCardRemainingValues = await Promise.all(
+      manualCardRemainingPromises,
+    );
+    for (const v of manualCardRemainingValues) {
+      cardRemaining += v;
     }
 
     // 2. LOANS — paid: every LOAN_PAYMENT EXPENSE this month.
@@ -716,6 +780,18 @@ export async function GET(request: Request) {
         label: s.account.name,
         amount: paidAmount,
         paidAt: latestPaymentDate.toISOString(),
+        href: cardId ? `/cards/${cardId}` : "/cards",
+      });
+    }
+    for (const t of untaggedCardPaymentsThisMonth) {
+      const cardId = t.toAccount?.linkedCard?.id ?? null;
+      settled.push({
+        id: `card-untagged:${t.id}`,
+        source: "CARD_STATEMENT",
+        kind: "CARD PAYMENT",
+        label: t.toAccount?.name ?? "Card",
+        amount: Number(t.amount),
+        paidAt: t.date.toISOString(),
         href: cardId ? `/cards/${cardId}` : "/cards",
       });
     }
