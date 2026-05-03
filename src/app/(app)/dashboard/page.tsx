@@ -52,10 +52,10 @@ type Summary = {
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
-  currentMonthDue: number;
+  currentMonthDueGross: number;
+  currentMonthDuePaid: number;
+  currentMonthDueRemaining: number;
   nextMonthDue: number;
-  cardBillsPaidThisMonth: number;
-  cardBillsPaidThisMonthCount: number;
   dues: Due[];
 };
 
@@ -155,24 +155,26 @@ export default function DashboardPage() {
           />
           <SmallCard
             title="Due this month"
-            value={data ? formatINR(data.currentMonthDue) : "—"}
+            value={data ? formatINR(data.currentMonthDueGross) : "—"}
+            hint="Total scheduled — doesn't drop as you pay"
             icon={<CalendarClock className="h-4 w-4" />}
+          />
+          <SmallCard
+            title="Paid this month"
+            value={data ? formatINR(data.currentMonthDuePaid) : "—"}
+            hint="Against this month's dues"
+            icon={<CheckCircle2 className="h-4 w-4" />}
+          />
+          <SmallCard
+            title="Due remaining"
+            value={data ? formatINR(data.currentMonthDueRemaining) : "—"}
+            hint="Still owed this month"
+            icon={<Hourglass className="h-4 w-4" />}
           />
           <SmallCard
             title="Due next month"
             value={data ? formatINR(data.nextMonthDue) : "—"}
-            icon={<Hourglass className="h-4 w-4" />}
-          />
-          <SmallCard
-            title="Card bills paid (this month)"
-            value={data ? formatINR(data.cardBillsPaidThisMonth) : "—"}
-            hint={
-              data && data.cardBillsPaidThisMonthCount > 0
-                ? `${data.cardBillsPaidThisMonthCount} statement${data.cardBillsPaidThisMonthCount === 1 ? "" : "s"} settled`
-                : undefined
-            }
-            icon={<CheckCircle2 className="h-4 w-4" />}
-            href="/cards"
+            icon={<CalendarClock className="h-4 w-4" />}
           />
           <SmallCard
             title="Member charges"
