@@ -45,8 +45,10 @@ export async function GET(request: Request) {
     today.setHours(0, 0, 0, 0);
     const horizon = new Date(today);
     horizon.setDate(horizon.getDate() + days);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
 
-    const [reminders, loans, leaseSchedules, statements, cardAccounts] = await Promise.all([
+    const [reminders, loans, leaseSchedules, statements, cardAccounts, loanPaymentsThisMonth] = await Promise.all([
       prisma.investmentReminder.findMany({
         where: {
           workspaceId: wsId,
@@ -131,7 +133,28 @@ export async function GET(request: Request) {
           linkedCard: { select: { id: true } },
         },
       }),
+      // Loan payments posted this calendar month. Used to mark a loan
+      // notification as Paid once cumulative payments cover the EMI.
+      prisma.transaction.findMany({
+        where: {
+          workspaceId: wsId,
+          type: "EXPENSE",
+          kind: "LOAN_PAYMENT",
+          date: { gte: monthStart, lt: nextMonthStart },
+          transferId: null,
+        },
+        select: { loanId: true, amount: true },
+      }),
     ]);
+
+    const loanPaidByLoanId = new Map<string, number>();
+    for (const t of loanPaymentsThisMonth) {
+      if (!t.loanId) continue;
+      loanPaidByLoanId.set(
+        t.loanId,
+        (loanPaidByLoanId.get(t.loanId) ?? 0) + Number(t.amount),
+      );
+    }
 
     const items: Notification[] = [];
     for (const r of reminders) {
@@ -154,13 +177,20 @@ export async function GET(request: Request) {
     }
     for (const l of loans) {
       if (!l.nextDueDate) continue;
+      const emi = l.emiAmount == null ? null : Number(l.emiAmount);
+      const paidThisMonth = loanPaidByLoanId.get(l.id) ?? 0;
+      const outstanding =
+        emi == null ? null : Math.max(0, emi - paidThisMonth);
       items.push({
         id: `loan:${l.id}`,
         source: "LOAN",
         kind: l.source,
         label: l.lenderContact?.name ?? l.lender,
         dueDate: l.nextDueDate.toISOString(),
-        amount: l.emiAmount == null ? null : Number(l.emiAmount),
+        amount: outstanding,
+        ...(emi != null && paidThisMonth > 0
+          ? { total: emi, paid: Math.min(emi, paidThisMonth) }
+          : {}),
         href: `/loans/${l.id}`,
         payHref: `/loans/${l.id}?pay=1`,
         overdue: l.nextDueDate < today,

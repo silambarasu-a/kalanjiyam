@@ -519,15 +519,34 @@ export async function GET(request: Request) {
         payHref: `/reminders?confirm=${r.id}`,
       });
     }
+    // How much has been paid against each loan in the current calendar
+    // month. Used to mark a due as paid once cumulative payments cover
+    // the EMI — handles both the loan-pay endpoint path AND generic
+    // LOAN_PAYMENT transactions that don't advance nextDueDate.
+    const loanPaidByLoanId = new Map<string, number>();
+    for (const t of loanPaymentsThisMonth) {
+      if (!t.loanId) continue;
+      loanPaidByLoanId.set(
+        t.loanId,
+        (loanPaidByLoanId.get(t.loanId) ?? 0) + Number(t.amount),
+      );
+    }
     for (const l of upcomingLoanDues) {
       if (!l.nextDueDate) continue;
+      const emi = l.emiAmount == null ? null : Number(l.emiAmount);
+      const paidThisMonth = loanPaidByLoanId.get(l.id) ?? 0;
+      const outstanding =
+        emi == null ? null : Math.max(0, emi - paidThisMonth);
       dues.push({
         id: `loan:${l.id}`,
         source: "LOAN",
         kind: l.source === "CARD_EMI" ? "CARD EMI" : "LOAN EMI",
         label: l.lenderContact?.name ?? l.lender,
         dueDate: l.nextDueDate.toISOString(),
-        amount: l.emiAmount == null ? null : Number(l.emiAmount),
+        amount: outstanding,
+        ...(emi != null && paidThisMonth > 0
+          ? { total: emi, paid: Math.min(emi, paidThisMonth) }
+          : {}),
         href: `/loans/${l.id}`,
         payHref: `/loans/${l.id}?pay=1`,
       });
