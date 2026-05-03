@@ -25,6 +25,7 @@ export async function GET() {
           where: { type: "EXPENSE", transferId: null },
           select: { amount: true },
         },
+        lenderContact: { select: { name: true } },
       },
     });
 
@@ -38,7 +39,7 @@ export async function GET() {
         id: l.id,
         kind: l.kind,
         source: l.source,
-        lender: l.lender,
+        lender: l.lenderContact?.name ?? l.lender,
         principal: round2(principal),
         outstanding: round2(outstanding),
         emiAmount: l.emiAmount == null ? null : Number(l.emiAmount),

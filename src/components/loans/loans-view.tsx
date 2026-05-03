@@ -241,29 +241,34 @@ export function LoansView({
                       Pay
                     </Button>
                   )}
-                  <ConfirmPopover
-                    title={`Delete "${l.lender}"?`}
-                    description="The loan and its payment history will be removed. This cannot be undone."
-                    confirmLabel="Delete"
-                    busyLabel="Deleting…"
-                    onConfirm={async () => {
-                      const res = await fetch(`/api/loans/${l.id}`, {
-                        method: "DELETE",
-                      });
-                      if (!res.ok) {
-                        const body = await res.json().catch(() => ({}));
-                        toast.error(body.error ?? "Failed");
-                        throw new Error(body.error ?? "Failed");
+                  {/* Closed loans are permanent — DELETE is API-blocked
+                      anyway, so hide the button entirely to avoid a
+                      misleading affordance. */}
+                  {l.active && (
+                    <ConfirmPopover
+                      title={`Delete "${l.lender}"?`}
+                      description="The loan and its payment history will be removed. This cannot be undone."
+                      confirmLabel="Delete"
+                      busyLabel="Deleting…"
+                      onConfirm={async () => {
+                        const res = await fetch(`/api/loans/${l.id}`, {
+                          method: "DELETE",
+                        });
+                        if (!res.ok) {
+                          const body = await res.json().catch(() => ({}));
+                          toast.error(body.error ?? "Failed");
+                          throw new Error(body.error ?? "Failed");
+                        }
+                        toast.success("Loan deleted");
+                        globalMutate(`/api/loans?source=${source}`);
+                      }}
+                      trigger={
+                        <Button variant="ghost" size="icon" aria-label="Delete">
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
                       }
-                      toast.success("Loan deleted");
-                      globalMutate(`/api/loans?source=${source}`);
-                    }}
-                    trigger={
-                      <Button variant="ghost" size="icon" aria-label="Delete">
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    }
-                  />
+                    />
+                  )}
                 </div>
               </div>
               <div>

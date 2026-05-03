@@ -3,8 +3,9 @@
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
+import { TIMING, ONE_MINUTE_MS } from "@/lib/timing";
 
-const IDLE_MS = 2 * 60 * 1000; // 2 min of no activity -> lock
+const IDLE_MS = TIMING.sessionIdleLockMinutes * ONE_MINUTE_MS;
 const TICK_MS = 5_000;
 
 export function SessionGuard() {

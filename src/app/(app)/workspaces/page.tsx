@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { useSession } from "next-auth/react";
@@ -112,8 +113,14 @@ export default function WorkspacesPage() {
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {workspaces.map((w) => (
-          <div key={w.id} className="rounded-lg border bg-card p-5 flex items-start justify-between gap-3">
-            <div className="min-w-0">
+          <div
+            key={w.id}
+            className="rounded-lg border bg-card p-5 flex items-start justify-between gap-3"
+          >
+            <Link
+              href={`/workspaces/${w.id}`}
+              className="flex-1 min-w-0 -m-5 p-5 rounded-lg hover:bg-accent/30 transition"
+            >
               <div className="flex items-center gap-2">
                 <h3 className="truncate font-semibold">{w.name}</h3>
                 {w.id === activeId && (
@@ -125,8 +132,8 @@ export default function WorkspacesPage() {
               <div className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
                 {w.role}
               </div>
-            </div>
-            <div className="flex gap-1">
+            </Link>
+            <div className="flex gap-1 shrink-0">
               {(w.role === "OWNER" || w.role === "ADMIN") && (
                 <Button
                   variant="ghost"

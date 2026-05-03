@@ -5,6 +5,7 @@ import {
   attendanceBatchSchema,
   attendanceUpsertSchema,
 } from "@/lib/validators-domain";
+import { checkDayWindowEditAllowed } from "@/lib/transaction-edit-lock";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -81,6 +82,21 @@ export async function POST(request: Request) {
       if (!parsed.success) {
         return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
       }
+      // Edit-window guard: same workspace day-window as transactions.
+      // OWNER/ADMIN can override with `force: true` in the body.
+      const lock = await checkDayWindowEditAllowed({
+        date: new Date(parsed.data.date),
+        workspaceId: ctx.workspaceId,
+        role: ctx.role,
+        force: body?.force === true,
+        entityName: "attendance entry",
+      });
+      if (!lock.ok) {
+        return NextResponse.json(
+          { error: lock.message, canForce: lock.canForce },
+          { status: lock.status },
+        );
+      }
       const ids = parsed.data.entries.map((e) => e.workerId);
       const valid = await prisma.worker.findMany({
         where: { id: { in: ids }, workspaceId: ctx.workspaceId },
@@ -124,6 +140,19 @@ export async function POST(request: Request) {
     const parsed = attendanceUpsertSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const lock = await checkDayWindowEditAllowed({
+      date: new Date(parsed.data.date),
+      workspaceId: ctx.workspaceId,
+      role: ctx.role,
+      force: body?.force === true,
+      entityName: "attendance entry",
+    });
+    if (!lock.ok) {
+      return NextResponse.json(
+        { error: lock.message, canForce: lock.canForce },
+        { status: lock.status },
+      );
     }
     const worker = await prisma.worker.findUnique({ where: { id: parsed.data.workerId } });
     if (!worker || worker.workspaceId !== ctx.workspaceId) {

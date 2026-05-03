@@ -60,6 +60,12 @@ type Card = {
   gracePeriod?: number | null;
   currentBalance?: number | null;
 };
+type Contact = {
+  id: string;
+  name: string;
+  relationship: string | null;
+  active: boolean;
+};
 
 const KIND_OPTIONS: LoanKind[] = [
   "PERSONAL",
@@ -95,6 +101,7 @@ export type EditingLoan = {
   kind: LoanKind;
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   lender: string;
+  lenderContact: { id: string; name: string } | null;
   principal: number;
   outstanding: number;
   interestRate: number | null;
@@ -138,8 +145,17 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const editing = !!editingLoan;
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
+  const { data: contactsData, isLoading: contactsLoading } = useSWR<{
+    members: Contact[];
+  }>(source === "HAND_FORMAL" ? "/api/contacts" : null, fetcher);
   const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
   const creditCards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT");
+  // Show all active contacts, plus the currently-linked one even if it's
+  // archived so the edit form doesn't drop the selection silently.
+  const linkedContactId = editingLoan?.lenderContact?.id;
+  const contacts = (contactsData?.members ?? []).filter(
+    (m) => m.active || m.id === linkedContactId,
+  );
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const numStr = (n: number | null | undefined) =>
@@ -148,6 +164,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     (editingLoan?.kind as LoanKind) ?? "PERSONAL"
   );
   const [lender, setLender] = useState(editingLoan?.lender ?? "");
+  const [lenderContactId, setLenderContactId] = useState(
+    editingLoan?.lenderContact?.id ?? "",
+  );
   const [principal, setPrincipal] = useState(numStr(editingLoan?.principal));
   const [outstanding, setOutstanding] = useState(
     editingLoan ? numStr(editingLoan.outstanding) : ""
@@ -297,7 +316,15 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       setError("Enter principal");
       return;
     }
-    if (!lender.trim()) {
+    if (source === "HAND_FORMAL") {
+      // Only enforce on create. Editing legacy hand loans (created before
+      // contacts existed) must still be saveable even when no contact is
+      // linked — the user can pick one later.
+      if (!editing && !lenderContactId) {
+        setError("Pick the contact you borrowed from");
+        return;
+      }
+    } else if (!lender.trim()) {
       setError("Enter lender");
       return;
     }
@@ -322,10 +349,21 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           ? Number(outstanding)
           : undefined;
 
+      // For HAND_FORMAL the server resolves the canonical lender name from
+      // the picked contact, but the validator still requires a non-empty
+      // string — fall back to the contact's name we have on hand.
+      const submittedLender =
+        source === "HAND_FORMAL"
+          ? (contacts.find((c) => c.id === lenderContactId)?.name ??
+              lender.trim() ??
+              "")
+          : lender.trim();
       const payload = {
         kind,
         ...(editing ? {} : { source }),
-        lender: lender.trim(),
+        lender: submittedLender,
+        lenderContactId:
+          source === "HAND_FORMAL" ? lenderContactId || null : undefined,
         principal: principalNum,
         outstanding: outstandingPayload,
         interestRate: interestRate ? Number(interestRate) : null,
@@ -333,7 +371,10 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         emiAmount: effectiveEmi ?? null,
         tenure: tenure ? Number(tenure) : null,
         frequency,
-        accountId: source === "BANK" ? accountId || null : null,
+        accountId:
+          source === "BANK" || source === "HAND_FORMAL"
+            ? accountId || null
+            : null,
         cardId:
           source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN"
             ? cardId || null
@@ -415,7 +456,52 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
             <span className="text-xs font-medium">Lender</span>
-            <BankPicker value={lender} onChange={setLender} autoFocus />
+            {source === "HAND_FORMAL" ? (
+              <div className="space-y-1">
+                <div className="mt-1">
+                  <NativeSelect
+                    value={lenderContactId}
+                    onChange={setLenderContactId}
+                    placeholder={
+                      contactsLoading
+                        ? "Loading contacts…"
+                        : contacts.length > 0
+                          ? "— pick a contact —"
+                          : "No contacts yet"
+                    }
+                    options={contacts.map((c) => ({
+                      value: c.id,
+                      label: c.active ? c.name : `${c.name} (archived)`,
+                      hint: c.relationship ?? undefined,
+                    }))}
+                    disabled={contactsLoading || contacts.length === 0}
+                    autoFocus
+                  />
+                </div>
+                {!contactsLoading && contacts.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Add the person under{" "}
+                    <a href="/contacts" className="underline">
+                      Contacts
+                    </a>{" "}
+                    first, then come back here.
+                  </p>
+                )}
+                {editing &&
+                  !lenderContactId &&
+                  editingLoan?.lender && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Currently:{" "}
+                      <span className="font-medium text-foreground">
+                        {editingLoan.lender}
+                      </span>{" "}
+                      — pick a contact to link this loan to your contacts ledger.
+                    </p>
+                  )}
+              </div>
+            ) : (
+              <BankPicker value={lender} onChange={setLender} autoFocus />
+            )}
           </label>
           <label className="block">
             <span className="text-xs font-medium">Kind</span>
@@ -910,28 +996,41 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               </div>
             )}
           </div>
-          {(!isExisting || editing) && (
-            <label className="block">
-              <span className="text-xs font-medium">
-                {editing ? "Linked bank account" : "Disbursed into (bank account)"}
-              </span>
-              <div className="mt-1">
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={groupAccountOptions(bankAccounts, 0)}
-                />
-              </div>
-              {editing && !isExisting && (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Disbursement and any upfront charges already posted to the
-                  current account will move with this change.
-                </p>
-              )}
-            </label>
-          )}
         </>
       )}
+
+      {(source === "BANK" || source === "HAND_FORMAL") &&
+        (!isExisting || editing) && (
+          <label className="block">
+            <span className="text-xs font-medium">
+              {editing
+                ? "Linked bank account"
+                : source === "HAND_FORMAL"
+                  ? "Received into (bank account)"
+                  : "Disbursed into (bank account)"}
+            </span>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={groupAccountOptions(bankAccounts, 0)}
+              />
+            </div>
+            {!editing && source === "HAND_FORMAL" && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Saves an INCOME transaction for the borrowed amount on this
+                account. Leave blank to track only the liability.
+              </p>
+            )}
+            {editing && !isExisting && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {source === "BANK"
+                  ? "Disbursement and any upfront charges already posted to the current account will move with this change."
+                  : "The income transaction already posted to the current account will move with this change."}
+              </p>
+            )}
+          </label>
+        )}
 
       {source !== "CARD_EMI" && (
         <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
@@ -944,7 +1043,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             <span className="text-sm">
               {source === "BANK"
                 ? "Already disbursed (don't create a disbursement transaction)"
-                : "Existing loan (already taken — partially or fully repaid)"}
+                : "Already received (don't create an income transaction)"}
             </span>
           </label>
           {!editing && isExisting && (

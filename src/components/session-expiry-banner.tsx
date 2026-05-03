@@ -11,16 +11,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { TIMING, ONE_MINUTE_MS } from "@/lib/timing";
 
-const WARN_MS = 2 * 60 * 1000; // Open the popup when < 2 min remain.
+const WARN_MS = TIMING.sessionExpiryWarningMinutes * ONE_MINUTE_MS;
 const TICK_MS = 1000;
 
 /**
- * Non-dismissible expiry popup. When less than 2 minutes remain on the
- * logical 15-minute session, a modal blocks the page and offers
- * "Stay signed in" (session.update({ extend: true })). Once the
- * countdown hits zero we force signOut so the user lands back on /login
- * instead of staring at stale data.
+ * Non-dismissible expiry popup. When less than `WARN_MS` remain on the
+ * session, a modal blocks the page and offers "Stay signed in"
+ * (session.update({ extend: true })). Once the countdown hits zero we
+ * force signOut so the user lands back on /login instead of staring at
+ * stale data.
  */
 export function SessionExpiryBanner() {
   const { data: session, update } = useSession();

@@ -56,7 +56,13 @@ export async function GET(request: Request) {
         orderBy: { dueDate: "asc" },
         include: {
           investment: { select: { id: true, name: true, kind: true } },
-          loan: { select: { id: true, lender: true } },
+          loan: {
+            select: {
+              id: true,
+              lender: true,
+              lenderContact: { select: { name: true } },
+            },
+          },
         },
         take: 50,
       }),
@@ -73,6 +79,7 @@ export async function GET(request: Request) {
           nextDueDate: true,
           emiAmount: true,
           source: true,
+          lenderContact: { select: { name: true } },
         },
         take: 50,
       }),
@@ -129,7 +136,10 @@ export async function GET(request: Request) {
     const items: Notification[] = [];
     for (const r of reminders) {
       const label =
-        r.investment?.name ?? r.loan?.lender ?? r.kind.replace(/_/g, " ");
+        r.investment?.name ??
+        r.loan?.lenderContact?.name ??
+        r.loan?.lender ??
+        r.kind.replace(/_/g, " ");
       items.push({
         id: `reminder:${r.id}`,
         source: "REMINDER",
@@ -148,7 +158,7 @@ export async function GET(request: Request) {
         id: `loan:${l.id}`,
         source: "LOAN",
         kind: l.source,
-        label: l.lender,
+        label: l.lenderContact?.name ?? l.lender,
         dueDate: l.nextDueDate.toISOString(),
         amount: l.emiAmount == null ? null : Number(l.emiAmount),
         href: `/loans/${l.id}`,
