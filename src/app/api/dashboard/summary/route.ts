@@ -77,12 +77,31 @@ export async function GET(request: Request) {
       investmentsTotal,
       monthIncomeAgg,
       monthExpenseAgg,
-      cardBillsDueThisMonth,
-      loansDueThisMonth,
+      // ── This-month cashflow data ─────────────────────────────────────
+      // Three independent question types per source:
+      //   • What was paid this month? (transactions/payments with date
+      //     in [monthStart, nextMonthBegin))
+      //   • What is still outstanding for this month? (obligations whose
+      //     due date is in this month or earlier and not yet settled)
+      //   • Which items go in the Settled list? (paid-this-month rows)
+      //
+      // Card statements that had any activity this month — either
+      // closed via paidAt, or had a transfer dated in the month.
+      cardStatementsTouchedThisMonth,
+      // Card statements still owed for this month or earlier.
+      outstandingCardBillsThisMonth,
+      // Loan EMI payments dated this month.
       loanPaymentsThisMonth,
-      settledCardBills,
-      leaseSchedulesThisMonth,
-      remindersThisMonth,
+      // Active loans whose next EMI is in this month or already overdue.
+      outstandingLoansThisMonth,
+      // Lease confirmation transactions dated this month.
+      leasePaymentsThisMonth,
+      // Lease schedules still pending for this month or earlier.
+      outstandingLeasesThisMonth,
+      // Investment reminders confirmed this month.
+      confirmedRemindersThisMonth,
+      // Investment reminders still pending for this month or earlier.
+      outstandingRemindersThisMonth,
     ] = await Promise.all([
       prisma.account.findMany({
         where: { workspaceId: wsId },
@@ -203,20 +222,38 @@ export async function GET(request: Request) {
         },
         _sum: { amount: true },
       }),
-      // ── Current-month due/paid breakdown ────────────────────────────
-      // We want three numbers that are stable across paying:
-      //   Gross  = everything that fell due this month
-      //   Paid   = how much you've paid against those
-      //   Remain = Gross − Paid
-      // The upcoming-dues array can't drive this on its own — it filters
-      // out fully-paid statements/EMIs (so Gross would shrink when a bill
-      // closes). These dedicated queries include the paid items too.
-      // Card statements with dueDate in current calendar month — paid or
-      // not. payments[] gives partial-payment totals.
+      // Card statements with any activity this month: either closed
+      // (paidAt set) or had a transfer dated in the month. Catches
+      // overdue bills paid this month and partial payments alike.
       prisma.cardStatement.findMany({
         where: {
           workspaceId: wsId,
-          dueDate: { gte: monthStart, lt: nextMonthBegin },
+          OR: [
+            { paidAt: { gte: monthStart, lt: nextMonthBegin } },
+            { payments: { some: { date: { gte: monthStart, lt: nextMonthBegin } } } },
+          ],
+        },
+        orderBy: { dueDate: "desc" },
+        take: 50,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+              linkedCard: { select: { id: true } },
+            },
+          },
+          payments: { select: { amount: true, date: true } },
+        },
+      }),
+      // Card statements still owed for this calendar month or earlier
+      // (overdue). Drives the "remaining" total — feeds Math.max(0, …)
+      // per statement using sum-of-payments to handle partial-paid rows.
+      prisma.cardStatement.findMany({
+        where: {
+          workspaceId: wsId,
+          paidAt: null,
+          dueDate: { lt: nextMonthBegin },
         },
         select: {
           id: true,
@@ -224,19 +261,8 @@ export async function GET(request: Request) {
           payments: { select: { amount: true } },
         },
       }),
-      // Active loans whose next EMI falls in this calendar month.
-      prisma.loan.findMany({
-        where: {
-          workspaceId: wsId,
-          active: true,
-          nextDueDate: { gte: monthStart, lt: nextMonthBegin },
-        },
-        select: { id: true, emiAmount: true },
-      }),
-      // Loan EMI payments posted this month — used both to aggregate
-      // "loan paid this month" and to render the Settled list. The Loan
-      // join carries the lender for the row label; lenderContact wins
-      // for HAND_FORMAL loans where it's freshest.
+      // Loan EMI payments posted this month — both aggregated into
+      // "paid" and rendered individually in the Settled list.
       prisma.transaction.findMany({
         where: {
           workspaceId: wsId,
@@ -262,42 +288,88 @@ export async function GET(request: Request) {
           },
         },
       }),
-      // Card statements settled within the current calendar month —
-      // listed individually for the Settled section. Filtered to
-      // statements with paidAt set; dueDate may sit in any prior month.
-      prisma.cardStatement.findMany({
+      // Active loans with nextDueDate in this month or already overdue.
+      // Subtracts any loan-payment-this-month per loan so partial
+      // payments collapse cleanly — see calc below.
+      prisma.loan.findMany({
         where: {
           workspaceId: wsId,
-          paidAt: { gte: monthStart, lt: nextMonthBegin },
+          active: true,
+          nextDueDate: { not: null, lt: nextMonthBegin },
         },
-        orderBy: { paidAt: "desc" },
+        select: { id: true, emiAmount: true },
+      }),
+      // Lease confirmations posted this month — Transactions linked
+      // back to a LeasePaymentSchedule. Used for both the "paid" total
+      // and the Settled list.
+      prisma.transaction.findMany({
+        where: {
+          workspaceId: wsId,
+          leaseScheduleId: { not: null },
+          date: { gte: monthStart, lt: nextMonthBegin },
+        },
+        orderBy: { date: "desc" },
         take: 50,
-        include: {
-          account: {
+        select: {
+          id: true,
+          amount: true,
+          date: true,
+          leaseSchedule: {
             select: {
               id: true,
-              name: true,
-              linkedCard: { select: { id: true } },
+              lease: {
+                select: {
+                  id: true,
+                  direction: true,
+                  lessorName: true,
+                  lesseeName: true,
+                  lessorContact: { select: { name: true } },
+                  lesseeContact: { select: { name: true } },
+                },
+              },
             },
           },
-          payments: { select: { amount: true } },
         },
       }),
-      // Lease schedules due this month, paid or not.
+      // Lease schedules still pending for this month or earlier.
       prisma.leasePaymentSchedule.findMany({
         where: {
-          dueDate: { gte: monthStart, lt: nextMonthBegin },
+          status: "UPCOMING",
+          dueDate: { lt: nextMonthBegin },
           lease: { workspaceId: wsId },
         },
-        select: { id: true, amount: true, status: true },
+        select: { id: true, amount: true },
       }),
-      // Investment reminders due this month, paid or not.
+      // Investment reminders confirmed this month (linked txn dated in
+      // month). Powers the Settled list and the "paid" total.
       prisma.investmentReminder.findMany({
         where: {
           workspaceId: wsId,
-          dueDate: { gte: monthStart, lt: nextMonthBegin },
+          status: "CONFIRMED",
+          confirmedTransaction: {
+            date: { gte: monthStart, lt: nextMonthBegin },
+          },
         },
-        select: { id: true, amount: true, status: true },
+        orderBy: { dueDate: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          amount: true,
+          investment: { select: { name: true } },
+          loan: {
+            select: { lender: true, lenderContact: { select: { name: true } } },
+          },
+          confirmedTransaction: { select: { date: true } },
+        },
+      }),
+      // Investment reminders still pending for this month or earlier.
+      prisma.investmentReminder.findMany({
+        where: {
+          workspaceId: wsId,
+          status: "UPCOMING",
+          dueDate: { lt: nextMonthBegin },
+        },
+        select: { id: true, amount: true },
       }),
     ]);
 
@@ -318,73 +390,98 @@ export async function GET(request: Request) {
       Number(outstandingCharges._sum.amount ?? 0) -
       Number(outstandingCharges._sum.settledAmount ?? 0);
 
-    // ── Current-month due/paid totals ─────────────────────────────────
-    // Per-source rollup so each due type is counted once. Card bills use
-    // partial-payment data from CardStatementPayment; loans bring both
-    // "still scheduled this month" (gross only) and "actually paid this
-    // month" (gross+paid). Lease/reminder use the row's status to
-    // classify as paid vs pending. Confirmed/settled rows count as both
-    // gross and paid; pending rows count as gross only. The remaining
-    // figure is `gross − paid` clamped at 0.
-    let currentMonthDueGross = 0;
-    let currentMonthDuePaid = 0;
+    // ── This-month cashflow ─────────────────────────────────────────
+    // Three figures from independent data:
+    //   Paid      = sum of every payment dated this month (across cards,
+    //               loans, leases, confirmed reminders).
+    //   Remaining = sum of every obligation still owed for this month or
+    //               earlier (overdue + due-this-month, not yet paid).
+    //   Gross     = Paid + Remaining — the total cashflow burden the
+    //               month is asking for.
+    //
+    // Built from real transactions, so paying a bill increases Paid and
+    // decreases Remaining by the same amount; Gross stays constant.
+    // Catches the previously-missed cases of overdue bills paid this
+    // month and partial payments to past-due statements.
 
-    // 1. Card bills due this month — gross = totalDue, paid = sum(payments).
-    for (const s of cardBillsDueThisMonth) {
+    // 1. CARDS — paid: sum of statement payments dated this month.
+    let cardPaidThisMonth = 0;
+    for (const s of cardStatementsTouchedThisMonth) {
+      const paidThisMonth = s.payments
+        .filter(
+          (p) => p.date >= monthStart && p.date < nextMonthBegin,
+        )
+        .reduce((acc, p) => acc + Number(p.amount), 0);
+      cardPaidThisMonth += paidThisMonth;
+    }
+    // CARDS — remaining: per outstanding statement, totalDue minus all
+    // payments to date (handles partial-paid bills correctly).
+    let cardRemaining = 0;
+    for (const s of outstandingCardBillsThisMonth) {
       const total = Number(s.totalDue);
-      const paid = s.payments.reduce(
+      const paidEver = s.payments.reduce(
         (acc, p) => acc + Number(p.amount),
         0,
       );
-      currentMonthDueGross += total;
-      currentMonthDuePaid += Math.min(total, paid);
+      cardRemaining += Math.max(0, total - paidEver);
     }
-    // 2. Loans with a scheduled EMI this month and still active —
-    // contributes the EMI amount to gross (paid later via loan payments).
-    for (const l of loansDueThisMonth) {
-      if (l.emiAmount) currentMonthDueGross += Number(l.emiAmount);
-    }
-    // 3. Loan EMI payments posted this month — adds to BOTH gross and
-    // paid. If a loan still has its nextDueDate in this month AND was
-    // partially paid this month we'd be slightly double-counting it on
-    // the gross side, but that's a rare overlap and resolves itself once
-    // the next refresh's nextDueDate advances.
+
+    // 2. LOANS — paid: every LOAN_PAYMENT EXPENSE this month.
     const loanPaidThisMonth = loanPaymentsThisMonth.reduce(
       (acc, t) => acc + Number(t.amount),
       0,
     );
-    currentMonthDueGross += loanPaidThisMonth;
-    currentMonthDuePaid += loanPaidThisMonth;
-
-    // 4. Leases due this month — UPCOMING is gross only, CONFIRMED is
-    // both. CANCELLED/SKIPPED rows are dropped.
-    for (const s of leaseSchedulesThisMonth) {
-      const amt = Number(s.amount);
-      if (s.status === "UPCOMING") {
-        currentMonthDueGross += amt;
-      } else if (s.status === "CONFIRMED") {
-        currentMonthDueGross += amt;
-        currentMonthDuePaid += amt;
-      }
+    // LOANS — remaining: each outstanding loan's EMI, less any payment
+    // posted this month for that loan (collapses partial-pay scenarios).
+    const loanPaidByLoanId = new Map<string, number>();
+    for (const t of loanPaymentsThisMonth) {
+      if (!t.loanId) continue;
+      loanPaidByLoanId.set(
+        t.loanId,
+        (loanPaidByLoanId.get(t.loanId) ?? 0) + Number(t.amount),
+      );
     }
-    // 5. Investment reminders due this month — same UPCOMING/CONFIRMED
-    // split as leases; reminders without an amount are informational and
-    // skipped.
-    for (const r of remindersThisMonth) {
-      if (r.amount == null) continue;
-      const amt = Number(r.amount);
-      if (r.status === "UPCOMING") {
-        currentMonthDueGross += amt;
-      } else if (r.status === "CONFIRMED") {
-        currentMonthDueGross += amt;
-        currentMonthDuePaid += amt;
-      }
+    let loanRemaining = 0;
+    for (const l of outstandingLoansThisMonth) {
+      if (!l.emiAmount) continue;
+      const emi = Number(l.emiAmount);
+      const paidForThis = loanPaidByLoanId.get(l.id) ?? 0;
+      loanRemaining += Math.max(0, emi - paidForThis);
     }
 
-    const currentMonthDueRemaining = Math.max(
+    // 3. LEASES — paid: every confirmation transaction this month.
+    const leasePaidThisMonth = leasePaymentsThisMonth.reduce(
+      (acc, t) => acc + Number(t.amount),
       0,
-      currentMonthDueGross - currentMonthDuePaid,
     );
+    // LEASES — remaining: every UPCOMING schedule due this month or
+    // earlier. Confirmed schedules are already excluded by the query.
+    let leaseRemaining = 0;
+    for (const s of outstandingLeasesThisMonth) {
+      leaseRemaining += Number(s.amount);
+    }
+
+    // 4. REMINDERS — paid: confirmed-this-month amounts.
+    let reminderPaidThisMonth = 0;
+    for (const r of confirmedRemindersThisMonth) {
+      if (r.amount != null) reminderPaidThisMonth += Number(r.amount);
+    }
+    // REMINDERS — remaining: UPCOMING with dueDate this month or
+    // earlier. Reminders without an amount are informational; skipped.
+    let reminderRemaining = 0;
+    for (const r of outstandingRemindersThisMonth) {
+      if (r.amount != null) reminderRemaining += Number(r.amount);
+    }
+
+    const currentMonthDuePaid =
+      cardPaidThisMonth +
+      loanPaidThisMonth +
+      leasePaidThisMonth +
+      reminderPaidThisMonth;
+    const currentMonthDueRemaining =
+      cardRemaining + loanRemaining + leaseRemaining + reminderRemaining;
+    const currentMonthDueGross =
+      currentMonthDuePaid + currentMonthDueRemaining;
 
     // ── Merge upcoming-dues into one chronological list ────────────────
     type Due = {
@@ -579,11 +676,11 @@ export async function GET(request: Request) {
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
     // ── Settled this month ─────────────────────────────────────────────
-    // Forward-looking dues hide everything that's already paid; this list
-    // surfaces those so the user can confirm bills/EMIs they cleared.
-    // Card statements use paidAt; loan EMI payments use the txn date;
-    // lease/reminder use the schedule's own dueDate (no separate
-    // settled-at field on those rows).
+    // What got paid this month, listed individually. Each source uses
+    // the most-meaningful timestamp:
+    //   • Card statements → most-recent payment date in the month, or
+    //     paidAt when the bill closed in the month.
+    //   • Loan/lease/reminder → the linked transaction's date.
     type SettledItem = {
       id: string;
       source: "CARD_STATEMENT" | "LOAN" | "LEASE" | "REMINDER";
@@ -594,17 +691,31 @@ export async function GET(request: Request) {
       href: string;
     };
     const settled: SettledItem[] = [];
-    for (const s of settledCardBills) {
-      const total = Number(s.totalDue);
-      const paid = s.payments.reduce((a, p) => a + Number(p.amount), 0);
+    for (const s of cardStatementsTouchedThisMonth) {
+      const paymentsThisMonth = s.payments.filter(
+        (p) => p.date >= monthStart && p.date < nextMonthBegin,
+      );
+      const paidAmount = paymentsThisMonth.reduce(
+        (a, p) => a + Number(p.amount),
+        0,
+      );
+      if (paidAmount === 0) continue;
+      const latestPaymentDate = paymentsThisMonth.reduce(
+        (latest: Date, p) => (p.date > latest ? p.date : latest),
+        paymentsThisMonth[0]?.date ?? monthStart,
+      );
       const cardId = s.account.linkedCard?.id ?? null;
+      const isFullyClosed =
+        s.paidAt &&
+        s.paidAt >= monthStart &&
+        s.paidAt < nextMonthBegin;
       settled.push({
         id: `card-statement:${s.id}`,
         source: "CARD_STATEMENT",
-        kind: "CARD BILL",
+        kind: isFullyClosed ? "CARD BILL" : "CARD BILL · partial",
         label: s.account.name,
-        amount: Math.min(total, paid),
-        paidAt: (s.paidAt ?? s.dueDate).toISOString(),
+        amount: paidAmount,
+        paidAt: latestPaymentDate.toISOString(),
         href: cardId ? `/cards/${cardId}` : "/cards",
       });
     }
@@ -621,29 +732,41 @@ export async function GET(request: Request) {
         href: t.loanId ? `/loans/${t.loanId}` : "/loans/bank",
       });
     }
-    for (const s of leaseSchedulesThisMonth) {
-      if (s.status !== "CONFIRMED") continue;
+    for (const t of leasePaymentsThisMonth) {
+      const lease = t.leaseSchedule?.lease;
+      const counterparty =
+        lease?.direction === "LEASED_OUT"
+          ? (lease.lesseeContact?.name ?? lease.lesseeName)
+          : (lease?.lessorContact?.name ?? lease?.lessorName);
       settled.push({
-        id: `lease-schedule:${s.id}`,
+        id: `lease-payment:${t.id}`,
         source: "LEASE",
-        kind: "LEASE PAYMENT",
-        label: "Lease",
-        amount: Number(s.amount),
-        // No paidAt on lease schedules — using dueDate as the closest
-        // available timestamp for sort ordering.
-        paidAt: monthStart.toISOString(),
-        href: "/leases",
+        kind:
+          lease?.direction === "LEASED_OUT"
+            ? "LEASE INCOME"
+            : "LEASE PAYMENT",
+        label: counterparty ?? "Lease",
+        amount: Number(t.amount),
+        paidAt: t.date.toISOString(),
+        href: lease ? `/leases/${lease.id}` : "/leases",
       });
     }
-    for (const r of remindersThisMonth) {
-      if (r.status !== "CONFIRMED" || r.amount == null) continue;
+    for (const r of confirmedRemindersThisMonth) {
+      if (r.amount == null) continue;
+      const label =
+        r.investment?.name ??
+        r.loan?.lenderContact?.name ??
+        r.loan?.lender ??
+        "Reminder";
       settled.push({
         id: `reminder:${r.id}`,
         source: "REMINDER",
         kind: "REMINDER",
-        label: "Reminder",
+        label,
         amount: Number(r.amount),
-        paidAt: monthStart.toISOString(),
+        paidAt:
+          r.confirmedTransaction?.date.toISOString() ??
+          monthStart.toISOString(),
         href: "/reminders",
       });
     }
