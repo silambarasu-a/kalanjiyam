@@ -7,10 +7,13 @@ import { usePathname } from "next/navigation";
  * Thin horizontal progress strip rendered just below the top bar.
  *
  * Triggered by:
- *   - Any `window.fetch` call (covers SWR data loads, server actions
- *     hitting fetch under the hood, manual fetches in click handlers, etc).
- *   - Pathname changes — a brief pulse for snappier route-transition
- *     feedback even if no fetch fires.
+ *   - Same-origin link clicks (capture-phase listener) — fires the
+ *     instant the user clicks, before Next.js even starts the RSC
+ *     fetch. Closes the previously-silent gap between click and the
+ *     new page rendering on slow detail pages.
+ *   - Any `window.fetch` call (SWR data loads, manual fetches, etc).
+ *   - Pathname changes that didn't originate from a tracked click
+ *     (e.g. programmatic router.push) get a short pulse fallback.
  *
  * Multiple concurrent loads are tracked via a counter so the bar only
  * disappears once everything in flight has settled.
@@ -21,6 +24,10 @@ export function TopProgressBar() {
   const inFlightRef = useRef(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Click-driven navigations register here so the pathname-change
+  // effect knows whether to call `done` (closing the click) or pulse
+  // (programmatic navigation that we didn't start).
+  const navStartedFromClickRef = useRef(false);
   const pathname = usePathname();
 
   // Refs so we can call from inside the patched fetch without re-running
@@ -78,9 +85,58 @@ export function TopProgressBar() {
     };
   }, []);
 
-  // Pulse on every pathname change. If the new page issues fetches, those
-  // will keep the bar alive past this 400ms minimum.
+  // Capture-phase click listener: starts the bar at click time so the
+  // user gets feedback BEFORE Next.js has fetched the new RSC payload.
+  // Same-origin in-app links only — external, hash, mailto, modifier-
+  // clicks, and same-page anchors all skip.
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    function onClick(e: MouseEvent) {
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const a = target?.closest?.("a");
+      if (!a) return;
+      const href = a.getAttribute("href");
+      if (!href) return;
+      if (
+        href.startsWith("#") ||
+        href.startsWith("mailto:") ||
+        href.startsWith("tel:") ||
+        href.startsWith("javascript:")
+      )
+        return;
+      const linkTarget = a.getAttribute("target");
+      if (linkTarget && linkTarget !== "_self") return;
+      let url: URL;
+      try {
+        url = new URL(href, window.location.href);
+      } catch {
+        return;
+      }
+      if (url.origin !== window.location.origin) return;
+      if (
+        url.pathname === window.location.pathname &&
+        url.search === window.location.search
+      )
+        return;
+      navStartedFromClickRef.current = true;
+      startRef.current();
+    }
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
+
+  // Pathname change = navigation completed. If we tracked the click,
+  // close out that start. Otherwise do a short pulse so programmatic
+  // navigations still get a visible cue.
+  useEffect(() => {
+    if (navStartedFromClickRef.current) {
+      navStartedFromClickRef.current = false;
+      doneRef.current();
+      return;
+    }
     startRef.current();
     const t = setTimeout(() => doneRef.current(), 400);
     return () => clearTimeout(t);
