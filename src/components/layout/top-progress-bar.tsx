@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 
 /**
@@ -30,12 +30,12 @@ export function TopProgressBar() {
   const navStartedFromClickRef = useRef(false);
   const pathname = usePathname();
 
-  // Refs so we can call from inside the patched fetch without re-running
-  // the effect on every state change.
-  const startRef = useRef<() => void>(() => {});
-  const doneRef = useRef<() => void>(() => {});
-
-  startRef.current = () => {
+  // Stable callbacks for start/done — useCallback with empty deps so
+  // every effect/listener that captures them gets the same identity.
+  // setState callback form (`setX(prev => ...)`) means we don't need
+  // closures over current state, and refs are mutable so reads inside
+  // the callbacks always see latest values.
+  const start = useCallback(() => {
     inFlightRef.current += 1;
     if (inFlightRef.current > 1) return;
     if (fadeRef.current) {
@@ -48,9 +48,9 @@ export function TopProgressBar() {
     tickRef.current = setInterval(() => {
       setWidth((w) => Math.min(90, w + (90 - w) * 0.07));
     }, 120);
-  };
+  }, []);
 
-  doneRef.current = () => {
+  const done = useCallback(() => {
     inFlightRef.current = Math.max(0, inFlightRef.current - 1);
     if (inFlightRef.current > 0) return;
     if (tickRef.current) {
@@ -64,18 +64,18 @@ export function TopProgressBar() {
       setOpacity(0);
       fadeRef.current = setTimeout(() => setWidth(0), 300);
     }, 400);
-  };
+  }, []);
 
   // Patch fetch once on mount. Restored on unmount.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const original = window.fetch.bind(window);
     window.fetch = async (...args: Parameters<typeof fetch>) => {
-      startRef.current();
+      start();
       try {
         return await original(...args);
       } finally {
-        doneRef.current();
+        done();
       }
     };
     return () => {
@@ -83,7 +83,7 @@ export function TopProgressBar() {
       if (tickRef.current) clearInterval(tickRef.current);
       if (fadeRef.current) clearTimeout(fadeRef.current);
     };
-  }, []);
+  }, [start, done]);
 
   // Capture-phase click listener: starts the bar at click time so the
   // user gets feedback BEFORE Next.js has fetched the new RSC payload.
@@ -122,11 +122,11 @@ export function TopProgressBar() {
       )
         return;
       navStartedFromClickRef.current = true;
-      startRef.current();
+      start();
     }
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
-  }, []);
+  }, [start]);
 
   // Pathname change = navigation completed. If we tracked the click,
   // close out that start. Otherwise do a short pulse so programmatic
@@ -134,13 +134,13 @@ export function TopProgressBar() {
   useEffect(() => {
     if (navStartedFromClickRef.current) {
       navStartedFromClickRef.current = false;
-      doneRef.current();
+      done();
       return;
     }
-    startRef.current();
-    const t = setTimeout(() => doneRef.current(), 400);
+    start();
+    const t = setTimeout(() => done(), 400);
     return () => clearTimeout(t);
-  }, [pathname]);
+  }, [pathname, start, done]);
 
   // Pinned to the viewport top instead of in-flow so the bar stays
   // visible when the user has scrolled the page — otherwise on mobile,

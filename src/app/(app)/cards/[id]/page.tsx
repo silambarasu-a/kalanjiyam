@@ -104,7 +104,7 @@ export default async function CardDetailPage({
     const ty = today.getUTCFullYear();
     const tm = today.getUTCMonth();
     const td = today.getUTCDate();
-    let closeY = ty;
+    const closeY = ty;
     let closeM = tm;
     if (td > stmtDay) closeM += 1;
     const monthLastDay = new Date(Date.UTC(closeY, closeM + 1, 0)).getUTCDate();

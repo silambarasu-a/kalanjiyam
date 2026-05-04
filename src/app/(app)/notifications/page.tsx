@@ -96,8 +96,8 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Loan EMIs, lease payments, and investment reminders due in the next{" "}
-            {windowDays} days. Mark items as read when you've handled them or
-            don't need a nudge.
+            {windowDays} days. Mark items as read when you&rsquo;ve handled them or
+            don&rsquo;t need a nudge.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

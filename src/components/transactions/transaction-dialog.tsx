@@ -821,7 +821,10 @@ function RefundForm({ cards, onClose }: { cards: Card[]; onClose: () => void }) 
       : null,
     fetcher,
   );
-  const statements = statementsData?.statements ?? [];
+  const statements = useMemo(
+    () => statementsData?.statements ?? [],
+    [statementsData?.statements],
+  );
 
   const cycleHint = useMemo(() => {
     if (!date || statements.length === 0) return null;
@@ -1435,6 +1438,7 @@ function LoanEmiForm({
         ? Math.min(selected.emiAmount, selected.outstanding)
         : selected.outstanding,
     );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- seed amount on loan-pick
     setAmount(suggested > 0 ? String(suggested) : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loanId]);
@@ -1723,6 +1727,7 @@ function InvestmentForm({
       // STOCK is excluded so opening the dialog with the default kind
       // doesn't immediately push the user into create-new before they
       // can react.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- auto-pivot UI when no holdings exist
       setCreatingNew(true);
     }
   }, [action, creatingNew, investmentId, filteredHoldings.length, newKind]);
@@ -1730,6 +1735,7 @@ function InvestmentForm({
   // Live-price fetch — fires for both selected-holding and new-stock flows.
   // Also auto-flips currency to USD when the quote comes back in USD.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset stale quote on symbol change
     setLivePrice(null);
     if (!isStock || !activeSymbol) return;
     let cancelled = false;
@@ -1758,6 +1764,7 @@ function InvestmentForm({
   const isForeignCurrency = investmentCurrency !== "INR";
   useEffect(() => {
     if (!isForeignCurrency) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear rate when leaving foreign-currency mode
       setExchangeRate("");
       return;
     }
@@ -1781,6 +1788,7 @@ function InvestmentForm({
   // When the user picks an existing holding, sync currency from it.
   useEffect(() => {
     if (!selected) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror selected holding's currency
     setInvestmentCurrency((selected.currency as "INR" | "USD") === "USD" ? "USD" : "INR");
   }, [selected]);
 
@@ -1790,6 +1798,7 @@ function InvestmentForm({
     const match = categories.find(
       (c) => categoryNameToKind(c.name) === activeKind,
     );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot category default
     if (match) setCategoryId(match.id);
   }, [categories, activeKind, categoryId]);
 
@@ -1800,6 +1809,7 @@ function InvestmentForm({
     const p = parseFloat(price);
     const r = isForeignCurrency ? parseFloat(exchangeRate) : 1;
     if (q > 0 && p > 0 && r > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- derived amount = qty × price × rate
       setAmount(String(Number((q * p * r).toFixed(2))));
     }
   }, [quantity, price, isForeignCurrency, exchangeRate]);

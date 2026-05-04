@@ -43,7 +43,7 @@ export default function CashflowReportPage() {
     fetcher,
   );
 
-  const series = data?.series ?? [];
+  const series = useMemo(() => data?.series ?? [], [data?.series]);
   const totals = data?.totals ?? { income: 0, expense: 0, net: 0 };
 
   const maxBar = useMemo(

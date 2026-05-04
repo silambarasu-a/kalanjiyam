@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, Trash2 } from "lucide-react";
@@ -246,6 +247,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   }, [submitting, onSubmittingChange]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror prop into local state
     if (lockedCardId) setCardId(lockedCardId);
   }, [lockedCardId]);
 
@@ -481,9 +483,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 {!contactsLoading && contacts.length === 0 && (
                   <p className="text-[11px] text-muted-foreground">
                     Add the person under{" "}
-                    <a href="/contacts" className="underline">
+                    <Link href="/contacts" className="underline">
                       Contacts
-                    </a>{" "}
+                    </Link>{" "}
                     first, then come back here.
                   </p>
                 )}

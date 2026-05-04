@@ -232,3 +232,14 @@
     print-color-adjust: exact !important;
   }
 }
+
+/* iOS Safari auto-zooms when a tapped input has font-size < 16px. Force
+   16px on every native form control on mobile so focus doesn't cause an
+   unwanted viewport zoom. Desktop sizing (text-sm, etc.) is untouched. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
