@@ -200,14 +200,17 @@ export function LoansView({
               key={l.id}
               className="relative rounded-xl border bg-card p-5 space-y-3 transition-colors hover:bg-muted/30"
             >
-              {/* Stretched link covers the full card. Action buttons opt back
-                  in via relative+z-10 so they stay clickable. */}
+              {/* Stretched link covers the whole card. Body content uses
+                  pointer-events-none so taps fall through to the link;
+                  action buttons override with pointer-events-auto so they
+                  stay clickable. Avoids the iOS Safari hit-test bug that
+                  breaks z-indexed nested anchors. */}
               <Link
                 href={`/loans/${l.id}`}
                 aria-label={`View ${l.lender}`}
                 className="absolute inset-0 z-0 rounded-xl focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               />
-              <div className="relative flex items-start justify-between gap-3">
+              <div className="relative flex items-start justify-between gap-3 pointer-events-none">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <meta.Icon className="h-4 w-4 text-primary shrink-0" />
@@ -235,7 +238,7 @@ export function LoansView({
                     </div>
                   )}
                 </div>
-                <div className="relative z-10 flex gap-1">
+                <div className="flex gap-1 shrink-0 pointer-events-auto">
                   {l.active && (
                     <Button size="sm" variant="outline" onClick={() => setPayLoan(l)}>
                       Pay
@@ -271,7 +274,7 @@ export function LoansView({
                   )}
                 </div>
               </div>
-              <div>
+              <div className="relative pointer-events-none">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">Outstanding</span>
@@ -298,7 +301,7 @@ export function LoansView({
                 </div>
               </div>
               {l.emiAmount != null && (
-                <div className="text-xs text-muted-foreground">
+                <div className="relative pointer-events-none text-xs text-muted-foreground">
                   {FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi[0].toUpperCase() +
                     FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi.slice(1)}{" "}
                   EMI {formatINR(l.emiAmount)}
@@ -306,7 +309,7 @@ export function LoansView({
                 </div>
               )}
               {emiProgress && (
-                <div className="text-[11px] text-muted-foreground tabular-nums">
+                <div className="relative pointer-events-none text-[11px] text-muted-foreground tabular-nums">
                   {emiProgress.paid} of {emiProgress.total} EMIs paid
                   {l.active && emiProgress.left > 0
                     ? ` · ${emiProgress.left} left`

@@ -221,7 +221,16 @@ export async function DELETE(
           where: { accountId: existing.accountId },
         });
         if (linkedTxCount === 0) {
-          await tx.account.delete({ where: { id: existing.accountId } }).catch(() => {});
+          // Companion account is orphaned — try to drop it. Log and
+          // continue if the delete fails (e.g. another FK we didn't
+          // anticipate); the card itself is already removed and
+          // surfacing the error here would mislead the user into
+          // thinking the card delete failed.
+          await tx.account
+            .delete({ where: { id: existing.accountId } })
+            .catch((e) =>
+              console.error("[cards/delete] companion account orphaned", e),
+            );
         }
       }
     });
