@@ -23,6 +23,7 @@ import {
 import { formatINR, formatDate } from "@/lib/utils";
 import { calendarMonthPeriods } from "@/lib/statement-period";
 import { PeriodFilter } from "@/components/transactions/period-filter";
+import type { StockQuote } from "@/app/api/market/quote/route";
 
 type Due = {
   id: string;
@@ -47,7 +48,7 @@ type Settled = {
   href: string;
 };
 
-type Summary = {
+type Stats = {
   period: {
     start: string;
     end: string;
@@ -62,12 +63,24 @@ type Summary = {
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
+};
+
+type Cashflow = {
+  dues: Due[];
+  settled: Settled[];
   currentMonthDueGross: number;
   currentMonthDuePaid: number;
   currentMonthDueRemaining: number;
   nextMonthDue: number;
-  dues: Due[];
-  settled: Settled[];
+};
+
+type StockLite = {
+  id: string;
+  symbol: string | null;
+  quantity: number | null;
+  amount: number;
+  currency: string | null;
+  active: boolean;
 };
 
 const fetcher = async (url: string) => {
@@ -82,10 +95,71 @@ export default function DashboardPage() {
   const periods = useMemo(() => calendarMonthPeriods(), []);
   const activeId = search.get("period") ?? periods[0]?.id ?? "";
   const queryString = search.toString();
-  const { data } = useSWR<Summary>(
-    `/api/dashboard/summary${queryString ? `?${queryString}` : ""}`,
+
+  // Two parallel SWRs so each section loads independently. Stats is a
+  // fast balance-sheet snapshot (top tiles + outstanding side cards);
+  // cashflow is heavier (upcoming dues + settled list + monthly totals).
+  const { data: stats } = useSWR<Stats>(
+    `/api/dashboard/stats${queryString ? `?${queryString}` : ""}`,
     fetcher,
   );
+  const { data: cashflow } = useSWR<Cashflow>(
+    "/api/dashboard/cashflow",
+    fetcher,
+  );
+
+  // Live stock marking — overrides stats.investedCurrent for stocks so
+  // the Invested tile reflects today's market price + USD/INR rate
+  // instead of cost basis. Same pattern as the dedicated /investments
+  // page.
+  const { data: stocksData } = useSWR<{ investments: StockLite[] }>(
+    "/api/investments?kind=STOCK",
+    fetcher,
+  );
+  const { data: rateData } = useSWR<{ rate: number }>(
+    "/api/market/rate",
+    fetcher,
+  );
+  const stocks = (stocksData?.investments ?? []).filter((s) => s.active);
+  const usdInrRate = rateData?.rate ?? 84;
+  const stockSymbols = useMemo(() => {
+    const set = new Set<string>();
+    stocks.forEach((s) => s.symbol && set.add(s.symbol));
+    return [...set];
+  }, [stocks]);
+  const quotesKey =
+    stockSymbols.length > 0
+      ? `/api/market/quote?symbols=${stockSymbols.join(",")}`
+      : null;
+  const { data: quotes } = useSWR<StockQuote[]>(quotesKey, fetcher, {
+    refreshInterval: 300_000,
+  });
+  const quoteMap = useMemo(() => {
+    const m = new Map<string, StockQuote>();
+    if (Array.isArray(quotes)) quotes.forEach((q) => m.set(q.symbol, q));
+    return m;
+  }, [quotes]);
+
+  // Cumulative live gain across stocks (live value − cost basis).
+  // Adding this to stats.investedCurrent flips the stocks portion from
+  // cost to live, leaving non-stock investments untouched.
+  const stockLiveGain = useMemo(() => {
+    let total = 0;
+    for (const h of stocks) {
+      const qty = h.quantity ?? 0;
+      const cost = Number(h.amount);
+      if (qty <= 0 || !h.symbol) continue;
+      const quote = quoteMap.get(h.symbol);
+      const live = quote?.price ?? 0;
+      if (live <= 0) continue;
+      const liveRate = h.currency === "USD" ? usdInrRate : 1;
+      total += qty * live * liveRate - cost;
+    }
+    return total;
+  }, [stocks, quoteMap, usdInrRate]);
+
+  const investedCurrentLive =
+    stats != null ? stats.investedCurrent + stockLiveGain : null;
 
   return (
     <div className="space-y-6">
@@ -109,25 +183,25 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <BigStat
           label="Net worth"
-          value={data ? formatINR(data.netWorth) : "—"}
+          value={stats ? formatINR(stats.netWorth) : "—"}
           hint="Liquid + invested − debts"
           icon={<Wallet2 className="h-5 w-5" />}
-          tone={data && data.netWorth >= 0 ? "primary" : "destructive"}
+          tone={stats && stats.netWorth >= 0 ? "primary" : "destructive"}
         />
         <BigStat
           label="Period flow"
           value={
-            data
-              ? `${data.period.net >= 0 ? "+" : "−"}${formatINR(Math.abs(data.period.net))}`
+            stats
+              ? `${stats.period.net >= 0 ? "+" : "−"}${formatINR(Math.abs(stats.period.net))}`
               : "—"
           }
           hint={
-            data
-              ? `+${formatINR(data.period.income)} / −${formatINR(data.period.expense)}`
+            stats
+              ? `+${formatINR(stats.period.income)} / −${formatINR(stats.period.expense)}`
               : ""
           }
           icon={
-            data && data.period.net >= 0 ? (
+            stats && stats.period.net >= 0 ? (
               <ArrowDownLeft className="h-5 w-5 text-primary" />
             ) : (
               <ArrowUpRight className="h-5 w-5 text-destructive" />
@@ -136,11 +210,11 @@ export default function DashboardPage() {
         />
         <BigStat
           label="Liquid"
-          value={data ? formatINR(data.liquid) : "—"}
+          value={stats ? formatINR(stats.liquid) : "—"}
           change={
-            data && data.cardOutstanding > 0
+            stats && stats.cardOutstanding > 0
               ? (() => {
-                  const net = data.liquid - data.cardOutstanding;
+                  const net = stats.liquid - stats.cardOutstanding;
                   const sign = net < 0 ? "−" : "";
                   return {
                     value: `${sign}${formatINR(Math.abs(net))} after card dues`,
@@ -154,12 +228,16 @@ export default function DashboardPage() {
         />
         <BigStat
           label="Invested"
-          value={data ? formatINR(data.investedCurrent) : "—"}
+          value={
+            investedCurrentLive != null
+              ? formatINR(investedCurrentLive)
+              : "—"
+          }
           change={
-            data && data.investedAmount > 0
+            stats && stats.investedAmount > 0 && investedCurrentLive != null
               ? (() => {
-                  const gain = data.investedCurrent - data.investedAmount;
-                  const pct = (gain / data.investedAmount) * 100;
+                  const gain = investedCurrentLive - stats.investedAmount;
+                  const pct = (gain / stats.investedAmount) * 100;
                   const sign = gain >= 0 ? "+" : "−";
                   return {
                     value: `${sign}${formatINR(Math.abs(gain))} · ${gain >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
@@ -169,58 +247,60 @@ export default function DashboardPage() {
                 })()
               : undefined
           }
-          hint={data ? `Cost ${formatINR(data.investedAmount)}` : ""}
+          hint={stats ? `Cost ${formatINR(stats.investedAmount)}` : ""}
           icon={<ArrowDownLeft className="h-5 w-5" />}
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
         <div className="space-y-4">
-          <UpcomingDues dues={data?.dues ?? null} />
-          <SettledThisMonth settled={data?.settled ?? null} />
+          <UpcomingDues dues={cashflow?.dues ?? null} />
+          <SettledThisMonth settled={cashflow?.settled ?? null} />
         </div>
 
         <section className="space-y-3">
           <SmallCard
             title="Card outstanding"
-            value={data ? formatINR(data.cardOutstanding) : "—"}
+            value={stats ? formatINR(stats.cardOutstanding) : "—"}
             icon={<CreditCard className="h-4 w-4" />}
             href="/cards"
           />
           <SmallCard
             title="Loan outstanding"
-            value={data ? formatINR(data.loanOutstanding) : "—"}
+            value={stats ? formatINR(stats.loanOutstanding) : "—"}
             icon={<Landmark className="h-4 w-4" />}
             href="/loans/bank"
           />
           <SmallCard
             title="Due this month"
-            value={data ? formatINR(data.currentMonthDueGross) : "—"}
+            value={cashflow ? formatINR(cashflow.currentMonthDueGross) : "—"}
             hint="Total scheduled — doesn't drop as you pay"
             icon={<CalendarClock className="h-4 w-4" />}
           />
           <SmallCard
             title="Paid this month"
-            value={data ? formatINR(data.currentMonthDuePaid) : "—"}
+            value={cashflow ? formatINR(cashflow.currentMonthDuePaid) : "—"}
             hint="Against this month's dues"
             icon={<CheckCircle2 className="h-4 w-4" />}
           />
           <SmallCard
             title="Due remaining"
-            value={data ? formatINR(data.currentMonthDueRemaining) : "—"}
+            value={
+              cashflow ? formatINR(cashflow.currentMonthDueRemaining) : "—"
+            }
             hint="Still owed this month"
             icon={<Hourglass className="h-4 w-4" />}
           />
-          {data && data.nextMonthDue > 0 && (
+          {cashflow && cashflow.nextMonthDue > 0 && (
             <SmallCard
               title="Due next month"
-              value={formatINR(data.nextMonthDue)}
+              value={formatINR(cashflow.nextMonthDue)}
               icon={<CalendarClock className="h-4 w-4" />}
             />
           )}
           <SmallCard
             title="Member charges"
-            value={data ? formatINR(data.chargesOutstanding) : "—"}
+            value={stats ? formatINR(stats.chargesOutstanding) : "—"}
             icon={<Users className="h-4 w-4" />}
             href="/contacts"
           />
