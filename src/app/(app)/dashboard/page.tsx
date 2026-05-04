@@ -137,6 +137,18 @@ export default function DashboardPage() {
         <BigStat
           label="Liquid"
           value={data ? formatINR(data.liquid) : "—"}
+          change={
+            data && data.cardOutstanding > 0
+              ? (() => {
+                  const net = data.liquid - data.cardOutstanding;
+                  const sign = net < 0 ? "−" : "";
+                  return {
+                    value: `${sign}${formatINR(Math.abs(net))} after card dues`,
+                    tone: net >= 0 ? "gain" : "loss",
+                  } as const;
+                })()
+              : undefined
+          }
           hint="Bank + cash + wallet"
           icon={<Landmark className="h-5 w-5" />}
         />
