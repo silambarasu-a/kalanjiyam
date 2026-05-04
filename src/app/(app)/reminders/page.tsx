@@ -157,7 +157,9 @@ function ReminderRow({
           if (!confirm("Skip this reminder?")) return;
           await fetch(`/api/reminders/${reminder.id}/skip`, { method: "POST" });
           globalMutate("/api/reminders?status=UPCOMING");
-          globalMutate("/api/dashboard/summary");
+          globalMutate(
+            (k) => typeof k === "string" && k.startsWith("/api/dashboard"),
+          );
         }}
         aria-label="Skip"
       >
@@ -224,7 +226,9 @@ function ConfirmDialog({
         toast.success("Confirmed");
         globalMutate("/api/reminders?status=UPCOMING");
         globalMutate((k) => typeof k === "string" && k.startsWith("/api/investments"));
-        globalMutate("/api/dashboard/summary");
+        globalMutate(
+          (k) => typeof k === "string" && k.startsWith("/api/dashboard"),
+        );
         await mutateBalances();
         onClose();
       }
