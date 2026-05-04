@@ -142,10 +142,14 @@ export function TopProgressBar() {
     return () => clearTimeout(t);
   }, [pathname]);
 
+  // Pinned to the viewport top instead of in-flow so the bar stays
+  // visible when the user has scrolled the page — otherwise on mobile,
+  // tapping a Link below the fold gave zero feedback because the bar
+  // was scrolled out of view above the header.
   return (
     <div
       aria-hidden
-      className="relative z-20 h-[2.5px] w-full overflow-hidden bg-transparent"
+      className="fixed top-0 left-0 right-0 z-[60] h-[2.5px] w-full overflow-hidden bg-transparent pointer-events-none"
     >
       <div
         className="absolute inset-y-0 left-0 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] transition-[width,opacity] duration-200 ease-out"
