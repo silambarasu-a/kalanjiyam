@@ -25,7 +25,17 @@ export async function DELETE(
     }
     await prisma.$transaction(async (tx) => {
       if (payment.transactionId) {
-        await tx.transaction.delete({ where: { id: payment.transactionId } }).catch(() => {});
+        // The linked transaction may have already been deleted by the
+        // user via the transactions list — that's expected, so we
+        // tolerate "record not found" here. Anything else gets logged
+        // so it's traceable in Vercel logs without surfacing as a
+        // user-facing failure (the wage payment is the primary record
+        // we're deleting).
+        await tx.transaction
+          .delete({ where: { id: payment.transactionId } })
+          .catch((e) =>
+            console.error("[wage-payments/delete] linked txn cleanup", e),
+          );
       }
       await tx.wagePayment.delete({ where: { id } });
     });

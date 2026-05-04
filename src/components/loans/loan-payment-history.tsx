@@ -66,7 +66,8 @@ export function LoanPaymentHistory({
           No payments recorded yet.
         </p>
       ) : (
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[32rem] text-sm">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
               <th className="px-5 py-2">Date</th>
@@ -152,6 +153,7 @@ export function LoanPaymentHistory({
             })}
           </tbody>
         </table>
+        </div>
       )}
     </section>
     <EditTransactionDialog

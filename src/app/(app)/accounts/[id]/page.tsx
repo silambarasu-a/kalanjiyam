@@ -263,7 +263,8 @@ export default async function AccountDetailPage({
             No transactions in this period.
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-sm">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
                 <th className="px-5 py-2">Date</th>
@@ -307,6 +308,7 @@ export default async function AccountDetailPage({
               })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </div>

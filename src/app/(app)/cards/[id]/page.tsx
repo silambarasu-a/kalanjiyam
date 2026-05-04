@@ -809,7 +809,8 @@ export default async function CardDetailPage({
                 <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                   Closed
                 </div>
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto -mx-4 px-4">
+                <table className="w-full min-w-[28rem] text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b">
                       <th className="py-2 pr-3">Lender</th>
@@ -849,6 +850,7 @@ export default async function CardDetailPage({
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
