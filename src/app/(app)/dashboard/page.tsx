@@ -143,7 +143,21 @@ export default function DashboardPage() {
         <BigStat
           label="Invested"
           value={data ? formatINR(data.investedCurrent) : "—"}
-          hint={data ? `${formatINR(data.investedAmount)} invested` : ""}
+          change={
+            data && data.investedAmount > 0
+              ? (() => {
+                  const gain = data.investedCurrent - data.investedAmount;
+                  const pct = (gain / data.investedAmount) * 100;
+                  const sign = gain >= 0 ? "+" : "−";
+                  return {
+                    value: `${sign}${formatINR(Math.abs(gain))} · ${gain >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+                    tone:
+                      gain > 0 ? "gain" : gain < 0 ? "loss" : "neutral",
+                  } as const;
+                })()
+              : undefined
+          }
+          hint={data ? `Cost ${formatINR(data.investedAmount)}` : ""}
           icon={<ArrowDownLeft className="h-5 w-5" />}
         />
       </div>
@@ -474,12 +488,16 @@ function BigStat({
   label,
   value,
   hint,
+  change,
   icon,
   tone = "default",
 }: {
   label: string;
   value: string;
   hint?: string;
+  /** Optional gain/loss sub-line (e.g. "+₹500 · +1.56%"). Tone colours the
+   *  text but doesn't recolour the main value. */
+  change?: { value: string; tone: "gain" | "loss" | "neutral" };
   icon: React.ReactNode;
   tone?: "default" | "primary" | "destructive";
 }) {
@@ -489,6 +507,12 @@ function BigStat({
       : tone === "destructive"
         ? "text-destructive"
         : "text-foreground";
+  const changeColor =
+    change?.tone === "gain"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : change?.tone === "loss"
+        ? "text-destructive"
+        : "text-muted-foreground";
   return (
     <div className="rounded-xl border bg-card p-5">
       <div className="flex items-center justify-between">
@@ -498,7 +522,12 @@ function BigStat({
         <div className="text-muted-foreground">{icon}</div>
       </div>
       <div className={`mt-2 text-2xl font-semibold ${color}`}>{value}</div>
-      {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
+      {change && (
+        <div className={`mt-1 text-xs font-medium tabular-nums ${changeColor}`}>
+          {change.value}
+        </div>
+      )}
+      {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
     </div>
   );
 }
