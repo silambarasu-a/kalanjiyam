@@ -59,7 +59,7 @@ export function InsurancePremiumBreakdown({
   const lateFee = parseFloat(lateFeeAmount) || 0;
   const total = premiumAmount + (includeLateFee ? lateFee : 0);
 
-  /* eslint-disable react-hooks/set-state-in-effect -- propagating computed total to parent form */
+   
   useEffect(() => {
     onTotalChange(total);
   }, [total, onTotalChange]);
@@ -72,7 +72,7 @@ export function InsurancePremiumBreakdown({
       onNotesChange(`Premium — ${policyName}`);
     }
   }, [includeLateFee, lateFee, premiumAmount, policyName, onNotesChange]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+   
 
   return (
     <div className="rounded-lg border bg-muted/30 overflow-hidden">

@@ -109,7 +109,7 @@ export async function materializeStatementsFor(
   // The currently-open cycle closes on `sd` of this month if today <= sd,
   // otherwise of next month. Anything ending strictly before that close
   // is finalised.
-  let openCloseY = todayY;
+  const openCloseY = todayY;
   let openCloseM = todayM;
   if (todayD > sd) openCloseM += 1;
   const openCloseEnd = utcDay(

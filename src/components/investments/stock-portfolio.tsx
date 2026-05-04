@@ -189,7 +189,10 @@ export function StockPortfolio() {
     mutate: mutateHoldings,
     isLoading: holdingsLoading,
   } = useSWR<{ investments: StockHolding[] }>("/api/investments?kind=STOCK", fetcher);
-  const holdings = holdingsData?.investments ?? [];
+  const holdings = useMemo(
+    () => holdingsData?.investments ?? [],
+    [holdingsData?.investments],
+  );
 
   const {
     data: wishlist,

@@ -47,6 +47,7 @@ export function useDismissedNotifications() {
 
   // Hydrate from localStorage after mount to avoid SSR mismatch.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-mount localStorage hydration
     setStore(readStore());
   }, []);
 

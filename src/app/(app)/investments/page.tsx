@@ -38,14 +38,6 @@ type Investment = {
   nextDueDate: string | null;
 };
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
-
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_OPTIONS: { value: Investment["kind"]; label: string }[] = [

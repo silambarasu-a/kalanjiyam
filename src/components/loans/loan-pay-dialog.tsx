@@ -85,6 +85,7 @@ export function LoanPayDialog({
         ? Math.min(loan.emiAmount, loan.outstanding)
         : loan.outstanding,
     );
+    /* eslint-disable react-hooks/set-state-in-effect -- form hydration on dialog open */
     setAmount(suggested > 0 ? String(suggested) : "");
     setOverrideSplit(false);
     setPrincipalPortion("");
@@ -93,6 +94,7 @@ export function LoanPayDialog({
     setNotes("");
     setError(null);
     setPaidAt(today);
+    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loanId]);
 

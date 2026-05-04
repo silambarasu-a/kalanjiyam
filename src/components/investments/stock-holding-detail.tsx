@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  TrendingDown,
   ArrowUpRight,
   Trash2,
   Pencil,
@@ -69,7 +67,6 @@ function fmtPrice(val: number, currency: string | null) {
 }
 
 export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
-  const router = useRouter();
   const { mutate: globalMutate } = useSWRConfig();
   const { openDialog } = useTransactionDialog();
   const [deletingTxnId, setDeletingTxnId] = useState<string | null>(null);
@@ -82,7 +79,10 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   );
 
   const holding = data?.investment ?? null;
-  const transactions = data?.transactions ?? [];
+  const transactions = useMemo(
+    () => data?.transactions ?? [],
+    [data?.transactions],
+  );
 
   async function handleDeleteTransaction(txnId: string) {
     setDeletingTxnId(txnId);

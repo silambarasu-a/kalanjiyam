@@ -9,7 +9,6 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,

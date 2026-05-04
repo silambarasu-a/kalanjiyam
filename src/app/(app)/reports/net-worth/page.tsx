@@ -33,7 +33,7 @@ export default function NetWorthReportPage() {
     fetcher,
   );
 
-  const series = data?.series ?? [];
+  const series = useMemo(() => data?.series ?? [], [data?.series]);
   const latest = data?.latest;
   const max = useMemo(
     () => Math.max(1, ...series.map((s) => Math.max(s.assets, s.liabilities))),

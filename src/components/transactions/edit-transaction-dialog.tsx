@@ -44,11 +44,13 @@ export function EditTransactionDialog({
   const txId = transaction?.id;
   useEffect(() => {
     if (!transaction) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- form hydration on dialog open */
     setAmount(String(Math.round(transaction.amount)));
     setDate(transaction.date.slice(0, 10));
     setDescription(transaction.description);
     setEditNote("");
     setError(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txId]);
 

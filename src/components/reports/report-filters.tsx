@@ -91,9 +91,9 @@ export function ReportFilters({
   // Keep range in sync when a preset is picked.
   useEffect(() => {
     if (preset === "custom") return;
-    /* eslint-disable react-hooks/set-state-in-effect -- propagating preset to range */
+     
     onRangeChange(presetRange(preset));
-    /* eslint-enable react-hooks/set-state-in-effect */
+     
   }, [preset, onRangeChange]);
 
   const showCustom = preset === "custom";
