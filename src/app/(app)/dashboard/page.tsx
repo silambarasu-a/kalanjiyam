@@ -212,12 +212,15 @@ export default function DashboardPage() {
           label="Liquid"
           value={stats ? formatINR(stats.liquid) : "—"}
           change={
-            stats && stats.cardOutstanding > 0
+            stats && stats.cardOutstanding + stats.loanOutstanding > 0
               ? (() => {
-                  const net = stats.liquid - stats.cardOutstanding;
+                  const net =
+                    stats.liquid -
+                    stats.cardOutstanding -
+                    stats.loanOutstanding;
                   const sign = net < 0 ? "−" : "";
                   return {
-                    value: `${sign}${formatINR(Math.abs(net))} after card dues`,
+                    value: `${sign}${formatINR(Math.abs(net))} after all dues`,
                     tone: net >= 0 ? "gain" : "loss",
                   } as const;
                 })()
