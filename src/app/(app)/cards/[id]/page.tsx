@@ -194,12 +194,17 @@ export default async function CardDetailPage({
     paymentDueBy = new Date(lastClose.getTime() + (grace ?? 0) * 86400000);
     // amount_due = balance_now − charges_after_last_close (payments after
     // close cancel out algebraically — see derivation in PR description).
+    // Mirror the card-balance "owed" definition: EXPENSE + INVESTMENT BUY.
+    // Without INVESTMENT, a gold/jewel buy posted after close sits in
+    // `balance` but isn't subtracted out, inflating the just-closed bill.
     const chargesAfterClose = await prisma.transaction.aggregate({
       where: {
         accountId: card.accountId,
-        type: "EXPENSE",
         date: { gt: lastClose },
-        transferId: null,
+        OR: [
+          { type: "EXPENSE", transferId: null },
+          { type: "INVESTMENT", investmentAction: "BUY", transferId: null },
+        ],
       },
       _sum: { amount: true },
     });
@@ -320,6 +325,7 @@ export default async function CardDetailPage({
           id: true,
           type: true,
           kind: true,
+          investmentAction: true,
           amount: true,
           description: true,
           date: true,
@@ -329,9 +335,13 @@ export default async function CardDetailPage({
     : [];
 
   // Period spend excludes TRANSFER legs — those are bill payments, not
-  // spending. INCOME (refunds) still subtracts from the net.
+  // spending. INVESTMENT BUY counts (the user actually swiped the card,
+  // and the buy grew the card outstanding). INCOME (refunds) subtracts.
   const periodSpend = transactions.reduce((s, t) => {
     if (t.type === "EXPENSE") return s + Number(t.amount);
+    if (t.type === "INVESTMENT" && t.investmentAction === "BUY") {
+      return s + Number(t.amount);
+    }
     if (t.type === "INCOME") return s - Number(t.amount);
     return s;
   }, 0);
@@ -346,8 +356,11 @@ export default async function CardDetailPage({
       where: {
         cardId: id,
         workspaceId: card.workspaceId,
-        type: "EXPENSE",
         date: rangeToPrismaFilter({ start: earliest, end: latest }),
+        OR: [
+          { type: "EXPENSE" },
+          { type: "INVESTMENT", investmentAction: "BUY" },
+        ],
       },
       select: { amount: true, date: true },
     });
@@ -367,8 +380,13 @@ export default async function CardDetailPage({
 
   const categoryMap = new Map<string, number>();
   for (const t of transactions) {
-    if (t.type !== "EXPENSE") continue;
-    const name = t.category?.name ?? "Uncategorized";
+    const isExpense = t.type === "EXPENSE";
+    const isInvestmentBuy =
+      t.type === "INVESTMENT" && t.investmentAction === "BUY";
+    if (!isExpense && !isInvestmentBuy) continue;
+    const name = isInvestmentBuy
+      ? "Investments"
+      : (t.category?.name ?? "Uncategorized");
     categoryMap.set(name, (categoryMap.get(name) ?? 0) + Number(t.amount));
   }
   const categorySlices: CategorySlice[] = Array.from(categoryMap.entries())

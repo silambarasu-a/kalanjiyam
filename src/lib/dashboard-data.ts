@@ -549,12 +549,18 @@ export async function getDashboardCashflow(args: {
     );
     const computedDue = new Date(lastClose.getTime() + grace * 86400000);
     if (computedDue.getTime() > in30Days.getTime()) continue;
+    // Match the card-balance "owed" definition: EXPENSE + INVESTMENT BUY.
+    // Without INVESTMENT here, a gold/jewel buy posted after the close
+    // sits in `cardBalanceNow` but isn't subtracted out, inflating the
+    // just-closed bill by the open-cycle's investment spend.
     const chargesAfterClose = await prisma.transaction.aggregate({
       where: {
         accountId: a.id,
-        type: "EXPENSE",
         date: { gt: lastClose },
-        transferId: null,
+        OR: [
+          { type: "EXPENSE", transferId: null },
+          { type: "INVESTMENT", investmentAction: "BUY", transferId: null },
+        ],
       },
       _sum: { amount: true },
     });

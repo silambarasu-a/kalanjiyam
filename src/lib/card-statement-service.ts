@@ -127,23 +127,30 @@ export async function materializeStatementsFor(
     if (cycle.end.getTime() >= openCloseEnd.getTime()) break;
 
     // totalDue = sum of expense-side activity in [start, end] inclusive.
-    // This includes EXPENSE transactions and OUT-leg TRANSFER transactions
-    // posted on the card. INCOME (e.g. refunds, statement payments) is
-    // NOT subtracted here — payments are tracked separately via
-    // Transfer.statementId so the user can see partial payments. Refunds
-    // recorded as INCOME on the card reduce the period's net spend, so
-    // we do subtract them.
+    // Mirrors `computeAccountBalance`'s "owed" definition: EXPENSE plus
+    // INVESTMENT BUY (e.g. gold/jewel purchases swiped on the card both
+    // grow the card outstanding). Bill-payment transfers are NOT
+    // subtracted here — they're tracked via Transfer.statementId so the
+    // user can see partial payments separately. Refunds recorded as
+    // INCOME on the card reduce the period's net spend, so we subtract
+    // them.
     const periodFilter = {
       accountId,
       date: { gte: cycle.start, lt: new Date(cycle.end.getTime() + ONE_DAY_MS) },
     };
     const [expenseAgg, incomeAgg] = await Promise.all([
       prisma.transaction.aggregate({
-        where: { ...periodFilter, type: "EXPENSE" },
+        where: {
+          ...periodFilter,
+          OR: [
+            { type: "EXPENSE", transferId: null },
+            { type: "INVESTMENT", investmentAction: "BUY", transferId: null },
+          ],
+        },
         _sum: { amount: true },
       }),
       prisma.transaction.aggregate({
-        where: { ...periodFilter, type: "INCOME" },
+        where: { ...periodFilter, type: "INCOME", transferId: null },
         _sum: { amount: true },
       }),
     ]);
