@@ -16,7 +16,11 @@ export function mutateBalances() {
         key.startsWith("/api/contacts") ||
         key.startsWith("/api/member-charges") ||
         key.startsWith("/api/dashboard") ||
-        key.startsWith("/api/notifications")
+        key.startsWith("/api/notifications") ||
+        // Investments depend on transactions for amount, splits, and the
+        // BUY/SELL history surfaced on detail pages. Without this, edits
+        // to a holding leave the list/detail SWR caches stale.
+        key.startsWith("/api/investments")
       );
     },
     undefined,

@@ -68,6 +68,7 @@ export async function GET(request: Request) {
         nextDueDate: i.nextDueDate?.toISOString() ?? null,
         nominee: i.nominee,
         metadata: i.metadata ?? null,
+        lockedUntil: i.lockedUntil?.toISOString() ?? null,
         ownerUser: i.ownerUser,
       })),
     });
@@ -97,6 +98,63 @@ export async function POST(request: Request) {
       }
     }
 
+    // Validate every funding source referenced by splits belongs to this
+    // workspace and the caller can spend from it. Done up-front so we don't
+    // partially create the holding before failing. The cardId→accountId
+    // map is captured here so the $transaction below can route card spends
+    // through the card's companion account (kind=CARD), the same way
+    // /api/transactions does — without that, the card's outstanding never
+    // moves and `availableLimit` stays stale.
+    const cardIdToAccountId = new Map<string, string | null>();
+    if (data.splits && data.splits.length > 0) {
+      const accountIds = [...new Set(data.splits.map((s) => s.accountId).filter(Boolean) as string[])];
+      const cardIds = [...new Set(data.splits.map((s) => s.cardId).filter(Boolean) as string[])];
+      const [accs, cards] = await Promise.all([
+        accountIds.length
+          ? prisma.account.findMany({ where: { id: { in: accountIds } } })
+          : Promise.resolve([]),
+        cardIds.length
+          ? prisma.card.findMany({ where: { id: { in: cardIds } } })
+          : Promise.resolve([]),
+      ]);
+      if (accs.length !== accountIds.length || cards.length !== cardIds.length) {
+        return NextResponse.json({ error: "Payment source not found" }, { status: 404 });
+      }
+      for (const a of accs) {
+        if (a.workspaceId !== ctx.workspaceId || !canAccessRecord(session, a)) {
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+      }
+      for (const c of cards) {
+        if (c.workspaceId !== ctx.workspaceId || !canAccessRecord(session, c)) {
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+        cardIdToAccountId.set(c.id, c.accountId);
+      }
+    }
+
+    // Default lock-until based on kind unless the caller supplied one.
+    // FD/RD lock to maturityAt; SIP defaults to a 3y ELSS-style window;
+    // INSURANCE locks to startedAt+5y only when policyType = ULIP.
+    const startedAtDate = new Date(data.startedAt);
+    const addYears = (d: Date, n: number) => {
+      const c = new Date(d);
+      c.setFullYear(c.getFullYear() + n);
+      return c;
+    };
+    let lockedUntil: Date | null = data.lockedUntil
+      ? new Date(data.lockedUntil)
+      : null;
+    if (lockedUntil == null) {
+      if ((data.kind === "FD" || data.kind === "RD") && data.maturityAt) {
+        lockedUntil = new Date(data.maturityAt);
+      } else if (data.kind === "SIP") {
+        lockedUntil = addYears(startedAtDate, 3);
+      } else if (data.kind === "INSURANCE" && data.policyType === "ULIP") {
+        lockedUntil = addYears(startedAtDate, 5);
+      }
+    }
+
     const investment = await prisma.$transaction(async (tx) => {
       const inv = await tx.investment.create({
         data: {
@@ -108,7 +166,7 @@ export async function POST(request: Request) {
           amount: data.amount,
           currentValue: data.currentValue ?? null,
           interestRate: data.interestRate ?? null,
-          startedAt: new Date(data.startedAt),
+          startedAt: startedAtDate,
           maturityAt: data.maturityAt ? new Date(data.maturityAt) : null,
           notes: data.notes,
           symbol: data.symbol,
@@ -126,27 +184,58 @@ export async function POST(request: Request) {
           nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : null,
           nominee: data.nominee,
           metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined,
+          lockedUntil,
         },
       });
 
-      // Post initial BUY transaction unless it's an already-existing holding.
-      if (!data.isExisting && data.accountId) {
-        await tx.transaction.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            type: TransactionType.INVESTMENT,
-            amount: data.amount,
-            description: `${data.kind} · ${data.name}`,
-            date: new Date(data.startedAt),
-            accountId: data.accountId,
-            investmentId: inv.id,
-            investmentAction: InvestmentAction.BUY,
-            investmentQty: data.quantity ?? null,
-            investmentPrice: data.purchasePrice ?? null,
-            userId: ctx.userId,
-            createdByUserId: ctx.userId,
-          },
-        });
+      // Post initial BUY transaction(s) unless it's an already-existing
+      // holding. `splits` wins over `accountId`: one BUY per split, each
+      // pointing at its own account or card. The Investment row holds the
+      // canonical qty/price; per-split txns leave those null since
+      // pro-rating is rarely meaningful for split-tender purchases.
+      if (!data.isExisting) {
+        if (data.splits && data.splits.length > 0) {
+          await tx.transaction.createMany({
+            data: data.splits.map((s, i) => {
+              const cardCompanionAccount = s.cardId
+                ? (cardIdToAccountId.get(s.cardId) ?? null)
+                : null;
+              return {
+                workspaceId: ctx.workspaceId,
+                type: TransactionType.INVESTMENT,
+                amount: s.amount,
+                description:
+                  data.splits!.length > 1
+                    ? `${data.kind} · ${data.name} (${i + 1}/${data.splits!.length})`
+                    : `${data.kind} · ${data.name}`,
+                date: new Date(data.startedAt),
+                accountId: s.accountId ?? cardCompanionAccount,
+                cardId: s.cardId ?? null,
+                investmentId: inv.id,
+                investmentAction: InvestmentAction.BUY,
+                userId: ctx.userId,
+                createdByUserId: ctx.userId,
+              };
+            }),
+          });
+        } else if (data.accountId) {
+          await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: TransactionType.INVESTMENT,
+              amount: data.amount,
+              description: `${data.kind} · ${data.name}`,
+              date: new Date(data.startedAt),
+              accountId: data.accountId,
+              investmentId: inv.id,
+              investmentAction: InvestmentAction.BUY,
+              investmentQty: data.quantity ?? null,
+              investmentPrice: data.purchasePrice ?? null,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+        }
       }
 
       // Generate upcoming reminders for SIP + INSURANCE + FD maturity.

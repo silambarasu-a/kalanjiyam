@@ -558,7 +558,7 @@ const investmentKindEnum = z.enum([
 ]);
 const premiumFreqEnum = z.enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"]);
 
-export const investmentCreateSchema = z.object({
+const investmentCreateBase = z.object({
   kind: investmentKindEnum,
   name: z.string().trim().min(1).max(120),
   institution: z.string().trim().max(120).optional(),
@@ -596,11 +596,42 @@ export const investmentCreateSchema = z.object({
   nominee: z.string().trim().max(120).optional(),
   /** Kind-specific structured extras (e.g. for GOLD: type, purity, wastage, making, gst). */
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
+  /** Hard-gate lock — see schema. ISO date string from the form. */
+  lockedUntil: z.string().optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
+  /**
+   * Optional split-payment list. When present, replaces `accountId` — a BUY
+   * transaction is created per split (e.g. ₹5L gold paid via 2 cards + 1
+   * bank). Each split must reference exactly one of accountId/cardId, and
+   * the split amounts must sum to `amount` (within ₹0.01 of rounding).
+   */
+  splits: z
+    .array(
+      z
+        .object({
+          accountId: z.string().uuid().optional().nullable(),
+          cardId: z.string().uuid().optional().nullable(),
+          amount: z.number().positive(),
+        })
+        .refine((s) => !!s.accountId !== !!s.cardId, {
+          message: "Each split needs exactly one of accountId or cardId",
+        }),
+    )
+    .min(1)
+    .optional(),
   isExisting: z.boolean().optional().default(false),
 });
 
-export const investmentUpdateSchema = investmentCreateSchema.partial().extend({
+export const investmentCreateSchema = investmentCreateBase.refine(
+  (d) => {
+    if (!d.splits) return true;
+    const sum = d.splits.reduce((a, s) => a + s.amount, 0);
+    return Math.abs(sum - d.amount) <= 0.01;
+  },
+  { message: "Split amounts must add up to the total", path: ["splits"] },
+);
+
+export const investmentUpdateSchema = investmentCreateBase.partial().extend({
   active: z.boolean().optional(),
 });
 

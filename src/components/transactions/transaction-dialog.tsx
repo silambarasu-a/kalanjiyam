@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw, RotateCcw } from "lucide-react";
@@ -110,7 +110,8 @@ const TABS: { value: TransactionDefault; label: string; icon: React.ElementType;
 ];
 
 export function TransactionDialog() {
-  const { open, defaultType, defaultCreatingNew, closeDialog } = useTransactionDialog();
+  const { open, defaultType, defaultCreatingNew, editingInvestmentId, closeDialog } =
+    useTransactionDialog();
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -125,9 +126,10 @@ export function TransactionDialog() {
 
   const body = (
     <DialogBody
-      key={open ? "open" : "closed"}
+      key={open ? `open-${editingInvestmentId ?? ""}` : "closed"}
       defaultType={defaultType}
       defaultCreatingNew={defaultCreatingNew}
+      editingInvestmentId={editingInvestmentId}
       onClose={closeDialog}
     />
   );
@@ -137,7 +139,7 @@ export function TransactionDialog() {
       <Sheet open={open} onOpenChange={(o) => !o && closeDialog()}>
         <SheetContent side="bottom">
           <SheetHeader>
-            <SheetTitle>New transaction</SheetTitle>
+            <SheetTitle>{editingInvestmentId ? "Edit investment" : "New transaction"}</SheetTitle>
           </SheetHeader>
           {body}
         </SheetContent>
@@ -149,7 +151,7 @@ export function TransactionDialog() {
     <Dialog open={open} onOpenChange={(o) => !o && closeDialog()}>
       <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
         <DialogHeader>
-          <DialogTitle>New transaction</DialogTitle>
+          <DialogTitle>{editingInvestmentId ? "Edit investment" : "New transaction"}</DialogTitle>
         </DialogHeader>
         {body}
       </DialogContent>
@@ -160,10 +162,12 @@ export function TransactionDialog() {
 function DialogBody({
   defaultType,
   defaultCreatingNew,
+  editingInvestmentId,
   onClose,
 }: {
   defaultType: TransactionDefault;
   defaultCreatingNew: boolean;
+  editingInvestmentId: string | null;
   onClose: () => void;
 }) {
   const [type, setType] = useState<TransactionDefault>(defaultType);
@@ -235,8 +239,10 @@ function DialogBody({
       ) : type === "INVESTMENT" ? (
         <InvestmentForm
           accounts={accounts}
+          cards={cards}
           categories={investmentCategories}
           defaultCreatingNew={defaultCreatingNew}
+          editingInvestmentId={editingInvestmentId}
           onClose={onClose}
         />
       ) : type === "REFUND" ? (
@@ -1618,15 +1624,21 @@ type InvestmentHolding = {
 
 function InvestmentForm({
   accounts,
+  cards,
   categories,
   defaultCreatingNew = false,
+  editingInvestmentId = null,
   onClose,
 }: {
   accounts: Account[];
+  cards: Card[];
   categories: Category[];
   /** When true, the form opens in "create new holding" mode instead of the
    * default "add a BUY/SELL transaction to an existing holding" picker. */
   defaultCreatingNew?: boolean;
+  /** When set, fetch this investment + its BUY splits and pre-fill all
+   * fields. Submit then PATCHes instead of POSTing. */
+  editingInvestmentId?: string | null;
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1682,8 +1694,90 @@ function InvestmentForm({
   const [newGoldWastageMode, setNewGoldWastageMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
   const [newGoldMaking, setNewGoldMaking] = useState("");
   const [newGoldMakingMode, setNewGoldMakingMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
-  const [newGoldGst, setNewGoldGst] = useState("");
-  const [newGoldGstMode, setNewGoldGstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  // GST is split into CGST + SGST so the form mirrors the typical Indian
+  // gold receipt (1.5% + 1.5% = 3% slab). For interstate purchases the
+  // user can leave one at 0 and put the full slab in IGST-style on the
+  // other.
+  const [newGoldCgst, setNewGoldCgst] = useState("");
+  const [newGoldCgstMode, setNewGoldCgstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  const [newGoldSgst, setNewGoldSgst] = useState("");
+  const [newGoldSgstMode, setNewGoldSgstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
+  // Bill-level round-off (negative = round-down, positive = round-up).
+  const [newGoldRoundOff, setNewGoldRoundOff] = useState("");
+  // Hard-gate edit/delete until this date passes. Auto-fills based on
+  // kind (FD/RD = maturityAt, SIP = +3y, ULIP = +5y) — user can clear or
+  // override. Empty string means no lock.
+  const [newLockedUntil, setNewLockedUntil] = useState("");
+  // Ornament composition. The bill's gross weight is what the scale shows;
+  // every entry in `stones` is one non-gold inclusion (diamond, ruby,
+  // kundan, …) with its own weight + charge. Net gold = gross − Σ stone
+  // weights, and that's what `quantity` × rate prices. None of these apply
+  // to BAR / COIN / SGB / DIGITAL / ETF.
+  const [newGoldGrossWeight, setNewGoldGrossWeight] = useState("");
+  // Each stone row captures both the bill's split (`carats × ratePerCt`)
+  // and the resulting `weight (g)` + `charge (₹)`. Auto-derivation keeps
+  // them in sync: enter carats + rate, get charge; enter carats, get
+  // weight (1ct = 0.2g). User-typed charge or weight overrides.
+  const [newGoldStones, setNewGoldStones] = useState<
+    {
+      kind: string;
+      weight: string;
+      carats: string;
+      ratePerCt: string;
+      charge: string;
+    }[]
+  >([]);
+  // Split-tender for gold: paying ₹X from N sources (cards + bank + wallet
+  // mix). Each row's `source` is "account:<id>" or "card:<id>" — the same
+  // encoding the income/expense form uses. Default to a single empty row;
+  // amount is parsed at submit time.
+  const [goldSplits, setGoldSplits] = useState<{ source: string; amount: string }[]>([
+    { source: "", amount: "" },
+  ]);
+  // Edit mode: load existing investment + its BUY transactions, then
+  // pre-fill every relevant field. Currently scoped to gold (where the
+  // metadata complexity lives); other kinds fall through to existing
+  // metadata handlers but the splits won't pre-fill.
+  const isEditing = !!editingInvestmentId;
+  const { data: editingData } = useSWR<{
+    investment: {
+      id: string;
+      kind: string;
+      name: string;
+      institution: string | null;
+      amount: number;
+      quantity: number | null;
+      purchasePrice: number | null;
+      startedAt: string;
+      notes: string | null;
+      metadata: Record<string, unknown> | null;
+      lockedUntil: string | null;
+      // Kind-specific fields pre-filled on edit so the form doesn't
+      // silently drop them on re-save.
+      symbol: string | null;
+      exchange: string | null;
+      currency: string | null;
+      maturityAt: string | null;
+      interestRate: number | null;
+      policyNumber: string | null;
+      policyType: string | null;
+      premiumAmount: number | null;
+      premiumFrequency: string | null;
+      sumAssured: number | null;
+      nextDueDate: string | null;
+      nominee: string | null;
+    };
+    transactions: Array<{
+      id: string;
+      amount: number;
+      action: "BUY" | "SELL" | null;
+      accountId: string | null;
+      cardId: string | null;
+    }>;
+  }>(
+    editingInvestmentId ? `/api/investments/${editingInvestmentId}` : null,
+    fetcher,
+  );
   // Category chip
   const [categoryId, setCategoryId] = useState("");
   // Foreign-currency support (set automatically when a USD stock is picked).
@@ -1804,7 +1898,10 @@ function InvestmentForm({
 
   // Auto-compute amount when qty + price are entered. For foreign-currency
   // (e.g. USD stock), multiply by the exchange rate so `amount` stays in INR.
+  // Skipped for gold-create mode — there `amount` is driven by the sum of
+  // payment splits (since making/wastage/GST mean total paid > weight × rate).
   useEffect(() => {
+    if (creatingNew && newKind === "GOLD") return;
     const q = parseFloat(quantity);
     const p = parseFloat(price);
     const r = isForeignCurrency ? parseFloat(exchangeRate) : 1;
@@ -1812,10 +1909,353 @@ function InvestmentForm({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- derived amount = qty × price × rate
       setAmount(String(Number((q * p * r).toFixed(2))));
     }
-  }, [quantity, price, isForeignCurrency, exchangeRate]);
+  }, [quantity, price, isForeignCurrency, exchangeRate, creatingNew, newKind]);
 
   function applyLivePrice() {
     if (livePrice) setPrice(livePrice.price.toFixed(2));
+  }
+
+  // Gold purchases routinely use multiple tenders (2 cards + bank, etc.),
+  // so the create-new flow shows a splits repeater instead of a single
+  // account picker. All other kinds keep the simple single picker.
+  const isGoldCreate = creatingNew && newKind === "GOLD";
+
+  // Bill total derived from the gold breakdown — gold value × wastage ×
+  // making + Σ stones + CGST + SGST + round-off. This is what the user
+  // owes and what `amount` should be: payment splits then validate
+  // against it. Falls back to 0 when no breakdown is entered yet.
+  const goldBillTotal = useMemo(() => {
+    if (!isGoldCreate) return 0;
+    const w = parseFloat(quantity) || 0;
+    const r = parseFloat(price) || 0;
+    const goldValue = w > 0 && r > 0 ? w * r : 0;
+    if (goldValue <= 0) return 0;
+    const ws = resolveAmount(newGoldWastage, newGoldWastageMode, goldValue);
+    const mk = resolveAmount(newGoldMaking, newGoldMakingMode, goldValue);
+    const stoneTotal =
+      newGoldType === "ORNAMENTS"
+        ? newGoldStones.reduce((a, s) => a + (parseFloat(s.charge) || 0), 0)
+        : 0;
+    const gstBase = goldValue + ws + mk + stoneTotal;
+    const cgst = resolveAmount(newGoldCgst, newGoldCgstMode, gstBase);
+    const sgst = resolveAmount(newGoldSgst, newGoldSgstMode, gstBase);
+    const roundOff = parseFloat(newGoldRoundOff) || 0;
+    return goldValue + ws + mk + stoneTotal + cgst + sgst + roundOff;
+  }, [
+    isGoldCreate,
+    quantity,
+    price,
+    newGoldType,
+    newGoldWastage,
+    newGoldWastageMode,
+    newGoldMaking,
+    newGoldMakingMode,
+    newGoldStones,
+    newGoldCgst,
+    newGoldCgstMode,
+    newGoldSgst,
+    newGoldSgstMode,
+    newGoldRoundOff,
+  ]);
+
+  // For gold-create, `amount` mirrors the bill total. Splits then track
+  // against it — a "Remaining" indicator surfaces the gap. When the
+  // breakdown is empty (no weight/rate yet), fall back to sum of splits
+  // so the form still works for a quick "just record what I paid" entry.
+  useEffect(() => {
+    if (!isGoldCreate) return;
+    if (goldBillTotal > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- amount tracks bill total
+      setAmount(String(Number(goldBillTotal.toFixed(2))));
+      return;
+    }
+    const sum = goldSplits.reduce(
+      (a, s) => a + (parseFloat(s.amount) || 0),
+      0,
+    );
+    setAmount(sum > 0 ? String(Number(sum.toFixed(2))) : "");
+  }, [isGoldCreate, goldBillTotal, goldSplits]);
+
+  // For ornaments, the user enters gross weight + a list of stones; net
+  // gold (= gross − Σ stone weights) is bound to `quantity` so qty × rate
+  // stays the metal-only value. Skipped when gross is empty so a
+  // type-switch from BAR → ORNAMENTS doesn't blow away an already-typed
+  // weight.
+  useEffect(() => {
+    if (!isGoldCreate || newGoldType !== "ORNAMENTS") return;
+    const gross = parseFloat(newGoldGrossWeight) || 0;
+    if (gross <= 0) return;
+    const stones = newGoldStones.reduce(
+      (a, s) => a + (parseFloat(s.weight) || 0),
+      0,
+    );
+    const net = Math.max(0, gross - stones);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived net weight = gross - Σ stones
+    setQuantity(net > 0 ? Number(net.toFixed(3)).toString() : "");
+  }, [isGoldCreate, newGoldType, newGoldGrossWeight, newGoldStones]);
+
+  // Auto-propose a lock-until date when the user picks a kind that has a
+  // statutory or natural lock period: FD/RD lock to maturity, SIP defaults
+  // to a 3-year ELSS-style window, INSURANCE+ULIP locks for 5 years. The
+  // ref ensures we only auto-apply once per (kind, computed-date) pair so
+  // a deliberate clear by the user isn't refilled on the next render —
+  // but a fresh trigger change (e.g. picking a new maturity date) does
+  // re-propose.
+  const lockAutoAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!creatingNew || isEditing) return;
+    let computed: string | null = null;
+    if ((newKind === "FD" || newKind === "RD") && newMaturityAt) {
+      computed = newMaturityAt;
+    } else if (newKind === "SIP" && date) {
+      const d = new Date(date);
+      d.setFullYear(d.getFullYear() + 3);
+      computed = d.toISOString().slice(0, 10);
+    } else if (newKind === "INSURANCE" && newPolicyType === "ULIP" && date) {
+      const d = new Date(date);
+      d.setFullYear(d.getFullYear() + 5);
+      computed = d.toISOString().slice(0, 10);
+    }
+    if (!computed) return;
+    const key = `${newKind}:${computed}`;
+    if (lockAutoAppliedRef.current === key) return;
+    lockAutoAppliedRef.current = key;
+    setNewLockedUntil(computed);
+  }, [creatingNew, isEditing, newKind, newMaturityAt, newPolicyType, date]);
+
+  // Stone-row derivations — carats is the bill's natural unit so we let
+  // it drive both grams (1ct = 0.2g) and charge (carats × ratePerCt).
+  // Weight is filled one-shot when empty so the user can override; charge
+  // is recomputed whenever both carats + rate are non-zero so the
+  // itemized split stays the source of truth.
+  useEffect(() => {
+    if (!isGoldCreate || newGoldType !== "ORNAMENTS") return;
+    let changed = false;
+    const next = newGoldStones.map((s) => {
+      const ct = parseFloat(s.carats) || 0;
+      const rate = parseFloat(s.ratePerCt) || 0;
+      let weight = s.weight;
+      let charge = s.charge;
+      if (ct > 0 && !s.weight) {
+        weight = Number((ct * 0.2).toFixed(3)).toString();
+      }
+      if (ct > 0 && rate > 0) {
+        const derived = Number((ct * rate).toFixed(2)).toString();
+        if (derived !== s.charge) charge = derived;
+      }
+      if (weight !== s.weight || charge !== s.charge) {
+        changed = true;
+        return { ...s, weight, charge };
+      }
+      return s;
+    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- only updates when a derived value actually changed
+    if (changed) setNewGoldStones(next);
+  }, [isGoldCreate, newGoldType, newGoldStones]);
+
+  // Edit-mode pre-fill: when fetched investment data arrives, hydrate every
+  // form field from it. Runs once per fetched record (keyed on id) so user
+  // edits aren't clobbered by re-renders. Gold-only fields are read from
+  // `metadata`; other kinds get the basics (name, amount, dates).
+  const editingId = editingData?.investment.id;
+  useEffect(() => {
+    if (!editingData) return;
+    const inv = editingData.investment;
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot hydration when SWR resolves */
+    setCreatingNew(true);
+    setNewKind(inv.kind as typeof newKind);
+    setNewName(inv.name);
+    setAmount(String(inv.amount));
+    setQuantity(inv.quantity != null ? String(inv.quantity) : "");
+    setPrice(inv.purchasePrice != null ? String(inv.purchasePrice) : "");
+    setDate(inv.startedAt.slice(0, 10));
+    setDescription(inv.notes ?? "");
+    setNewLockedUntil(inv.lockedUntil ? inv.lockedUntil.slice(0, 10) : "");
+
+    // Kind-specific common fields. Loaded for every kind so re-saving a
+    // non-gold edit doesn't blank out things the form's submit body would
+    // otherwise resend as undefined for empty inputs.
+    setNewInstitution(inv.institution ?? "");
+    setNewSymbol(inv.symbol ?? "");
+    setNewExchange(inv.exchange ?? "");
+    setInvestmentCurrency(inv.currency === "USD" ? "USD" : "INR");
+    setNewInterestRate(inv.interestRate != null ? String(inv.interestRate) : "");
+    setNewMaturityAt(inv.maturityAt ? inv.maturityAt.slice(0, 10) : "");
+    setNewPolicyNumber(inv.policyNumber ?? "");
+    if (inv.policyType) setNewPolicyType(inv.policyType);
+    setNewPremium(inv.premiumAmount != null ? String(inv.premiumAmount) : "");
+    if (inv.premiumFrequency) setNewPremiumFrequency(inv.premiumFrequency);
+    setNewNextDueDate(inv.nextDueDate ? inv.nextDueDate.slice(0, 10) : "");
+    setNewNominee(inv.nominee ?? "");
+    setNewSumAssured(inv.sumAssured != null ? String(inv.sumAssured) : "");
+
+    if (inv.kind === "GOLD" && inv.metadata) {
+      const m = inv.metadata as Record<string, unknown>;
+      // Numbers saved as 0 (the result of `parseFloat("") || 0` on empty
+      // inputs) render as empty so the field looks unset on edit and the
+      // carat-derive effect doesn't see a phantom 0.
+      const str = (v: unknown) => (v == null || v === 0 ? "" : String(v));
+      const mode = (v: unknown): "RUPEE" | "PERCENT" =>
+        v === "RUPEE" ? "RUPEE" : "PERCENT";
+      setNewGoldType((m.goldType as typeof newGoldType) ?? "ORNAMENTS");
+      setNewGoldPurity(str(m.purity) || "22K");
+      setNewGoldGrossWeight(str(m.grossWeight));
+      setNewGoldWastage(str(m.wastageInput));
+      setNewGoldWastageMode(mode(m.wastageMode));
+      setNewGoldMaking(str(m.makingInput));
+      setNewGoldMakingMode(mode(m.makingMode));
+      setNewGoldCgst(str(m.cgstInput));
+      setNewGoldCgstMode(mode(m.cgstMode));
+      setNewGoldSgst(str(m.sgstInput));
+      setNewGoldSgstMode(mode(m.sgstMode));
+      setNewGoldRoundOff(str(m.roundOff));
+      const stones = Array.isArray(m.stones)
+        ? (m.stones as Array<Record<string, unknown>>).map((s) => ({
+            kind: str(s.kind),
+            weight: str(s.weight),
+            carats: str(s.carats),
+            ratePerCt: str(s.ratePerCt),
+            charge: str(s.charge),
+          }))
+        : [];
+      setNewGoldStones(stones);
+    }
+
+    // Hydrate splits from existing BUY transactions. Encode using the
+    // same "account:<id>" / "card:<id>" pattern the picker emits — card
+    // wins because card spends carry both ids (companion account is
+    // only there for balance routing).
+    const buys = editingData.transactions.filter((t) => t.action === "BUY");
+    if (buys.length > 0) {
+      setGoldSplits(
+        buys.map((t) => ({
+          source: t.cardId
+            ? `card:${t.cardId}`
+            : t.accountId
+              ? `account:${t.accountId}`
+              : "",
+          amount: String(t.amount),
+        })),
+      );
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-fill should fire once per fetched id
+  }, [editingId]);
+
+  // Unified source list for the splits picker: spendable accounts +
+  // credit cards. Mirrors the income/expense form's "account:<id>" /
+  // "card:<id>" encoding (see IncomeExpenseForm.sources).
+  const goldSourceOptions = useMemo(() => {
+    type Item = { value: string; label: string; hint?: string };
+    const buckets: Record<"BANK" | "WALLET" | "CASH" | "CREDIT", Item[]> = {
+      BANK: [], WALLET: [], CASH: [], CREDIT: [],
+    };
+    for (const a of accounts) {
+      if (a.kind === "BANK" || a.kind === "WALLET" || a.kind === "CASH") {
+        buckets[a.kind].push({
+          value: `account:${a.id}`,
+          label: formatAccountLabel(a.name, a.kind),
+          hint: `₹${a.balance.toLocaleString("en-IN")}`,
+        });
+      }
+    }
+    for (const c of cards) {
+      if (c.kind !== "CREDIT") continue;
+      const baseLabel = formatAccountLabel(c.name, "CARD");
+      const label = c.last4 ? `${baseLabel} ••${c.last4}` : baseLabel;
+      buckets.CREDIT.push({
+        value: `card:${c.id}`,
+        label,
+        hint: c.availableLimit != null ? `₹${c.availableLimit.toLocaleString("en-IN")} avail` : undefined,
+      });
+    }
+    const order: { key: keyof typeof buckets; label: string }[] = [
+      { key: "BANK", label: "Bank" },
+      { key: "WALLET", label: "Wallet" },
+      { key: "CASH", label: "Cash" },
+      { key: "CREDIT", label: "Credit Card" },
+    ];
+    return order.filter((g) => buckets[g.key].length > 0).map((g) => ({
+      label: g.label,
+      options: buckets[g.key],
+    }));
+  }, [accounts, cards]);
+
+  const goldSplitsTotal = goldSplits.reduce(
+    (a, s) => a + (parseFloat(s.amount) || 0),
+    0,
+  );
+
+  // Map from "account:<id>" / "card:<id>" → { available, label } so each
+  // split row can validate against the source's spendable balance / credit
+  // limit. Cards expose `availableLimit` (debt headroom); accounts expose
+  // `balance` (cash on hand).
+  const goldSourceMeta = useMemo(() => {
+    const m: Record<string, { available: number; label: string }> = {};
+    for (const a of accounts) {
+      if (a.kind === "BANK" || a.kind === "WALLET" || a.kind === "CASH") {
+        m[`account:${a.id}`] = { available: a.balance, label: a.name };
+      }
+    }
+    for (const c of cards) {
+      if (c.kind === "CREDIT" && c.availableLimit != null) {
+        m[`card:${c.id}`] = { available: c.availableLimit, label: c.name };
+      }
+    }
+    return m;
+  }, [accounts, cards]);
+
+  // Sum allocations per source across all split rows so the same card /
+  // account used twice doesn't appear "available" the second time.
+  const goldUsedPerSource = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const s of goldSplits) {
+      if (!s.source) continue;
+      m[s.source] = (m[s.source] ?? 0) + (parseFloat(s.amount) || 0);
+    }
+    return m;
+  }, [goldSplits]);
+
+  // In edit mode, the existing BUY transactions already debited their
+  // sources, so the live `availableLimit` / balance reported by the API
+  // is *post-allocation*. Credit those amounts back per source so the
+  // overflow check measures only the *delta* the user introduces, not
+  // the entire existing allocation.
+  const goldOriginalPerSource = useMemo(() => {
+    const m: Record<string, number> = {};
+    if (!editingData) return m;
+    for (const t of editingData.transactions) {
+      if (t.action !== "BUY") continue;
+      const key = t.cardId
+        ? `card:${t.cardId}`
+        : t.accountId
+          ? `account:${t.accountId}`
+          : null;
+      if (!key) continue;
+      m[key] = (m[key] ?? 0) + t.amount;
+    }
+    return m;
+  }, [editingData]);
+
+  function goldEffectiveAvailable(source: string): number | null {
+    const meta = goldSourceMeta[source];
+    if (!meta) return null;
+    return meta.available + (goldOriginalPerSource[source] ?? 0);
+  }
+
+  // Returns { over, available, label } for a row when the chosen source is
+  // overspent across all rows allocated to it. `null` when the row is OK
+  // or unconfigured. `available` is the *effective* available — what the
+  // user can actually still spend, which in edit mode credits back the
+  // original allocation for that source.
+  function goldSplitOverflow(row: { source: string; amount: string }) {
+    if (!row.source || !row.amount) return null;
+    const meta = goldSourceMeta[row.source];
+    if (!meta) return null;
+    const effective = goldEffectiveAvailable(row.source) ?? meta.available;
+    const used = goldUsedPerSource[row.source] ?? 0;
+    if (used <= effective + 0.01) return null;
+    return { over: used - effective, available: effective, label: meta.label };
   }
 
   async function submit() {
@@ -1825,7 +2265,43 @@ function InvestmentForm({
       setError("Enter an amount");
       return;
     }
-    if (!accountId) {
+    if (isGoldCreate) {
+      if (goldSplits.length === 0) {
+        setError("Add at least one payment source");
+        return;
+      }
+      for (const s of goldSplits) {
+        if (!s.source) {
+          setError("Pick a source for every payment row");
+          return;
+        }
+        const v = parseFloat(s.amount);
+        if (!v || v <= 0) {
+          setError("Enter an amount for every payment row");
+          return;
+        }
+      }
+      if (Math.abs(goldSplitsTotal - amt) > 0.01) {
+        setError("Payment splits must add up to the total");
+        return;
+      }
+      // Block when any source is overspent so we don't post transactions
+      // that would push an account negative or a card past its limit. Use
+      // effective availability so an edit that re-uses the original split
+      // amounts isn't flagged as exceeding (the original BUYs are deleted
+      // and recreated atomically, so their debit is being replayed).
+      for (const [src, used] of Object.entries(goldUsedPerSource)) {
+        const meta = goldSourceMeta[src];
+        if (!meta) continue;
+        const effective = goldEffectiveAvailable(src) ?? meta.available;
+        if (used > effective + 0.01) {
+          setError(
+            `${meta.label}: ₹${used.toLocaleString("en-IN")} exceeds ₹${effective.toLocaleString("en-IN")} available`,
+          );
+          return;
+        }
+      }
+    } else if (!accountId) {
       setError("Pick an account");
       return;
     }
@@ -1845,11 +2321,16 @@ function InvestmentForm({
     setSubmitting(true);
     try {
       if (creatingNew) {
-        // Create the holding — the API also posts the initial BUY txn.
-        const res = await fetch("/api/investments", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+        // Create or update the holding. Edit mode PATCHes /api/investments/[id]
+        // — the same payload shape works there because the schema is a partial
+        // of the create base, and PATCH replaces BUY transactions when splits
+        // are supplied.
+        const res = await fetch(
+          isEditing ? `/api/investments/${editingInvestmentId}` : "/api/investments",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
             kind: newKind,
             name: newName.trim(),
             symbol: newKind === "STOCK" ? newSymbol.trim().toUpperCase() : undefined,
@@ -1913,23 +2394,60 @@ function InvestmentForm({
                       newGoldMakingMode,
                       goldValue,
                     );
-                    const gstAmt = resolveAmount(
-                      newGoldGst,
-                      newGoldGstMode,
-                      goldValue + wastageAmt + makingAmt,
+                    const grossW = parseFloat(newGoldGrossWeight) || 0;
+                    const stoneRows = newGoldStones
+                      .map((s) => ({
+                        kind: s.kind.trim() || null,
+                        weight: parseFloat(s.weight) || 0,
+                        carats: parseFloat(s.carats) || 0,
+                        ratePerCt: parseFloat(s.ratePerCt) || 0,
+                        charge: parseFloat(s.charge) || 0,
+                      }))
+                      .filter(
+                        (s) => s.weight > 0 || s.charge > 0 || s.carats > 0,
+                      );
+                    const stoneTotal = stoneRows.reduce(
+                      (a, s) => a + s.charge,
+                      0,
                     );
+                    const taxBase =
+                      goldValue + wastageAmt + makingAmt + stoneTotal;
+                    const cgstAmt = resolveAmount(
+                      newGoldCgst,
+                      newGoldCgstMode,
+                      taxBase,
+                    );
+                    const sgstAmt = resolveAmount(
+                      newGoldSgst,
+                      newGoldSgstMode,
+                      taxBase,
+                    );
+                    const roundOff = parseFloat(newGoldRoundOff) || 0;
                     return {
                       goldType: newGoldType,
                       purity: newGoldPurity,
+                      // Ornament composition (only meaningful when type =
+                      // ORNAMENTS). `stones` is one row per non-gold
+                      // inclusion — diamonds, ruby, kundan, etc. — each
+                      // with weight, carats, rate/ct, and charge so future
+                      // analytics can break down spend by stone kind.
+                      ...(newGoldType === "ORNAMENTS" && {
+                        grossWeight: grossW || null,
+                        stones: stoneRows.length > 0 ? stoneRows : null,
+                      }),
                       wastage: wastageAmt || null,
                       wastageInput: newGoldWastage || null,
                       wastageMode: newGoldWastageMode,
                       making: makingAmt || null,
                       makingInput: newGoldMaking || null,
                       makingMode: newGoldMakingMode,
-                      gst: gstAmt || null,
-                      gstInput: newGoldGst || null,
-                      gstMode: newGoldGstMode,
+                      cgst: cgstAmt || null,
+                      cgstInput: newGoldCgst || null,
+                      cgstMode: newGoldCgstMode,
+                      sgst: sgstAmt || null,
+                      sgstInput: newGoldSgst || null,
+                      sgstMode: newGoldSgstMode,
+                      roundOff: roundOff || null,
                     };
                   })()
                 : undefined,
@@ -1942,16 +2460,31 @@ function InvestmentForm({
                 ? Number(exchangeRate)
                 : undefined,
             startedAt: date,
-            accountId,
+            accountId: isGoldCreate ? undefined : accountId,
+            splits: isGoldCreate
+              ? goldSplits.map((s) => {
+                  const [k, sid] = s.source.split(":");
+                  return {
+                    accountId: k === "account" ? sid : undefined,
+                    cardId: k === "card" ? sid : undefined,
+                    amount: Number(s.amount),
+                  };
+                })
+              : undefined,
+            // Empty string = no lock; non-empty = lock-until date. On
+            // create, the backend also auto-defaults this for FD/RD/SIP/
+            // ULIP if we send null.
+            lockedUntil: newLockedUntil ? newLockedUntil : isEditing ? null : undefined,
             isExisting: false,
-          }),
-        });
+            }),
+          },
+        );
         const body = await res.json();
         if (!res.ok) {
           setError(body.error ?? "Failed");
           return;
         }
-        toast.success("Holding created and purchase recorded");
+        toast.success(isEditing ? "Investment updated" : "Holding created and purchase recorded");
         await mutateBalances();
         onClose();
         return;
@@ -2090,26 +2623,6 @@ function InvestmentForm({
               ← Use existing
             </button>
           </div>
-          <label className="block">
-            <span className="text-xs font-medium">Kind</span>
-            <div className="mt-1">
-              <NativeSelect
-                value={newKind}
-                onChange={(v) => setNewKind(v as typeof newKind)}
-                options={[
-                  { value: "STOCK", label: "Stock" },
-                  { value: "MUTUAL_FUND", label: "Mutual fund" },
-                  { value: "FD", label: "Fixed deposit" },
-                  { value: "RD", label: "Recurring deposit" },
-                  { value: "SIP", label: "SIP" },
-                  { value: "INSURANCE", label: "Insurance" },
-                  { value: "GOLD", label: "Gold" },
-                  { value: "OTHER", label: "Other" },
-                ]}
-              />
-            </div>
-          </label>
-
           {newKind === "STOCK" ? (
             <label className="block">
               <span className="text-xs font-medium">Search stock</span>
@@ -2339,7 +2852,23 @@ function InvestmentForm({
                   <div className="mt-1">
                     <NativeSelect
                       value={newGoldType}
-                      onChange={(v) => setNewGoldType(v as typeof newGoldType)}
+                      onChange={(v) => {
+                        const next = v as typeof newGoldType;
+                        // Hand the weight across the type swap so the user
+                        // doesn't lose what they already typed: gross ↔
+                        // single-weight when toggling ornaments on/off.
+                        if (next === "ORNAMENTS" && newGoldType !== "ORNAMENTS") {
+                          if (quantity && !newGoldGrossWeight) {
+                            setNewGoldGrossWeight(quantity);
+                          }
+                        } else if (next !== "ORNAMENTS" && newGoldType === "ORNAMENTS") {
+                          if (newGoldGrossWeight && !quantity) {
+                            setQuantity(newGoldGrossWeight);
+                          }
+                          setNewGoldStones([]);
+                        }
+                        setNewGoldType(next);
+                      }}
                       options={[
                         { value: "ORNAMENTS", label: "Ornaments / Jewellery" },
                         { value: "BAR", label: "Bar / Bullion" },
@@ -2370,13 +2899,18 @@ function InvestmentForm({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-xs font-medium">Weight (g)</span>
+                  <span className="text-xs font-medium">
+                    {newGoldType === "ORNAMENTS" ? "Gross weight (g)" : "Weight (g)"}
+                  </span>
                   <Input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
+                    value={newGoldType === "ORNAMENTS" ? newGoldGrossWeight : quantity}
+                    onChange={(e) => {
+                      if (newGoldType === "ORNAMENTS") setNewGoldGrossWeight(e.target.value);
+                      else setQuantity(e.target.value);
+                    }}
                     placeholder="0"
                   />
                 </label>
@@ -2392,61 +2926,267 @@ function InvestmentForm({
                   />
                 </label>
               </div>
+              {newGoldType === "ORNAMENTS" && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium">
+                      Stones{" "}
+                      <span className="font-normal text-muted-foreground">
+                        — diamonds, kundan, etc. (optional)
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewGoldStones((rows) => [
+                          ...rows,
+                          {
+                            kind: "",
+                            weight: "",
+                            carats: "",
+                            ratePerCt: "",
+                            charge: "",
+                          },
+                        ])
+                      }
+                      className="shrink-0 text-xs font-medium text-primary hover:underline"
+                    >
+                      + Add stone
+                    </button>
+                  </div>
+                  {newGoldStones.map((row, i) => (
+                    <div
+                      key={i}
+                      className="rounded-md border bg-muted/20 p-2 space-y-1.5"
+                    >
+                      <div className="flex items-start gap-2">
+                        <Input
+                          type="text"
+                          value={row.kind}
+                          onChange={(e) =>
+                            setNewGoldStones((rows) =>
+                              rows.map((r, idx) =>
+                                idx === i ? { ...r, kind: e.target.value } : r,
+                              ),
+                            )
+                          }
+                          placeholder="Diamond, ruby, kundan…"
+                          maxLength={40}
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            setNewGoldStones((rows) =>
+                              rows.filter((_, idx) => idx !== i),
+                            )
+                          }
+                          aria-label="Remove stone"
+                        >
+                          ×
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        <label className="block">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Weight (g)
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={row.weight}
+                            onChange={(e) =>
+                              setNewGoldStones((rows) =>
+                                rows.map((r, idx) =>
+                                  idx === i ? { ...r, weight: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            placeholder="0.000"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Carats
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={row.carats}
+                            onChange={(e) =>
+                              setNewGoldStones((rows) =>
+                                rows.map((r, idx) =>
+                                  idx === i ? { ...r, carats: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            placeholder="0.000"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Rate (₹/ct)
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={row.ratePerCt}
+                            onChange={(e) =>
+                              setNewGoldStones((rows) =>
+                                rows.map((r, idx) =>
+                                  idx === i
+                                    ? { ...r, ratePerCt: e.target.value }
+                                    : r,
+                                ),
+                              )
+                            }
+                            placeholder="0"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            Charge (₹)
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={row.charge}
+                            onChange={(e) =>
+                              setNewGoldStones((rows) =>
+                                rows.map((r, idx) =>
+                                  idx === i ? { ...r, charge: e.target.value } : r,
+                                ),
+                              )
+                            }
+                            placeholder="0.00"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                  {(() => {
+                    const gross = parseFloat(newGoldGrossWeight) || 0;
+                    const stoneTotal = newGoldStones.reduce(
+                      (a, s) => a + (parseFloat(s.weight) || 0),
+                      0,
+                    );
+                    const net = parseFloat(quantity) || 0;
+                    if (gross <= 0) return null;
+                    return (
+                      <p className="text-xs text-muted-foreground">
+                        Net gold weight:{" "}
+                        <span className="font-semibold tabular-nums text-foreground">
+                          {net.toFixed(3)}g
+                        </span>
+                        {stoneTotal > 0 && (
+                          <>
+                            {" "}
+                            ({gross.toFixed(3)}g gross − {stoneTotal.toFixed(3)}g
+                            stones)
+                          </>
+                        )}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
               {(() => {
                 const w = parseFloat(quantity);
                 const r = parseFloat(price);
                 const goldValue = w > 0 && r > 0 ? w * r : 0;
                 const ws = resolveAmount(newGoldWastage, newGoldWastageMode, goldValue);
                 const mk = resolveAmount(newGoldMaking, newGoldMakingMode, goldValue);
-                const gstBase = goldValue + ws + mk;
-                const gst = resolveAmount(newGoldGst, newGoldGstMode, gstBase);
+                // Stones are taxed alongside gold on most household bills
+                // (jewellers invoice everything at the gold slab unless
+                // diamonds are billed separately). Pulling stone charges
+                // into the GST base matches the typical receipt.
+                const stoneTotal =
+                  newGoldType === "ORNAMENTS"
+                    ? newGoldStones.reduce(
+                        (a, s) => a + (parseFloat(s.charge) || 0),
+                        0,
+                      )
+                    : 0;
+                const gstBase = goldValue + ws + mk + stoneTotal;
+                const cgst = resolveAmount(newGoldCgst, newGoldCgstMode, gstBase);
+                const sgst = resolveAmount(newGoldSgst, newGoldSgstMode, gstBase);
+                const roundOff = parseFloat(newGoldRoundOff) || 0;
                 return (
                   <>
-                    {newGoldType === "ORNAMENTS" ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <label className="block">
-                          <span className="text-xs font-medium">Wastage</span>
-                          <PercentOrRupeeInput
-                            value={newGoldWastage}
-                            onValueChange={setNewGoldWastage}
-                            mode={newGoldWastageMode}
-                            onModeChange={setNewGoldWastageMode}
-                            baseAmount={goldValue}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-medium">Making</span>
-                          <PercentOrRupeeInput
-                            value={newGoldMaking}
-                            onValueChange={setNewGoldMaking}
-                            mode={newGoldMakingMode}
-                            onModeChange={setNewGoldMakingMode}
-                            baseAmount={goldValue}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-medium">GST</span>
-                          <PercentOrRupeeInput
-                            value={newGoldGst}
-                            onValueChange={setNewGoldGst}
-                            mode={newGoldGstMode}
-                            onModeChange={setNewGoldGstMode}
-                            baseAmount={gstBase}
-                          />
-                        </label>
-                      </div>
-                    ) : (
+                    <div
+                      className={cn(
+                        "grid gap-2",
+                        newGoldType === "ORNAMENTS"
+                          ? "grid-cols-2 md:grid-cols-5"
+                          : "grid-cols-2 md:grid-cols-3",
+                      )}
+                    >
+                      {newGoldType === "ORNAMENTS" && (
+                        <>
+                          <label className="block">
+                            <span className="text-xs font-medium">Wastage</span>
+                            <PercentOrRupeeInput
+                              value={newGoldWastage}
+                              onValueChange={setNewGoldWastage}
+                              mode={newGoldWastageMode}
+                              onModeChange={setNewGoldWastageMode}
+                              baseAmount={goldValue}
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-medium">Making</span>
+                            <PercentOrRupeeInput
+                              value={newGoldMaking}
+                              onValueChange={setNewGoldMaking}
+                              mode={newGoldMakingMode}
+                              onModeChange={setNewGoldMakingMode}
+                              baseAmount={goldValue}
+                            />
+                          </label>
+                        </>
+                      )}
                       <label className="block">
-                        <span className="text-xs font-medium">GST</span>
+                        <span className="text-xs font-medium">CGST</span>
                         <PercentOrRupeeInput
-                          value={newGoldGst}
-                          onValueChange={setNewGoldGst}
-                          mode={newGoldGstMode}
-                          onModeChange={setNewGoldGstMode}
+                          value={newGoldCgst}
+                          onValueChange={setNewGoldCgst}
+                          mode={newGoldCgstMode}
+                          onModeChange={setNewGoldCgstMode}
                           baseAmount={gstBase}
                         />
                       </label>
-                    )}
+                      <label className="block">
+                        <span className="text-xs font-medium">SGST</span>
+                        <PercentOrRupeeInput
+                          value={newGoldSgst}
+                          onValueChange={setNewGoldSgst}
+                          mode={newGoldSgstMode}
+                          onModeChange={setNewGoldSgstMode}
+                          baseAmount={gstBase}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-medium">
+                          Round-off{" "}
+                          <span className="font-normal text-muted-foreground">
+                            (₹)
+                          </span>
+                        </span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={newGoldRoundOff}
+                          onChange={(e) => setNewGoldRoundOff(e.target.value)}
+                          placeholder="±0"
+                        />
+                      </label>
+                    </div>
                     {goldValue > 0 && (
                       <GoldBreakdown
                         weight={w}
@@ -2454,10 +3194,27 @@ function InvestmentForm({
                         goldValue={goldValue}
                         wastage={ws}
                         making={mk}
-                        gst={gst}
+                        cgst={cgst}
+                        sgst={sgst}
+                        roundOff={roundOff}
+                        stones={
+                          newGoldType === "ORNAMENTS"
+                            ? newGoldStones
+                                .map((s) => ({
+                                  kind: s.kind.trim() || null,
+                                  weight: parseFloat(s.weight) || 0,
+                                  carats: parseFloat(s.carats) || 0,
+                                  ratePerCt: parseFloat(s.ratePerCt) || 0,
+                                  charge: parseFloat(s.charge) || 0,
+                                }))
+                                .filter(
+                                  (s) =>
+                                    s.weight > 0 || s.charge > 0 || s.carats > 0,
+                                )
+                            : undefined
+                        }
                         showWastage={newGoldType === "ORNAMENTS"}
                         showMaking={newGoldType === "ORNAMENTS"}
-                        onUseTotal={(total) => setAmount(String(Math.round(total)))}
                       />
                     )}
                   </>
@@ -2531,18 +3288,176 @@ function InvestmentForm({
         </>
       ) : (
         <>
+          {isGoldCreate && (() => {
+            const billTotal = goldBillTotal;
+            const remaining = billTotal - goldSplitsTotal;
+            const remainingClean = Math.abs(remaining) < 0.01 ? 0 : remaining;
+            return (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium">Payment sources</span>
+                  {billTotal > 0 ? (
+                    <span
+                      className={cn(
+                        "text-xs tabular-nums",
+                        remainingClean > 0
+                          ? "text-amber-600 dark:text-amber-400"
+                          : remainingClean < 0
+                            ? "text-destructive"
+                            : "text-emerald-600 dark:text-emerald-400",
+                      )}
+                    >
+                      {remainingClean > 0
+                        ? `Remaining: ₹${remainingClean.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+                        : remainingClean < 0
+                          ? `Over by ₹${Math.abs(remainingClean).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+                          : "Fully paid"}
+                    </span>
+                  ) : (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      Total: ₹{goldSplitsTotal.toLocaleString("en-IN")}
+                    </span>
+                  )}
+                </div>
+                {goldSplits.map((row, i) => {
+                  const overflow = goldSplitOverflow(row);
+                  const meta = row.source ? goldSourceMeta[row.source] : null;
+                  return (
+                    <div key={i} className="space-y-1">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1">
+                          <NativeSelect
+                            value={row.source}
+                            onChange={(v) =>
+                              setGoldSplits((rows) =>
+                                rows.map((r, idx) =>
+                                  idx === i ? { ...r, source: v } : r,
+                                ),
+                              )
+                            }
+                            options={goldSourceOptions}
+                            placeholder="Pick source"
+                          />
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          placeholder="Amount"
+                          value={row.amount}
+                          onChange={(e) =>
+                            setGoldSplits((rows) =>
+                              rows.map((r, idx) =>
+                                idx === i ? { ...r, amount: e.target.value } : r,
+                              ),
+                            )
+                          }
+                          className={cn(
+                            "w-28",
+                            overflow && "border-destructive focus-visible:border-destructive",
+                          )}
+                        />
+                        {goldSplits.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              setGoldSplits((rows) =>
+                                rows.filter((_, idx) => idx !== i),
+                              )
+                            }
+                            aria-label="Remove split"
+                          >
+                            ×
+                          </Button>
+                        )}
+                      </div>
+                      {overflow ? (
+                        <p className="text-[11px] text-destructive">
+                          Exceeds available by ₹
+                          {overflow.over.toLocaleString("en-IN", {
+                            maximumFractionDigits: 2,
+                          })}{" "}
+                          ({overflow.label}: ₹
+                          {overflow.available.toLocaleString("en-IN")} available)
+                        </p>
+                      ) : meta && row.amount ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          {meta.label}: ₹
+                          {(
+                            goldEffectiveAvailable(row.source) ?? meta.available
+                          ).toLocaleString("en-IN")}{" "}
+                          available
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setGoldSplits((rows) => [
+                      ...rows,
+                      {
+                        source: "",
+                        // Pre-fill the new row with whatever's left to pay
+                        // so the user can just pick a source and submit.
+                        amount:
+                          remainingClean > 0
+                            ? String(Number(remainingClean.toFixed(2)))
+                            : "",
+                      },
+                    ])
+                  }
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  + Add another source
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">
-                Amount {isForeignCurrency ? "(₹ equivalent)" : "(₹)"}
+                {isGoldCreate
+                  ? "Total (from payments)"
+                  : `Amount ${isForeignCurrency ? "(₹ equivalent)" : "(₹)"}`}
               </span>
-              <AmountInput value={amount} onChange={setAmount} placeholder="0" />
+              <AmountInput
+                value={amount}
+                onChange={setAmount}
+                placeholder="0"
+                readOnly={isGoldCreate}
+                className={isGoldCreate ? "bg-muted/50" : undefined}
+              />
             </label>
             <label className="block">
               <span className="text-xs font-medium">Date</span>
               <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
           </div>
+
+          {creatingNew && (
+            <label className="block">
+              <span className="text-xs font-medium">
+                Locked until{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional — only the workspace owner can edit/delete
+                  before this date)
+                </span>
+              </span>
+              <DateInput
+                value={newLockedUntil}
+                onChange={(e) => {
+                  setNewLockedUntil(e.target.value);
+                  // Mark this value as user-supplied so the auto-fill
+                  // effect doesn't overwrite it on the next render.
+                  lockAutoAppliedRef.current = `${newKind}:${e.target.value}`;
+                }}
+              />
+            </label>
+          )}
 
           {isQtyBased && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2653,21 +3568,23 @@ function InvestmentForm({
         </>
       )}
 
-      <label className="block">
-        <span className="text-xs font-medium">
-          {action === "BUY" ? "Pay from" : "Deposit to"}
-        </span>
-        <div className="mt-1">
-          <NativeSelect
-            value={accountId}
-            onChange={setAccountId}
-            options={groupAccountOptions(
-              accounts,
-              action === "BUY" ? Number(amount) || 0 : 0,
-            )}
-          />
-        </div>
-      </label>
+      {!isGoldCreate && (
+        <label className="block">
+          <span className="text-xs font-medium">
+            {action === "BUY" ? "Pay from" : "Deposit to"}
+          </span>
+          <div className="mt-1">
+            <NativeSelect
+              value={accountId}
+              onChange={setAccountId}
+              options={groupAccountOptions(
+                accounts,
+                action === "BUY" ? Number(amount) || 0 : 0,
+              )}
+            />
+          </div>
+        </label>
+      )}
 
       <label className="block">
         <span className="text-xs font-medium">Description</span>
@@ -2692,7 +3609,13 @@ function InvestmentForm({
           Cancel
         </Button>
         <Button onClick={submit} disabled={submitting}>
-          {submitting ? "Saving…" : action === "BUY" ? "Record purchase" : "Record sale"}
+          {submitting
+            ? "Saving…"
+            : isEditing
+              ? "Update"
+              : action === "BUY"
+                ? "Record purchase"
+                : "Record sale"}
         </Button>
       </DialogFooter>
     </div>

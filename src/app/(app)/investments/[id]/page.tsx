@@ -4,6 +4,11 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessRecord } from "@/lib/permissions";
 import { formatINR, formatDate } from "@/lib/utils";
+import {
+  InvestmentTransactionHistory,
+  type InvestmentTxnRow,
+} from "@/components/investments/investment-transaction-history";
+import { InvestmentActions } from "@/components/investments/investment-actions";
 
 const KIND_LABEL: Record<string, string> = {
   STOCK: "Stock",
@@ -68,6 +73,8 @@ export default async function InvestmentDetailPage({
         date: true,
         type: true,
         investmentAction: true,
+        account: { select: { id: true, name: true, kind: true } },
+        card: { select: { id: true, name: true, last4: true } },
       },
     }),
     prisma.investmentReminder.findMany({
@@ -143,6 +150,21 @@ export default async function InvestmentDetailPage({
           >
             {statusInfo.label}
           </span>
+          {inv.lockedUntil &&
+            // eslint-disable-next-line react-hooks/purity -- server component, evaluated once per request
+            inv.lockedUntil.getTime() > Date.now() && (
+            <span
+              className="text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-400"
+              title={`Locked until ${formatDate(inv.lockedUntil)} — only the workspace owner can edit or delete.`}
+            >
+              Locked · {formatDate(inv.lockedUntil)}
+            </span>
+          )}
+          <InvestmentActions
+            investment={{ id: inv.id, name: inv.name }}
+            redirectAfterDelete="/investments"
+            className="ml-auto flex items-center gap-1"
+          />
         </div>
         <p className="text-xs uppercase tracking-widest text-muted-foreground">
           {KIND_LABEL[inv.kind] ?? inv.kind}
@@ -365,56 +387,18 @@ export default async function InvestmentDetailPage({
         </section>
       )}
 
-      <section className="rounded-lg border bg-card">
-        <header className="px-5 py-3 border-b">
-          <h2 className="text-sm font-semibold">Transaction history</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {transactions.length} {transactions.length === 1 ? "entry" : "entries"}
-          </p>
-        </header>
-        {transactions.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-            No transactions yet.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[28rem] text-sm">
-            <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b bg-muted/30">
-                <th className="px-5 py-2">Date</th>
-                <th className="px-5 py-2">Description</th>
-                <th className="px-5 py-2 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transactions.map((t) => {
-                const isOut = t.type === "EXPENSE" || t.investmentAction === "BUY";
-                return (
-                  <tr key={t.id} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
-                      {formatDate(t.date)}
-                    </td>
-                    <td className="px-5 py-2.5">
-                      <div className="font-medium truncate">{t.description}</div>
-                    </td>
-                    <td
-                      className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
-                        isOut
-                          ? "text-destructive"
-                          : "text-emerald-700 dark:text-emerald-400"
-                      }`}
-                    >
-                      {isOut ? "−" : "+"}
-                      {formatINR(Number(t.amount))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </section>
+      <InvestmentTransactionHistory
+        transactions={transactions.map<InvestmentTxnRow>((t) => ({
+          id: t.id,
+          type: t.type,
+          investmentAction: t.investmentAction,
+          amount: Number(t.amount),
+          date: t.date.toISOString(),
+          description: t.description,
+          account: t.account,
+          card: t.card,
+        }))}
+      />
     </div>
   );
 }
