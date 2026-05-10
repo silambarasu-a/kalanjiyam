@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { transactionCreateSchema } from "@/lib/validators-domain";
+import { lockErrorMessage } from "@/lib/investment-lock";
 import {
   TransactionType,
   MemberChargeType,
@@ -244,6 +245,14 @@ export async function POST(request: Request) {
       }
       if (!canAccessRecord(session, inv)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      // Hard-gate also covers new BUY/SELL on a locked holding —
+      // otherwise a Member could keep posting transactions and
+      // mutating Investment.amount even though they can't edit
+      // existing splits. OWNER bypass is in the helper.
+      const lockMsg = lockErrorMessage(inv, ctx.role, "edit");
+      if (lockMsg) {
+        return NextResponse.json({ error: lockMsg }, { status: 423 });
       }
       investmentForUpdate = {
         id: inv.id,

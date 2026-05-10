@@ -20,7 +20,12 @@
       "Bash(git mv *)",
       "Bash(grep -rn \"/api/family\\\\|href=\\\\\"/family\\\\|href=\\\\\"/members/\\\\${\\\\|href=\\\\`/members/\\\\${\\\\|href={\\\\`/members/\" src/ --include=\"*.ts\" --include=\"*.tsx\")",
       "Bash(grep -rn \"FamilyMember\\\\|FamilyPage\\\\|FamilyDialog\\\\|FamilyData\\\\|familyData\\\\|family={\\\\|family,\\\\|family:\\\\| family\\\\b\" src/ --include=\"*.ts\" --include=\"*.tsx\")",
-      "Read(//Users/silambu/Developer/Personal/Projects/kalanjiyam/**)"
+      "Read(//Users/silambu/Developer/Personal/Projects/kalanjiyam/**)",
+      "Bash(DATABASE_URL='postgresql://neondb_owner:npg_Vrv50OSPmEGw@ep-empty-dream-aoii9oyk-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' node scripts/inspect-investment.mjs)",
+      "Bash(cat)",
+      "Bash(DATABASE_URL='postgresql://neondb_owner:npg_Vrv50OSPmEGw@ep-empty-dream-aoii9oyk-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' node /tmp/check-enums.mjs)",
+      "Bash(DATABASE_URL='postgresql://neondb_owner:npg_Vrv50OSPmEGw@ep-empty-dream-aoii9oyk-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' node scripts/check-enums.mjs)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")"
     ]
   }
 }

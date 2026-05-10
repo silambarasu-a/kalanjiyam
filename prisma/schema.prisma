@@ -1024,6 +1024,13 @@ model Investment {
   riders               String?
   /** Kind-specific structured extras (e.g. for GOLD: { type, purity, wastage, making, gst }). */
   metadata             Json?
+  /** Hard-gate edit/delete. Until this date passes, only the workspace
+   * Owner can modify or remove the holding. Auto-defaults on create:
+   *   FD/RD     → maturityAt
+   *   SIP       → startedAt + 3y (ELSS-like default; user can clear)
+   *   INSURANCE → startedAt + 5y when policyType = ULIP, else null
+   *   others    → null. */
+  lockedUntil          DateTime?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 

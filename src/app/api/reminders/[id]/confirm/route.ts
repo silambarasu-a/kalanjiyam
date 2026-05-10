@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { reminderConfirmSchema } from "@/lib/validators-domain";
+import { lockErrorMessage } from "@/lib/investment-lock";
 import {
   ReminderKind,
   ReminderStatus,
@@ -44,6 +45,15 @@ export async function POST(
     }
     if (reminder.status !== "UPCOMING") {
       return NextResponse.json({ error: "Already processed" }, { status: 400 });
+    }
+    // Confirming a reminder posts a BUY/INCOME txn against the linked
+    // investment and updates Investment.amount or currentValue. Locked
+    // holdings refuse this for non-OWNERs — same gate as PATCH/DELETE.
+    if (reminder.investment) {
+      const lockMsg = lockErrorMessage(reminder.investment, ctx.role, "edit");
+      if (lockMsg) {
+        return NextResponse.json({ error: lockMsg }, { status: 423 });
+      }
     }
     const body = await request.json();
     const parsed = reminderConfirmSchema.safeParse(body);
