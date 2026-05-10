@@ -46,6 +46,10 @@ export type DashboardCashflow = {
   currentMonthDueGross: number;
   currentMonthDuePaid: number;
   currentMonthDueRemaining: number;
+  /** Current-month dues excluding CARD_STATEMENT entries, so the Liquid
+   * tile can subtract `cardOutstanding` (which already reflects every
+   * card charge, billed or not) without double-counting card bills. */
+  currentMonthNonCardDueRemaining: number;
   nextMonthDue: number;
 };
 
@@ -700,12 +704,15 @@ export async function getDashboardCashflow(args: {
   // ── MONTHLY TOTALS ────────────────────────────────────────────────
   const nextMonthStart = nextMonthBegin.getTime();
   let currentMonthDueRemaining = 0;
+  let currentMonthNonCardDueRemaining = 0;
   let nextMonthDue = 0;
   for (const d of visibleDues) {
     if (d.amount == null) continue;
     const t = new Date(d.dueDate).getTime();
-    if (t < nextMonthStart) currentMonthDueRemaining += d.amount;
-    else nextMonthDue += d.amount;
+    if (t < nextMonthStart) {
+      currentMonthDueRemaining += d.amount;
+      if (d.source !== "CARD_STATEMENT") currentMonthNonCardDueRemaining += d.amount;
+    } else nextMonthDue += d.amount;
   }
   const currentMonthDueGross = currentMonthDuePaid + currentMonthDueRemaining;
 
@@ -715,6 +722,7 @@ export async function getDashboardCashflow(args: {
     currentMonthDueGross,
     currentMonthDuePaid,
     currentMonthDueRemaining,
+    currentMonthNonCardDueRemaining,
     nextMonthDue,
   };
 }

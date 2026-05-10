@@ -71,6 +71,7 @@ type Cashflow = {
   currentMonthDueGross: number;
   currentMonthDuePaid: number;
   currentMonthDueRemaining: number;
+  currentMonthNonCardDueRemaining: number;
   nextMonthDue: number;
 };
 
@@ -212,13 +213,18 @@ export default function DashboardPage() {
           label="Liquid"
           value={stats ? formatINR(stats.liquid) : "—"}
           change={
-            stats && cashflow && cashflow.currentMonthDueRemaining > 0
+            stats &&
+            cashflow &&
+            (stats.cardOutstanding > 0 ||
+              cashflow.currentMonthNonCardDueRemaining > 0)
               ? (() => {
                   const net =
-                    stats.liquid - cashflow.currentMonthDueRemaining;
+                    stats.liquid -
+                    stats.cardOutstanding -
+                    cashflow.currentMonthNonCardDueRemaining;
                   const sign = net < 0 ? "−" : "";
                   return {
-                    value: `${sign}${formatINR(Math.abs(net))} after this month's dues`,
+                    value: `${sign}${formatINR(Math.abs(net))} after card + this month's dues`,
                     tone: net >= 0 ? "gain" : "loss",
                   } as const;
                 })()
