@@ -150,16 +150,6 @@ export default async function InvestmentDetailPage({
           >
             {statusInfo.label}
           </span>
-          {inv.lockedUntil &&
-            // eslint-disable-next-line react-hooks/purity -- server component, evaluated once per request
-            inv.lockedUntil.getTime() > Date.now() && (
-            <span
-              className="text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-400"
-              title={`Locked until ${formatDate(inv.lockedUntil)} — only the workspace owner can edit or delete.`}
-            >
-              Locked · {formatDate(inv.lockedUntil)}
-            </span>
-          )}
           <InvestmentActions
             investment={{ id: inv.id, name: inv.name }}
             redirectAfterDelete="/investments"

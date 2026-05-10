@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { investmentUpdateSchema } from "@/lib/validators-domain";
-import { lockErrorMessage } from "@/lib/investment-lock";
+import { checkDayWindowEditAllowed } from "@/lib/transaction-edit-lock";
 import {
   TransactionType,
   InvestmentAction,
@@ -81,7 +81,6 @@ export async function GET(
         fdStatus: inv.fdStatus,
         compoundingFrequency: inv.compoundingFrequency,
         metadata: inv.metadata ?? null,
-        lockedUntil: inv.lockedUntil?.toISOString() ?? null,
       },
       transactions: transactions.map((t) => ({
         id: t.id,
@@ -132,9 +131,24 @@ export async function PATCH(
     }
     const data = parsed.data;
 
+    // Day-window lock — same rule the rest of the app uses for editing
+    // older records. The investment's `startedAt` is the anchor: after the
+    // workspace's edit window passes, only OWNER/ADMIN can edit (with a
+    // `force: true` flag). Members get a 423 with the standard message.
     {
-      const lockMsg = lockErrorMessage(inv, ctx.role, "edit");
-      if (lockMsg) return NextResponse.json({ error: lockMsg }, { status: 423 });
+      const lock = await checkDayWindowEditAllowed({
+        date: inv.startedAt,
+        workspaceId: inv.workspaceId,
+        role: ctx.role,
+        force: body?.force === true,
+        entityName: "investment",
+      });
+      if (!lock.ok) {
+        return NextResponse.json(
+          { error: lock.message, canForce: lock.canForce },
+          { status: lock.status },
+        );
+      }
     }
 
     // When `splits` is supplied, the caller is editing the full holding —
@@ -252,14 +266,6 @@ export async function PATCH(
             data.metadata !== undefined
               ? (data.metadata as Prisma.InputJsonValue | null) ?? Prisma.JsonNull
               : (inv.metadata ?? Prisma.JsonNull),
-          // OWNER can extend or clear the lock here. Other roles never reach
-          // this branch — the 423 check above blocks them.
-          lockedUntil:
-            data.lockedUntil === undefined
-              ? inv.lockedUntil
-              : data.lockedUntil
-                ? new Date(data.lockedUntil)
-                : null,
         },
       });
     });
@@ -270,7 +276,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -284,9 +290,24 @@ export async function DELETE(
     if (!canModifyRecord(session, inv)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+    // Day-window lock for delete (matches PATCH). DELETE has no body,
+    // so the force-override is passed via `?force=1` query string.
     {
-      const lockMsg = lockErrorMessage(inv, ctx.role, "delete");
-      if (lockMsg) return NextResponse.json({ error: lockMsg }, { status: 423 });
+      const force =
+        new URL(request.url).searchParams.get("force") === "1";
+      const lock = await checkDayWindowEditAllowed({
+        date: inv.startedAt,
+        workspaceId: inv.workspaceId,
+        role: ctx.role,
+        force,
+        entityName: "investment",
+      });
+      if (!lock.ok) {
+        return NextResponse.json(
+          { error: lock.message, canForce: lock.canForce },
+          { status: lock.status },
+        );
+      }
     }
     // Cascade-delete linked transactions first so the holding can be
     // removed cleanly. The Transaction.investmentId FK is `onDelete:
