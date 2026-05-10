@@ -56,9 +56,12 @@ export async function GET(request: Request) {
       by: ["cardId"],
       where: {
         cardId: { in: ids },
-        type: "EXPENSE",
         transferId: null,
         date: { gte: rangeStart, lte: rangeEnd },
+        OR: [
+          { type: "EXPENSE" },
+          { type: "INVESTMENT", investmentAction: "BUY" },
+        ],
       },
       _sum: { amount: true },
       _count: { _all: true },

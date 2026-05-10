@@ -119,16 +119,21 @@ export function cardStatementPeriods(
 }
 
 /**
- * Next EMI due date for a credit-card-billed loan, strictly after `after`.
+ * Due date of the billing cycle that BILLS a transaction posted on `after`.
  *
- * Credit card loans are repaid through the card's monthly statement: each
+ * Credit-card loans are repaid through the card's monthly statement: each
  * billing cycle closes on day `statementDate` and the bill is due
- * `gracePeriod` days later. Walk forward from the previous month's close
- * (so the current cycle's already-generated bill is considered) until we
- * find a due date strictly after `after`, then return it.
+ * `gracePeriod` days later. The cycle that bills `after` ends on the first
+ * sd-of-month ≥ `after.day` — if `after.day` is already past this month's
+ * close, the bill has been generated and the transaction lands on the next
+ * cycle's bill instead.
  *
- * Example: statementDate=13, gracePeriod=20, after=Apr 28 →
- *   Mar 13 close → Apr 2 due (past), Apr 13 close → May 3 due ✓
+ * Example: statementDate=13, gracePeriod=20
+ *   after=Apr 28 → already past Apr 13 close, so cycle [Apr 14 — May 13]
+ *                  closes May 13 → due Jun 2 ✓
+ *   after=May 4  → still inside cycle [Apr 14 — May 13]   → due Jun 2 ✓
+ *   after=May 13 → tx on close day bills on that day's cut → due Jun 2 ✓
+ *   after=May 14 → already past May 13 close, next cycle  → due Jul 3 ✓
  */
 export function nextStatementDueDate(
   after: Date,
@@ -137,35 +142,24 @@ export function nextStatementDueDate(
 ): Date {
   const sd = Math.max(1, Math.min(31, statementDate));
   const grace = Math.max(0, gracePeriod);
-  const afterDayUtc = Date.UTC(
-    after.getUTCFullYear(),
-    after.getUTCMonth(),
-    after.getUTCDate(),
-  );
-  // Start one cycle back so the current month's bill (closed earlier this
-  // month) gets evaluated before advancing.
   let y = after.getUTCFullYear();
-  let m = after.getUTCMonth() - 1;
-  if (m < 0) {
-    m = 11;
-    y -= 1;
-  }
-  for (let i = 0; i < 4; i++) {
-    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const close = new Date(Date.UTC(y, m, Math.min(sd, lastDay)));
-    const due = new Date(close);
-    due.setUTCDate(due.getUTCDate() + grace);
-    if (due.getTime() > afterDayUtc) return due;
+  let m = after.getUTCMonth();
+  const d = after.getUTCDate();
+  // If `after` is past this month's close, the bill is already generated —
+  // roll forward to next month so the transaction lands on the next cycle.
+  const closeThisMonth = Math.min(sd, new Date(Date.UTC(y, m + 1, 0)).getUTCDate());
+  if (d > closeThisMonth) {
     m += 1;
     if (m > 11) {
       m = 0;
       y += 1;
     }
   }
-  // Unreachable for sane inputs; satisfies the type checker.
-  const fallback = new Date(after);
-  fallback.setUTCMonth(fallback.getUTCMonth() + 1);
-  return fallback;
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const close = new Date(Date.UTC(y, m, Math.min(sd, lastDay)));
+  const due = new Date(close);
+  due.setUTCDate(due.getUTCDate() + grace);
+  return due;
 }
 
 /** Parse a period id from the URL search param into a {start, end} pair. */
