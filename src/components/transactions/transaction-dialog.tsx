@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw, RotateCcw } from "lucide-react";
@@ -1704,10 +1704,6 @@ function InvestmentForm({
   const [newGoldSgstMode, setNewGoldSgstMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
   // Bill-level round-off (negative = round-down, positive = round-up).
   const [newGoldRoundOff, setNewGoldRoundOff] = useState("");
-  // Hard-gate edit/delete until this date passes. Auto-fills based on
-  // kind (FD/RD = maturityAt, SIP = +3y, ULIP = +5y) — user can clear or
-  // override. Empty string means no lock.
-  const [newLockedUntil, setNewLockedUntil] = useState("");
   // Ornament composition. The bill's gross weight is what the scale shows;
   // every entry in `stones` is one non-gold inclusion (diamond, ruby,
   // kundan, …) with its own weight + charge. Net gold = gross − Σ stone
@@ -1751,7 +1747,6 @@ function InvestmentForm({
       startedAt: string;
       notes: string | null;
       metadata: Record<string, unknown> | null;
-      lockedUntil: string | null;
       // Kind-specific fields pre-filled on edit so the form doesn't
       // silently drop them on re-save.
       symbol: string | null;
@@ -1994,36 +1989,7 @@ function InvestmentForm({
     setQuantity(net > 0 ? Number(net.toFixed(3)).toString() : "");
   }, [isGoldCreate, newGoldType, newGoldGrossWeight, newGoldStones]);
 
-  // Auto-propose a lock-until date when the user picks a kind that has a
-  // statutory or natural lock period: FD/RD lock to maturity, SIP defaults
-  // to a 3-year ELSS-style window, INSURANCE+ULIP locks for 5 years. The
-  // ref ensures we only auto-apply once per (kind, computed-date) pair so
-  // a deliberate clear by the user isn't refilled on the next render —
-  // but a fresh trigger change (e.g. picking a new maturity date) does
-  // re-propose.
-  const lockAutoAppliedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!creatingNew || isEditing) return;
-    let computed: string | null = null;
-    if ((newKind === "FD" || newKind === "RD") && newMaturityAt) {
-      computed = newMaturityAt;
-    } else if (newKind === "SIP" && date) {
-      const d = new Date(date);
-      d.setFullYear(d.getFullYear() + 3);
-      computed = d.toISOString().slice(0, 10);
-    } else if (newKind === "INSURANCE" && newPolicyType === "ULIP" && date) {
-      const d = new Date(date);
-      d.setFullYear(d.getFullYear() + 5);
-      computed = d.toISOString().slice(0, 10);
-    }
-    if (!computed) return;
-    const key = `${newKind}:${computed}`;
-    if (lockAutoAppliedRef.current === key) return;
-    lockAutoAppliedRef.current = key;
-    setNewLockedUntil(computed);
-  }, [creatingNew, isEditing, newKind, newMaturityAt, newPolicyType, date]);
-
-  // Stone-row derivations — carats is the bill's natural unit so we let
+// Stone-row derivations — carats is the bill's natural unit so we let
   // it drive both grams (1ct = 0.2g) and charge (carats × ratePerCt).
   // Weight is filled one-shot when empty so the user can override; charge
   // is recomputed whenever both carats + rate are non-zero so the
@@ -2070,7 +2036,6 @@ function InvestmentForm({
     setPrice(inv.purchasePrice != null ? String(inv.purchasePrice) : "");
     setDate(inv.startedAt.slice(0, 10));
     setDescription(inv.notes ?? "");
-    setNewLockedUntil(inv.lockedUntil ? inv.lockedUntil.slice(0, 10) : "");
 
     // Kind-specific common fields. Loaded for every kind so re-saving a
     // non-gold edit doesn't blank out things the form's submit body would
@@ -2471,10 +2436,6 @@ function InvestmentForm({
                   };
                 })
               : undefined,
-            // Empty string = no lock; non-empty = lock-until date. On
-            // create, the backend also auto-defaults this for FD/RD/SIP/
-            // ULIP if we send null.
-            lockedUntil: newLockedUntil ? newLockedUntil : isEditing ? null : undefined,
             isExisting: false,
             }),
           },
@@ -3437,27 +3398,6 @@ function InvestmentForm({
               <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
           </div>
-
-          {creatingNew && (
-            <label className="block">
-              <span className="text-xs font-medium">
-                Locked until{" "}
-                <span className="font-normal text-muted-foreground">
-                  (optional — only the workspace owner can edit/delete
-                  before this date)
-                </span>
-              </span>
-              <DateInput
-                value={newLockedUntil}
-                onChange={(e) => {
-                  setNewLockedUntil(e.target.value);
-                  // Mark this value as user-supplied so the auto-fill
-                  // effect doesn't overwrite it on the next render.
-                  lockAutoAppliedRef.current = `${newKind}:${e.target.value}`;
-                }}
-              />
-            </label>
-          )}
 
           {isQtyBased && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

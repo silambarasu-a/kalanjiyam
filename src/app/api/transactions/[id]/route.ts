@@ -15,7 +15,6 @@ import {
   type LoanFrequency,
 } from "@/lib/loan-math";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
-import { lockErrorMessage } from "@/lib/investment-lock";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -30,11 +29,6 @@ async function loadOwnership(transactionId: string) {
     include: {
       account: { select: { ownerUserId: true, sharedWithUserIds: true } },
       card: { select: { ownerUserId: true, sharedWithUserIds: true } },
-      // Surface the linked investment's lock so PATCH/DELETE can enforce
-      // it before allowing a per-split edit. Without this check Members
-      // could bypass `Investment.lockedUntil` by deleting individual
-      // split transactions directly.
-      investment: { select: { lockedUntil: true } },
     },
   });
   if (!t) return null;
@@ -45,7 +39,6 @@ async function loadOwnership(transactionId: string) {
       sharedWithUserIds:
         t.account?.sharedWithUserIds ?? t.card?.sharedWithUserIds ?? [],
     },
-    investmentLock: t.investment ? { lockedUntil: t.investment.lockedUntil } : null,
   };
 }
 
@@ -64,11 +57,7 @@ export async function PATCH(
     if (!canModifyRecord(session, loaded.ownership)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (loaded.investmentLock) {
-      const lockMsg = lockErrorMessage(loaded.investmentLock, ctx.role, "edit");
-      if (lockMsg) return NextResponse.json({ error: lockMsg }, { status: 423 });
-    }
-    const body = await request.json();
+const body = await request.json();
     const parsed = transactionUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
@@ -279,11 +268,7 @@ export async function DELETE(
     if (!canModifyRecord(session, loaded.ownership)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (loaded.investmentLock) {
-      const lockMsg = lockErrorMessage(loaded.investmentLock, ctx.role, "delete");
-      if (lockMsg) return NextResponse.json({ error: lockMsg }, { status: 423 });
-    }
-    // Edit-window check. DELETE uses ?force=1 since there's no body.
+// Edit-window check. DELETE uses ?force=1 since there's no body.
     const force =
       new URL(request.url).searchParams.get("force") === "1";
     const lock = await checkTransactionEditAllowed({

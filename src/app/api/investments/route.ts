@@ -68,7 +68,6 @@ export async function GET(request: Request) {
         nextDueDate: i.nextDueDate?.toISOString() ?? null,
         nominee: i.nominee,
         metadata: i.metadata ?? null,
-        lockedUntil: i.lockedUntil?.toISOString() ?? null,
         ownerUser: i.ownerUser,
       })),
     });
@@ -133,28 +132,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Default lock-until based on kind unless the caller supplied one.
-    // FD/RD lock to maturityAt; SIP defaults to a 3y ELSS-style window;
-    // INSURANCE locks to startedAt+5y only when policyType = ULIP.
-    const startedAtDate = new Date(data.startedAt);
-    const addYears = (d: Date, n: number) => {
-      const c = new Date(d);
-      c.setFullYear(c.getFullYear() + n);
-      return c;
-    };
-    let lockedUntil: Date | null = data.lockedUntil
-      ? new Date(data.lockedUntil)
-      : null;
-    if (lockedUntil == null) {
-      if ((data.kind === "FD" || data.kind === "RD") && data.maturityAt) {
-        lockedUntil = new Date(data.maturityAt);
-      } else if (data.kind === "SIP") {
-        lockedUntil = addYears(startedAtDate, 3);
-      } else if (data.kind === "INSURANCE" && data.policyType === "ULIP") {
-        lockedUntil = addYears(startedAtDate, 5);
-      }
-    }
-
     const investment = await prisma.$transaction(async (tx) => {
       const inv = await tx.investment.create({
         data: {
@@ -166,7 +143,7 @@ export async function POST(request: Request) {
           amount: data.amount,
           currentValue: data.currentValue ?? null,
           interestRate: data.interestRate ?? null,
-          startedAt: startedAtDate,
+          startedAt: new Date(data.startedAt),
           maturityAt: data.maturityAt ? new Date(data.maturityAt) : null,
           notes: data.notes,
           symbol: data.symbol,
@@ -184,7 +161,6 @@ export async function POST(request: Request) {
           nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : null,
           nominee: data.nominee,
           metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined,
-          lockedUntil,
         },
       });
 

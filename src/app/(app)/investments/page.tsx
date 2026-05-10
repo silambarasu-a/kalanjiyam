@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import {
@@ -38,7 +38,6 @@ type Investment = {
   premiumFrequency: string | null;
   nextDueDate: string | null;
   notes: string | null;
-  lockedUntil: string | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -62,16 +61,6 @@ export default function InvestmentsPage() {
   const { openDialog } = useTransactionDialog();
 
   const investments = useMemo(() => data?.investments ?? [], [data]);
-  // Stable reference for "now" — captured after mount because the
-  // react-hooks/purity rule forbids `Date.now()` in render or useMemo.
-  // Initial value is +∞ so lockedUntil < nowMs on the first paint and
-  // the Locked badge stays hidden until the effect runs (one render
-  // later). That avoids a flicker where stale locks would briefly show.
-  const [nowMs, setNowMs] = useState(Number.MAX_SAFE_INTEGER);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot capture of `now` after mount; can't call Date.now() in render under the purity rule
-    setNowMs(Date.now());
-  }, []);
 
   const { data: rateData } = useSWR<{ rate: number }>("/api/market/rate", fetcher);
   const usdInrRate = rateData?.rate ?? 84;
@@ -250,15 +239,6 @@ export default function InvestmentsPage() {
                         USD
                       </span>
                     )}
-                    {i.lockedUntil &&
-                      new Date(i.lockedUntil).getTime() > nowMs && (
-                        <span
-                          className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
-                          title={`Locked until ${formatDate(i.lockedUntil)} — only the workspace owner can edit or delete.`}
-                        >
-                          Locked
-                        </span>
-                      )}
                   </div>
                   <div className="mt-0.5 text-xs text-muted-foreground truncate">
                     {i.institution ? `${i.institution} · ` : ""}

@@ -596,8 +596,6 @@ const investmentCreateBase = z.object({
   nominee: z.string().trim().max(120).optional(),
   /** Kind-specific structured extras (e.g. for GOLD: type, purity, wastage, making, gst). */
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
-  /** Hard-gate lock — see schema. ISO date string from the form. */
-  lockedUntil: z.string().optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   /**
    * Optional split-payment list. When present, replaces `accountId` — a BUY
