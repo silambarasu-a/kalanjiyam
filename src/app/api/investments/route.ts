@@ -161,6 +161,18 @@ export async function POST(request: Request) {
           nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : null,
           nominee: data.nominee,
           metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined,
+          vehicleId: data.vehicleId ?? null,
+          policyTermYears: data.policyTermYears ?? null,
+          premiumPayingTermYears: data.premiumPayingTermYears ?? null,
+          maturityValue: data.maturityValue ?? null,
+          bonusAccrued: data.bonusAccrued ?? null,
+          bonusLastRevisedAt: data.bonusLastRevisedAt
+            ? new Date(data.bonusLastRevisedAt)
+            : null,
+          ridersJson:
+            data.ridersJson != null
+              ? (data.ridersJson as Prisma.InputJsonValue)
+              : undefined,
         },
       });
 
@@ -189,6 +201,8 @@ export async function POST(request: Request) {
                 cardId: s.cardId ?? null,
                 investmentId: inv.id,
                 investmentAction: InvestmentAction.BUY,
+                goldForm:
+                  data.kind === "GOLD" && data.goldForm ? data.goldForm : null,
                 userId: ctx.userId,
                 createdByUserId: ctx.userId,
               };
@@ -207,6 +221,7 @@ export async function POST(request: Request) {
               investmentAction: InvestmentAction.BUY,
               investmentQty: data.quantity ?? null,
               investmentPrice: data.purchasePrice ?? null,
+              goldForm: data.kind === "GOLD" && data.goldForm ? data.goldForm : null,
               userId: ctx.userId,
               createdByUserId: ctx.userId,
             },
@@ -233,6 +248,11 @@ export async function POST(request: Request) {
         });
       }
       if (data.kind === "INSURANCE" && data.premiumFrequency && data.nextDueDate) {
+        // Policy-level reminders are created here at policy creation time.
+        // When per-member premium overrides are later added via
+        // POST /api/insurance/[id]/members, additional per-member reminders
+        // are layered on top. UI surfaces both streams; deduplication is
+        // deferred until Phase 7 (notifications) consolidates them.
         const dates = computeReminderSchedule({
           firstDueDate: new Date(data.nextDueDate),
           frequency: data.premiumFrequency as PremiumFrequency,

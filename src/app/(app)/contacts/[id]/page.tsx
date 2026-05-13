@@ -97,10 +97,32 @@ export default function MemberLedgerDetail() {
   const { data } = useSWR<Ledger>(id ? `/api/contacts/${id}/ledger` : null, fetcher);
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
+  const { data: medicalData } = useSWR<{
+    hospitalizations: {
+      id: string;
+      hospitalName: string;
+      diagnosis: string | null;
+      admittedAt: string;
+      dischargedAt: string | null;
+      claim: { status: string } | null;
+      transactionCount: number;
+    }[];
+  }>(id ? `/api/hospitalizations?patientContactId=${id}` : null, fetcher);
+  const episodes = medicalData?.hospitalizations ?? [];
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
   const [transferOpen, setTransferOpen] = useState<"SEND" | "RECEIVE" | null>(null);
 
   if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!data.member) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Contact not found.{" "}
+        <Link href="/contacts" className="underline">
+          Back to contacts
+        </Link>
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -171,6 +193,14 @@ export default function MemberLedgerDetail() {
               Spent on them
               <span className="ml-1 text-[10px] text-muted-foreground">
                 ({data.expenses.length})
+              </span>
+            </TabsTrigger>
+          )}
+          {episodes.length > 0 && (
+            <TabsTrigger value="medical">
+              Medical
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                ({episodes.length})
               </span>
             </TabsTrigger>
           )}
@@ -398,6 +428,43 @@ export default function MemberLedgerDetail() {
                     {formatINR(e.amount)}
                   </div>
                 </div>
+              ))}
+            </div>
+          </TabsContent>
+        )}
+
+        {episodes.length > 0 && (
+          <TabsContent value="medical">
+            <div className="rounded-lg border bg-card divide-y">
+              {episodes.map((h) => (
+                <Link
+                  key={h.id}
+                  href={`/medical/${h.id}`}
+                  className="flex items-start justify-between gap-3 px-5 py-3 hover:bg-muted/40"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{h.hospitalName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Admitted {formatDate(h.admittedAt)}
+                      {h.dischargedAt
+                        ? ` · Discharged ${formatDate(h.dischargedAt)}`
+                        : " · Ongoing"}
+                      {h.diagnosis ? ` · ${h.diagnosis}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {h.claim && (
+                      <span className="rounded-full border px-2 py-0.5 uppercase tracking-wide">
+                        claim · {h.claim.status.replace("_", " ").toLowerCase()}
+                      </span>
+                    )}
+                    {h.transactionCount > 0 && (
+                      <span>
+                        {h.transactionCount} bill{h.transactionCount === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                </Link>
               ))}
             </div>
           </TabsContent>

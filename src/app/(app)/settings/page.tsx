@@ -56,6 +56,7 @@ export default function ProfilePage() {
         <>
           <IdentityCard profile={data} />
           <PasswordCard />
+          <EmailNotificationsCard />
           <WorkspacesCard profile={data} />
         </>
       )}
@@ -441,5 +442,137 @@ function RoleChip({ role }: { role: Profile["workspaces"][number]["role"] }) {
     >
       {role}
     </span>
+  );
+}
+
+type EmailPrefs = {
+  enabled?: boolean;
+  kinds?: string[];
+};
+
+const NOTIFICATION_KIND_LABELS: Record<string, string> = {
+  PREMIUM_DUE_SOON: "Premium due soon",
+  PREMIUM_OVERDUE: "Premium overdue",
+  POLICY_RENEWING: "Policy renewing",
+  CLAIM_STATUS_CHANGED: "Claim status changed",
+  CARD_STATEMENT_DUE: "Card statement due",
+  LOAN_EMI_DUE: "Loan EMI due",
+  GENERIC: "Other reminders",
+};
+
+function EmailNotificationsCard() {
+  const { data, isLoading } = useSWR<{ emailPrefs: EmailPrefs }>(
+    "/api/settings/email-prefs",
+    fetcher,
+  );
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [kinds, setKinds] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!data) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- sync server-supplied prefs once */
+    setEnabled(!!data.emailPrefs.enabled);
+    setKinds(new Set(data.emailPrefs.kinds ?? []));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [data]);
+
+  const current = enabled ?? !!data?.emailPrefs.enabled;
+  const allKinds = Object.keys(NOTIFICATION_KIND_LABELS);
+  const allSelected = current && (kinds.size === 0 || kinds.size === allKinds.length);
+
+  async function save(nextEnabled: boolean, nextKinds: string[]) {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings/email-prefs", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: nextEnabled, kinds: nextKinds }),
+      });
+      if (res.ok) {
+        toast.success("Email preferences saved");
+        globalMutate("/api/settings/email-prefs");
+      } else {
+        const b = await res.json().catch(() => ({}));
+        toast.error(b.error ?? "Failed to save");
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (isLoading || !data) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-2xl border bg-card p-6 space-y-4">
+      <div>
+        <h2 className="text-base font-semibold">Email notifications</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          When something in your inbox needs attention — premium dues, claim
+          updates — we&apos;ll email you too. Off by default. Requires the admin
+          to have configured email delivery (RESEND_API_KEY).
+        </p>
+      </div>
+      <label className="flex items-center gap-3 text-sm">
+        <input
+          type="checkbox"
+          checked={current}
+          onChange={(e) => {
+            const v = e.target.checked;
+            setEnabled(v);
+            void save(v, [...kinds]);
+          }}
+          disabled={saving}
+        />
+        <span>Send me email when something is due or changes</span>
+      </label>
+      {current && (
+        <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium">Which kinds?</span>
+            <button
+              type="button"
+              className="text-muted-foreground underline"
+              onClick={() => {
+                const next = allSelected ? allKinds : [];
+                setKinds(new Set(next));
+                void save(true, next);
+              }}
+            >
+              {allSelected ? "Select none" : "Select all"}
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+            {allKinds.map((k) => {
+              const on = kinds.size === 0 || kinds.has(k);
+              return (
+                <label key={k} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(e) => {
+                      const next = new Set(
+                        kinds.size === 0 ? allKinds : Array.from(kinds),
+                      );
+                      if (e.target.checked) next.add(k);
+                      else next.delete(k);
+                      setKinds(next);
+                      void save(true, [...next]);
+                    }}
+                    disabled={saving}
+                  />
+                  <span>{NOTIFICATION_KIND_LABELS[k]}</span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Leave all checked to receive every kind.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }

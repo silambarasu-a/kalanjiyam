@@ -240,6 +240,20 @@ const body = await request.json();
             parsed.data.memberChargeType !== undefined
               ? (parsed.data.memberChargeType as MemberChargeType)
               : t.memberChargeType,
+          vehicleId:
+            parsed.data.vehicleId === undefined ? t.vehicleId : parsed.data.vehicleId,
+          claimId:
+            parsed.data.claimId === undefined ? t.claimId : parsed.data.claimId,
+          hospitalizationId:
+            parsed.data.hospitalizationId === undefined
+              ? t.hospitalizationId
+              : parsed.data.hospitalizationId,
+          hospitalizationStage:
+            parsed.data.hospitalizationStage === undefined
+              ? t.hospitalizationStage
+              : parsed.data.hospitalizationStage,
+          goldForm:
+            parsed.data.goldForm === undefined ? t.goldForm : parsed.data.goldForm,
           editNote: parsed.data.editNote ?? null,
           editedAt: new Date(),
           editedByUserId: ctx.userId,

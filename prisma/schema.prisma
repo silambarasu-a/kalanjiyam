@@ -143,6 +143,55 @@ enum InsuranceStatus {
   CLAIMED
 }
 
+enum ClaimStatus {
+  FILED
+  INTIMATED
+  UNDER_REVIEW
+  APPROVED
+  PARTIALLY_APPROVED
+  REJECTED
+  PAID
+  CLOSED
+}
+
+enum VehicleKind {
+  BIKE
+  CAR
+  TRACTOR
+  TRUCK
+  SCOOTER
+  OTHER
+}
+
+enum InsuredMemberRole {
+  INSURED
+  BENEFICIARY
+}
+
+enum HospitalizationStage {
+  PRE
+  DURING
+  POST
+}
+
+enum GoldForm {
+  ORNAMENT
+  COIN
+  BAR
+  BISCUIT
+  JEWELLERY_MAKING
+}
+
+enum NotificationKind {
+  PREMIUM_DUE_SOON
+  PREMIUM_OVERDUE
+  POLICY_RENEWING
+  CLAIM_STATUS_CHANGED
+  CARD_STATEMENT_DUE
+  LOAN_EMI_DUE
+  GENERIC
+}
+
 enum PremiumFrequency {
   MONTHLY
   QUARTERLY
@@ -254,60 +303,66 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   contactProfile          Contact?
 
-  ownedAccounts           Account[]       @relation("AccountOwner")
-  ownedCards              Card[]          @relation("CardOwner")
-  ownedLoans              Loan[]          @relation("LoanOwner")
-  ownedInvestments        Investment[]    @relation("InvestmentOwner")
-  ownedStockWishlist      StockWishlist[] @relation("StockWishlistOwner")
-  transactions            Transaction[]   @relation("TransactionAuthor")
-  createdTransactions     Transaction[]   @relation("TransactionCreatedBy")
-  editedTransactions      Transaction[]   @relation("TransactionEditedBy")
-  wagePayments            WagePayment[]
-  wageSettlements         WageSettlement[]
+  ownedAccounts             Account[]          @relation("AccountOwner")
+  ownedCards                Card[]             @relation("CardOwner")
+  ownedLoans                Loan[]             @relation("LoanOwner")
+  ownedInvestments          Investment[]       @relation("InvestmentOwner")
+  ownedStockWishlist        StockWishlist[]    @relation("StockWishlistOwner")
+  transactions              Transaction[]      @relation("TransactionAuthor")
+  createdTransactions       Transaction[]      @relation("TransactionCreatedBy")
+  editedTransactions        Transaction[]      @relation("TransactionEditedBy")
+  wagePayments              WagePayment[]
+  wageSettlements           WageSettlement[]
   receivedAdvanceRepayments AdvanceRepayment[] @relation("AdvanceRepaymentReceiver")
   reversedAdvanceRepayments AdvanceRepayment[] @relation("AdvanceRepaymentReverser")
-  transfers               Transfer[]      @relation("TransferAuthor")
-  auditLogs               AuditLog[]
-  sentWorkspaceInvites    WorkspaceInvite[] @relation("WorkspaceInviteInviter")
+  transfers                 Transfer[]         @relation("TransferAuthor")
+  auditLogs                 AuditLog[]
+  sentWorkspaceInvites      WorkspaceInvite[]  @relation("WorkspaceInviteInviter")
+  notifications             Notification[]
 
   @@index([email])
 }
 
 model Workspace {
-  id           String   @id @default(uuid())
-  name         String
-  slug         String?  @unique
-  ownerUserId  String
-  owner        User     @relation("WorkspaceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  id                        String   @id @default(uuid())
+  name                      String
+  slug                      String?  @unique
+  ownerUserId               String
+  owner                     User     @relation("WorkspaceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
   // How many days a non-card transaction stays editable from its date.
   // Card-account transactions follow a different rule (locked once their
   // billing period closes into a CardStatement). 0 disables the window.
-  transactionEditWindowDays Int @default(30)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  transactionEditWindowDays Int      @default(30)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 
-  members              WorkspaceMember[]
-  invites              WorkspaceInvite[]
-  activeForUsers       User[]               @relation("UserActiveWorkspace")
-  contacts             Contact[]
-  categories           Category[]
-  accounts             Account[]
-  cards                Card[]
-  cardStatements       CardStatement[]
-  transactions         Transaction[]
-  transfers            Transfer[]
-  memberCharges        MemberCharge[]
-  lands                Land[]
-  crops                Crop[]
-  livestock            Livestock[]
-  leases               Lease[]
-  workers              Worker[]
-  advanceRepayments    AdvanceRepayment[]
-  loans                Loan[]
-  investments          Investment[]
-  investmentReminders  InvestmentReminder[]
-  stockWishlist        StockWishlist[]
-  auditLogs            AuditLog[]
+  members             WorkspaceMember[]
+  invites             WorkspaceInvite[]
+  activeForUsers      User[]               @relation("UserActiveWorkspace")
+  contacts            Contact[]
+  categories          Category[]
+  accounts            Account[]
+  cards               Card[]
+  cardStatements      CardStatement[]
+  transactions        Transaction[]
+  transfers           Transfer[]
+  memberCharges       MemberCharge[]
+  lands               Land[]
+  crops               Crop[]
+  livestock           Livestock[]
+  leases              Lease[]
+  workers             Worker[]
+  advanceRepayments   AdvanceRepayment[]
+  loans               Loan[]
+  investments         Investment[]
+  investmentReminders InvestmentReminder[]
+  insuredMembers      InsuredMember[]
+  insuranceClaims     InsuranceClaim[]
+  vehicles            Vehicle[]
+  hospitalizations    Hospitalization[]
+  notifications       Notification[]
+  stockWishlist       StockWishlist[]
+  auditLogs           AuditLog[]
 
   @@index([ownerUserId])
 }
@@ -320,6 +375,12 @@ model WorkspaceMember {
   user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   role        WorkspaceRole
   permissions Json          @default("{}")
+  /**
+   * Per-member email-notification preferences. Shape:
+   * { enabled: boolean, kinds: NotificationKind[] }
+   * Default empty = no email. UI toggles populate it.
+   */
+  emailPrefs  Json          @default("{}")
   invitedAt   DateTime      @default(now())
   acceptedAt  DateTime?
   createdAt   DateTime      @default(now())
@@ -390,15 +451,18 @@ model Contact {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  ownedAccounts     Account[]      @relation("AccountContactOwner")
-  ownedCards        Card[]         @relation("CardContactOwner")
-  beneficiaryTxns   Transaction[]  @relation("TransactionBeneficiary")
-  sentTransfers     Transfer[]     @relation("TransferFromContact")
-  receivedTransfers Transfer[]     @relation("TransferToContact")
-  memberCharges     MemberCharge[]
-  lessorLeases      Lease[]        @relation("LeaseLessor")
-  lesseeLeases      Lease[]        @relation("LeaseLessee")
-  lenderLoans       Loan[]         @relation("LoanLenderContact")
+  ownedAccounts      Account[]         @relation("AccountContactOwner")
+  ownedCards         Card[]            @relation("CardContactOwner")
+  beneficiaryTxns    Transaction[]     @relation("TransactionBeneficiary")
+  sentTransfers      Transfer[]        @relation("TransferFromContact")
+  receivedTransfers  Transfer[]        @relation("TransferToContact")
+  memberCharges      MemberCharge[]
+  lessorLeases       Lease[]           @relation("LeaseLessor")
+  lesseeLeases       Lease[]           @relation("LeaseLessee")
+  lenderLoans        Loan[]            @relation("LoanLenderContact")
+  insuredMemberships InsuredMember[]   @relation("InsuredMemberContact")
+  ownedVehicles      Vehicle[]         @relation("VehicleOwner")
+  hospitalizations   Hospitalization[] @relation("HospitalizationPatient")
 
   @@index([workspaceId, active])
 }
@@ -408,29 +472,29 @@ model Contact {
 //
 
 model Account {
-  id             String       @id @default(uuid())
-  workspaceId    String
-  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUserId    String?
-  ownerUser      User?        @relation("AccountOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerContactId String?
-  ownerContact   Contact?     @relation("AccountContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
-  sharedWithUserIds String[]  @default([])
-  kind           AccountKind
-  name           String
-  openingBalance Decimal      @default(0) @db.Decimal(14, 2)
-  creditLimit    Decimal?     @db.Decimal(14, 2)
-  statementDate  Int?
-  gracePeriod    Int?
+  id                String      @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  ownerUser         User?       @relation("AccountOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerContactId    String?
+  ownerContact      Contact?    @relation("AccountContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]    @default([])
+  kind              AccountKind
+  name              String
+  openingBalance    Decimal     @default(0) @db.Decimal(14, 2)
+  creditLimit       Decimal?    @db.Decimal(14, 2)
+  statementDate     Int?
+  gracePeriod       Int?
   // For CREDIT companion accounts: pre-existing bill due date + amount
   // captured at onboarding. Used when the user adds a card that already
   // has a generated statement due before the regular cycle math takes
   // over. Cleared/updated by the user manually after the bill is paid.
-  nextBillDue    DateTime?
-  nextBillAmount Decimal?     @db.Decimal(14, 2)
-  active         Boolean      @default(true)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  nextBillDue       DateTime?
+  nextBillAmount    Decimal?    @db.Decimal(14, 2)
+  active            Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   transactions   Transaction[]
   loans          Loan[]
@@ -446,30 +510,30 @@ model Account {
 }
 
 model Card {
-  id              String        @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUserId     String?
-  ownerUser       User?         @relation("CardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerContactId  String?
-  ownerContact    Contact?      @relation("CardContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
-  sharedWithUserIds String[]    @default([])
-  name            String
-  kind            CardKind
-  network         CardNetwork   @default(OTHER)
-  supportsUpi     Boolean       @default(false)
-  last4           String?
-  parentAccountId String?
-  parentAccount   Account?      @relation("CardParentAccount", fields: [parentAccountId], references: [id], onDelete: SetNull)
-  accountId       String?       @unique
-  account         Account?      @relation("CardAccount", fields: [accountId], references: [id], onDelete: SetNull)
-  limitMode       CardLimitMode @default(SOLO)
-  parentCardId    String?
-  parentCard      Card?         @relation("CardParentCard", fields: [parentCardId], references: [id], onDelete: SetNull)
-  childCards      Card[]        @relation("CardParentCard")
-  active          Boolean       @default(true)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                String        @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  ownerUser         User?         @relation("CardOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerContactId    String?
+  ownerContact      Contact?      @relation("CardContactOwner", fields: [ownerContactId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]      @default([])
+  name              String
+  kind              CardKind
+  network           CardNetwork   @default(OTHER)
+  supportsUpi       Boolean       @default(false)
+  last4             String?
+  parentAccountId   String?
+  parentAccount     Account?      @relation("CardParentAccount", fields: [parentAccountId], references: [id], onDelete: SetNull)
+  accountId         String?       @unique
+  account           Account?      @relation("CardAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  limitMode         CardLimitMode @default(SOLO)
+  parentCardId      String?
+  parentCard        Card?         @relation("CardParentCard", fields: [parentCardId], references: [id], onDelete: SetNull)
+  childCards        Card[]        @relation("CardParentCard")
+  active            Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   transactions Transaction[]
   emiLoans     Loan[]        @relation("CardEmiLoan")
@@ -481,25 +545,25 @@ model Card {
 }
 
 model CardStatement {
-  id           String    @id @default(uuid())
-  workspaceId  String
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  accountId    String
-  account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  periodStart  DateTime  @db.Date
-  periodEnd    DateTime  @db.Date
-  dueDate      DateTime  @db.Date
-  totalDue     Decimal   @db.Decimal(14, 2)
-  paidAt       DateTime?
+  id          String               @id @default(uuid())
+  workspaceId String
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accountId   String
+  account     Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  periodStart DateTime             @db.Date
+  periodEnd   DateTime             @db.Date
+  dueDate     DateTime             @db.Date
+  totalDue    Decimal              @db.Decimal(14, 2)
+  paidAt      DateTime?
   // Many transfers can pay down one statement (partial payments). The
   // earlier `paidTransfer` 1-to-1 relation modelled "the single transfer
   // that closed this bill" but real-world bills are often paid in
   // instalments, so it's been replaced with this 1-to-many.
-  payments     Transfer[] @relation("StatementPayments")
-  closedAt     DateTime?
-  reminders    InvestmentReminder[] @relation("ReminderCardStatement")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  payments    Transfer[]           @relation("StatementPayments")
+  closedAt    DateTime?
+  reminders   InvestmentReminder[] @relation("ReminderCardStatement")
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
   @@unique([accountId, periodStart])
   @@index([accountId, periodEnd])
@@ -561,47 +625,47 @@ model Category {
 }
 
 model Transaction {
-  id                String            @id @default(uuid())
-  workspaceId       String
-  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  amount            Decimal           @db.Decimal(12, 2)
-  type              TransactionType
-  kind              TransactionKind?
-  description       String
-  date              DateTime
-  categoryId        String?
-  category          Category?         @relation(fields: [categoryId], references: [id])
+  id          String           @id @default(uuid())
+  workspaceId String
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  amount      Decimal          @db.Decimal(12, 2)
+  type        TransactionType
+  kind        TransactionKind?
+  description String
+  date        DateTime
+  categoryId  String?
+  category    Category?        @relation(fields: [categoryId], references: [id])
 
-  accountId         String?
-  account           Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  cardId            String?
-  card              Card?             @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cardId    String?
+  card      Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
 
-  workerId          String?
-  worker            Worker?           @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  workerId String?
+  worker   Worker? @relation(fields: [workerId], references: [id], onDelete: SetNull)
 
-  cropBatchId       String?
-  cropBatch         CropBatch?        @relation(fields: [cropBatchId], references: [id], onDelete: SetNull)
-  livestockBatchId  String?
-  livestockBatch    LivestockBatch?   @relation(fields: [livestockBatchId], references: [id], onDelete: SetNull)
+  cropBatchId      String?
+  cropBatch        CropBatch?      @relation(fields: [cropBatchId], references: [id], onDelete: SetNull)
+  livestockBatchId String?
+  livestockBatch   LivestockBatch? @relation(fields: [livestockBatchId], references: [id], onDelete: SetNull)
 
-  leaseId           String?
-  lease             Lease?            @relation(fields: [leaseId], references: [id], onDelete: SetNull)
-  leaseScheduleId   String?           @unique
-  leaseSchedule     LeasePaymentSchedule? @relation("ScheduleConfirmedTxn", fields: [leaseScheduleId], references: [id], onDelete: SetNull)
+  leaseId         String?
+  lease           Lease?                @relation(fields: [leaseId], references: [id], onDelete: SetNull)
+  leaseScheduleId String?               @unique
+  leaseSchedule   LeasePaymentSchedule? @relation("ScheduleConfirmedTxn", fields: [leaseScheduleId], references: [id], onDelete: SetNull)
 
-  loanId            String?
-  loan              Loan?             @relation(fields: [loanId], references: [id], onDelete: SetNull)
+  loanId String?
+  loan   Loan?   @relation(fields: [loanId], references: [id], onDelete: SetNull)
 
-  investmentId      String?
-  investment        Investment?       @relation(fields: [investmentId], references: [id], onDelete: SetNull)
-  investmentAction  InvestmentAction?
-  investmentQty     Decimal?          @db.Decimal(14, 4)
-  investmentPrice   Decimal?          @db.Decimal(14, 4)
-  exchangeRate      Decimal?          @db.Decimal(10, 4)
+  investmentId     String?
+  investment       Investment?       @relation(fields: [investmentId], references: [id], onDelete: SetNull)
+  investmentAction InvestmentAction?
+  investmentQty    Decimal?          @db.Decimal(14, 4)
+  investmentPrice  Decimal?          @db.Decimal(14, 4)
+  exchangeRate     Decimal?          @db.Decimal(10, 4)
 
-  transferId        String?
-  transfer          Transfer?         @relation("TransferLegs", fields: [transferId], references: [id], onDelete: Cascade)
+  transferId String?
+  transfer   Transfer? @relation("TransferLegs", fields: [transferId], references: [id], onDelete: Cascade)
 
   // Refund linkage: an income-side transaction with kind=REFUND can point
   // to the original expense it reverses. SET NULL on delete so the refund
@@ -610,31 +674,43 @@ model Transaction {
   refundForTransaction   Transaction?  @relation("RefundOfTransaction", fields: [refundForTransactionId], references: [id], onDelete: SetNull)
   refundsReceived        Transaction[] @relation("RefundOfTransaction")
 
-  userId            String
-  user              User              @relation("TransactionAuthor", fields: [userId], references: [id], onDelete: Cascade)
-  createdByUserId   String?
-  createdByUser     User?             @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  editedByUserId    String?
-  editedByUser      User?             @relation("TransactionEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
-  editedAt          DateTime?
-  editNote          String?
+  userId          String
+  user            User      @relation("TransactionAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  createdByUserId String?
+  createdByUser   User?     @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  editedByUserId  String?
+  editedByUser    User?     @relation("TransactionEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
+  editedAt        DateTime?
+  editNote        String?
 
   beneficiaryContactId String?
-  beneficiaryContact   Contact?     @relation("TransactionBeneficiary", fields: [beneficiaryContactId], references: [id], onDelete: SetNull)
-  memberChargeType    MemberChargeType @default(NONE)
-  memberChargeId      String?          @unique
-  memberCharge        MemberCharge?    @relation("ChargeOriginTxn", fields: [memberChargeId], references: [id], onDelete: SetNull)
+  beneficiaryContact   Contact?         @relation("TransactionBeneficiary", fields: [beneficiaryContactId], references: [id], onDelete: SetNull)
+  memberChargeType     MemberChargeType @default(NONE)
+  memberChargeId       String?          @unique
+  memberCharge         MemberCharge?    @relation("ChargeOriginTxn", fields: [memberChargeId], references: [id], onDelete: SetNull)
 
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  claimId String?
+  claim   InsuranceClaim? @relation("TransactionClaim", fields: [claimId], references: [id], onDelete: SetNull)
 
-  wagePayment           WagePayment?
-  advanceRepayment      AdvanceRepayment?
-  livestockEvent        LivestockEvent?
-  feedLog               FeedLog?
-  vaccinationLog        VaccinationLog?
+  vehicleId String?
+  vehicle   Vehicle? @relation("VehicleTransaction", fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  hospitalizationId    String?
+  hospitalization      Hospitalization?      @relation("TransactionHospitalization", fields: [hospitalizationId], references: [id], onDelete: SetNull)
+  hospitalizationStage HospitalizationStage?
+
+  goldForm GoldForm?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wagePayment             WagePayment?
+  advanceRepayment        AdvanceRepayment?
+  livestockEvent          LivestockEvent?
+  feedLog                 FeedLog?
+  vaccinationLog          VaccinationLog?
   memberChargeSettlements MemberChargeSettlement[]
-  reminderConfirmation  InvestmentReminder? @relation("ReminderConfirmation")
+  reminderConfirmation    InvestmentReminder?      @relation("ReminderConfirmation")
 
   @@index([workspaceId, date])
   @@index([workspaceId, categoryId])
@@ -649,37 +725,40 @@ model Transaction {
   @@index([transferId])
   @@index([beneficiaryContactId])
   @@index([refundForTransactionId])
+  @@index([claimId])
+  @@index([vehicleId])
+  @@index([hospitalizationId])
 }
 
 model MemberCharge {
-  id                   String             @id @default(uuid())
+  id                   String                   @id @default(uuid())
   workspaceId          String
-  workspace            Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace            Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   beneficiaryContactId String
-  beneficiaryContact   Contact            @relation(fields: [beneficiaryContactId], references: [id], onDelete: Cascade)
-  amount               Decimal            @db.Decimal(14, 2)
-  settledAmount        Decimal            @default(0) @db.Decimal(14, 2)
-  status               MemberChargeStatus @default(OUTSTANDING)
+  beneficiaryContact   Contact                  @relation(fields: [beneficiaryContactId], references: [id], onDelete: Cascade)
+  amount               Decimal                  @db.Decimal(14, 2)
+  settledAmount        Decimal                  @default(0) @db.Decimal(14, 2)
+  status               MemberChargeStatus       @default(OUTSTANDING)
   lastSettlementAt     DateTime?
   notes                String?
-  originTransaction    Transaction?       @relation("ChargeOriginTxn")
+  originTransaction    Transaction?             @relation("ChargeOriginTxn")
   settlements          MemberChargeSettlement[]
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
 
   @@index([workspaceId, beneficiaryContactId, status])
 }
 
 model MemberChargeSettlement {
-  id              String       @id @default(uuid())
-  chargeId        String
-  charge          MemberCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
-  amount          Decimal      @db.Decimal(14, 2)
-  paidAt          DateTime
-  transactionId   String?
-  transaction     Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  notes           String?
-  createdAt       DateTime     @default(now())
+  id            String       @id @default(uuid())
+  chargeId      String
+  charge        MemberCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  amount        Decimal      @db.Decimal(14, 2)
+  paidAt        DateTime
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime     @default(now())
 
   @@index([chargeId, paidAt])
 }
@@ -689,17 +768,17 @@ model MemberChargeSettlement {
 //
 
 model Land {
-  id          String     @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
-  area        Decimal?   @db.Decimal(12, 4)
+  area        Decimal?  @db.Decimal(12, 4)
   areaUnit    AreaUnit?
   location    String?
   notes       String?
-  active      Boolean    @default(true)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   cropBatches      CropBatch[]
   livestockBatches LivestockBatch[]
@@ -708,15 +787,15 @@ model Land {
 }
 
 model Crop {
-  id          String      @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
   category    String?
   description String?
-  active      Boolean     @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   batches CropBatch[]
 
@@ -724,20 +803,20 @@ model Crop {
 }
 
 model CropBatch {
-  id                 String     @id @default(uuid())
-  cropId             String
-  crop               Crop       @relation(fields: [cropId], references: [id], onDelete: Cascade)
-  landId             String?
-  land               Land?      @relation(fields: [landId], references: [id], onDelete: SetNull)
-  name               String
-  status             CropStatus @default(ACTIVE)
-  startDate          DateTime?
-  endDate            DateTime?
-  expectedCycleDays  Int?
-  notes              String?
-  active             Boolean    @default(true)
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  id                String     @id @default(uuid())
+  cropId            String
+  crop              Crop       @relation(fields: [cropId], references: [id], onDelete: Cascade)
+  landId            String?
+  land              Land?      @relation(fields: [landId], references: [id], onDelete: SetNull)
+  name              String
+  status            CropStatus @default(ACTIVE)
+  startDate         DateTime?
+  endDate           DateTime?
+  expectedCycleDays Int?
+  notes             String?
+  active            Boolean    @default(true)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
   transactions Transaction[]
   attendance   Attendance[]
@@ -780,12 +859,12 @@ model LivestockBatch {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  events         LivestockEvent[]
-  feedLogs       FeedLog[]
-  vaccinations   VaccinationLog[]
-  transactions   Transaction[]
-  attendance     Attendance[]
-  leases         Lease[]          @relation("LeaseLivestockBatch")
+  events       LivestockEvent[]
+  feedLogs     FeedLog[]
+  vaccinations VaccinationLog[]
+  transactions Transaction[]
+  attendance   Attendance[]
+  leases       Lease[]          @relation("LeaseLivestockBatch")
 
   @@index([livestockId, active])
   @@index([landId])
@@ -808,33 +887,33 @@ model LivestockEvent {
 }
 
 model FeedLog {
-  id            String          @id @default(uuid())
+  id            String         @id @default(uuid())
   batchId       String
-  batch         LivestockBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch         LivestockBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   date          DateTime
-  amount        Decimal         @db.Decimal(12, 2)
-  quantity      Decimal?        @db.Decimal(12, 4)
+  amount        Decimal        @db.Decimal(12, 2)
+  quantity      Decimal?       @db.Decimal(12, 4)
   unit          String?
   notes         String?
-  transactionId String?         @unique
-  transaction   Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  createdAt     DateTime        @default(now())
+  transactionId String?        @unique
+  transaction   Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime       @default(now())
 
   @@index([batchId, date])
 }
 
 model VaccinationLog {
-  id            String          @id @default(uuid())
+  id            String         @id @default(uuid())
   batchId       String
-  batch         LivestockBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch         LivestockBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   vaccine       String
   date          DateTime
   nextDueDate   DateTime?
-  cost          Decimal?        @db.Decimal(12, 2)
+  cost          Decimal?       @db.Decimal(12, 2)
   notes         String?
-  transactionId String?         @unique
-  transaction   Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  createdAt     DateTime        @default(now())
+  transactionId String?        @unique
+  transaction   Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime       @default(now())
 
   @@index([batchId, date])
 }
@@ -844,31 +923,31 @@ model VaccinationLog {
 //
 
 model Lease {
-  id                String         @id @default(uuid())
+  id                String          @id @default(uuid())
   workspaceId       String
-  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace         Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   direction         LeaseDirection
   lessorContactId   String?
-  lessorContact     Contact?       @relation("LeaseLessor", fields: [lessorContactId], references: [id], onDelete: SetNull)
+  lessorContact     Contact?        @relation("LeaseLessor", fields: [lessorContactId], references: [id], onDelete: SetNull)
   lessorName        String?
   lesseeContactId   String?
-  lesseeContact     Contact?       @relation("LeaseLessee", fields: [lesseeContactId], references: [id], onDelete: SetNull)
+  lesseeContact     Contact?        @relation("LeaseLessee", fields: [lesseeContactId], references: [id], onDelete: SetNull)
   lesseeName        String?
   assetType         LeaseAssetType
   cropBatchId       String?
-  cropBatch         CropBatch?     @relation("LeaseCropBatch", fields: [cropBatchId], references: [id], onDelete: SetNull)
+  cropBatch         CropBatch?      @relation("LeaseCropBatch", fields: [cropBatchId], references: [id], onDelete: SetNull)
   livestockBatchId  String?
   livestockBatch    LivestockBatch? @relation("LeaseLivestockBatch", fields: [livestockBatchId], references: [id], onDelete: SetNull)
-  amount            Decimal        @db.Decimal(14, 2)
+  amount            Decimal         @db.Decimal(14, 2)
   frequency         LeaseFrequency
   customMonths      Int?
   startDate         DateTime
   endDate           DateTime
-  scheduleGenerated Boolean        @default(false)
+  scheduleGenerated Boolean         @default(false)
   notes             String?
-  active            Boolean        @default(true)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  active            Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   schedule     LeasePaymentSchedule[]
   transactions Transaction[]
@@ -879,16 +958,16 @@ model Lease {
 }
 
 model LeasePaymentSchedule {
-  id            String               @id @default(uuid())
-  leaseId       String
-  lease         Lease                @relation(fields: [leaseId], references: [id], onDelete: Cascade)
-  dueDate       DateTime             @db.Date
-  amount        Decimal              @db.Decimal(14, 2)
-  status        ReminderStatus       @default(UPCOMING)
-  confirmedTxn  Transaction?         @relation("ScheduleConfirmedTxn")
-  reminders     InvestmentReminder[] @relation("ReminderLeaseSchedule")
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  id           String               @id @default(uuid())
+  leaseId      String
+  lease        Lease                @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  dueDate      DateTime             @db.Date
+  amount       Decimal              @db.Decimal(14, 2)
+  status       ReminderStatus       @default(UPCOMING)
+  confirmedTxn Transaction?         @relation("ScheduleConfirmedTxn")
+  reminders    InvestmentReminder[] @relation("ReminderLeaseSchedule")
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   @@index([leaseId, dueDate])
   @@index([status, dueDate])
@@ -899,37 +978,37 @@ model LeasePaymentSchedule {
 //
 
 model Loan {
-  id              String        @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUserId     String?
-  ownerUser       User?         @relation("LoanOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sharedWithUserIds String[]    @default([])
-  kind            LoanKind
-  source          LoanSource    @default(BANK)
+  id                String        @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  ownerUser         User?         @relation("LoanOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]      @default([])
+  kind              LoanKind
+  source            LoanSource    @default(BANK)
   // Free-form lender display name. For HAND_FORMAL loans this is the
   // contact's name (denormalized so old loans still render if the contact
   // is later archived/renamed); other sources store the bank/NBFC name.
-  lender          String
+  lender            String
   // For HAND_FORMAL loans: the workspace contact who lent the money.
   // Optional because legacy hand loans (created before contacts existed)
   // only have the free-text `lender` field.
-  lenderContactId String?
-  lenderContact   Contact?      @relation("LoanLenderContact", fields: [lenderContactId], references: [id], onDelete: SetNull)
-  borrower        String?
-  principal       Decimal       @db.Decimal(14, 2)
-  outstanding     Decimal       @db.Decimal(14, 2)
-  interestRate    Decimal?      @db.Decimal(6, 3)
-  gstOnInterest   Decimal?      @db.Decimal(6, 3)
-  emiAmount       Decimal?      @db.Decimal(12, 2)
-  tenure          Int?
-  frequency       LoanFrequency @default(MONTHLY)
-  charges         Decimal?      @db.Decimal(12, 2)
-  chargeBreakdown Json?
-  accountId       String?
-  account         Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  cardId          String?
-  card            Card?         @relation("CardEmiLoan", fields: [cardId], references: [id], onDelete: SetNull)
+  lenderContactId   String?
+  lenderContact     Contact?      @relation("LoanLenderContact", fields: [lenderContactId], references: [id], onDelete: SetNull)
+  borrower          String?
+  principal         Decimal       @db.Decimal(14, 2)
+  outstanding       Decimal       @db.Decimal(14, 2)
+  interestRate      Decimal?      @db.Decimal(6, 3)
+  gstOnInterest     Decimal?      @db.Decimal(6, 3)
+  emiAmount         Decimal?      @db.Decimal(12, 2)
+  tenure            Int?
+  frequency         LoanFrequency @default(MONTHLY)
+  charges           Decimal?      @db.Decimal(12, 2)
+  chargeBreakdown   Json?
+  accountId         String?
+  account           Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cardId            String?
+  card              Card?         @relation("CardEmiLoan", fields: [cardId], references: [id], onDelete: SetNull)
   // Optional virtual loan-account number issued for CREDIT_CARD_LOAN kinds
   // (e.g. HDFC Insta Jumbo Loan AAN). The parent credit card stays usable;
   // EMIs are billed against this separate account number on the same
@@ -942,25 +1021,29 @@ model Loan {
   // AAN bills on a different cycle than the parent card.
   loanStatementDate Int?
   loanGracePeriod   Int?
-  isExisting      Boolean       @default(false)
-  foreclosedAt    DateTime?
-  foreclosureAmt  Decimal?      @db.Decimal(14, 2)
-  startedAt       DateTime
-  maturityAt      DateTime?
-  nextDueDate     DateTime?
-  notes           String?
-  active          Boolean       @default(true)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  isExisting        Boolean       @default(false)
+  foreclosedAt      DateTime?
+  foreclosureAmt    Decimal?      @db.Decimal(14, 2)
+  startedAt         DateTime
+  maturityAt        DateTime?
+  nextDueDate       DateTime?
+  notes             String?
+  active            Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
-  transactions    Transaction[]
-  reminders       InvestmentReminder[] @relation("ReminderLoan")
-  goldItems       GoldLoanItem[]
+  vehicleId String?
+  vehicle   Vehicle? @relation("VehicleLoan", fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  transactions Transaction[]
+  reminders    InvestmentReminder[] @relation("ReminderLoan")
+  goldItems    GoldLoanItem[]
 
   @@index([workspaceId, active, source])
   @@index([workspaceId, ownerUserId])
   @@index([cardId])
   @@index([workspaceId, lenderContactId])
+  @@index([vehicleId])
 }
 
 // Gold pledged as collateral for a GOLD loan. Each row is one type of
@@ -987,97 +1070,262 @@ model GoldLoanItem {
 //
 
 model Investment {
-  id                   String                @id @default(uuid())
-  workspaceId          String
-  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUserId          String?
-  ownerUser            User?                 @relation("InvestmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sharedWithUserIds    String[]              @default([])
-  holderName           String?
-  kind                 InvestmentKind
-  name                 String
-  institution          String?
-  amount               Decimal               @db.Decimal(14, 2)
-  currentValue         Decimal?              @db.Decimal(14, 2)
-  interestRate         Decimal?              @db.Decimal(6, 3)
-  compoundingFrequency CompoundingFrequency?
-  fdStatus             FDStatus?
-  startedAt            DateTime
-  maturityAt           DateTime?
-  notes                String?
-  active               Boolean               @default(true)
-  symbol               String?
-  quantity             Decimal?              @db.Decimal(18, 6)
-  purchasePrice        Decimal?              @db.Decimal(14, 4)
-  purchaseExchangeRate Decimal?              @db.Decimal(10, 4)
-  dividends            Decimal?              @db.Decimal(14, 2)
-  exchange             String?
-  currency             String?               @default("INR")
-  policyNumber         String?
-  policyType           InsurancePolicyType?
-  insuranceStatus      InsuranceStatus?      @default(ACTIVE)
-  premiumAmount        Decimal?              @db.Decimal(14, 2)
-  premiumFrequency     PremiumFrequency?
-  sumAssured           Decimal?              @db.Decimal(14, 2)
-  nextDueDate          DateTime?
-  nominee              String?
-  riders               String?
-  /** Kind-specific structured extras (e.g. for GOLD: { type, purity, wastage, making, gst }). */
-  metadata             Json?
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  id                     String                @id @default(uuid())
+  workspaceId            String
+  workspace              Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId            String?
+  ownerUser              User?                 @relation("InvestmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds      String[]              @default([])
+  holderName             String?
+  kind                   InvestmentKind
+  name                   String
+  institution            String?
+  amount                 Decimal               @db.Decimal(14, 2)
+  currentValue           Decimal?              @db.Decimal(14, 2)
+  interestRate           Decimal?              @db.Decimal(6, 3)
+  compoundingFrequency   CompoundingFrequency?
+  fdStatus               FDStatus?
+  startedAt              DateTime
+  maturityAt             DateTime?
+  notes                  String?
+  active                 Boolean               @default(true)
+  symbol                 String?
+  quantity               Decimal?              @db.Decimal(18, 6)
+  purchasePrice          Decimal?              @db.Decimal(14, 4)
+  purchaseExchangeRate   Decimal?              @db.Decimal(10, 4)
+  dividends              Decimal?              @db.Decimal(14, 2)
+  exchange               String?
+  currency               String?               @default("INR")
+  policyNumber           String?
+  policyType             InsurancePolicyType?
+  insuranceStatus        InsuranceStatus?      @default(ACTIVE)
+  premiumAmount          Decimal?              @db.Decimal(14, 2)
+  premiumFrequency       PremiumFrequency?
+  sumAssured             Decimal?              @db.Decimal(14, 2)
+  nextDueDate            DateTime?
+  nominee                String?
+  riders                 String?
+  /**
+   * Structured riders for LIFE policies: { list: [{ name, sumAssured?, notes? }] }.
+   * Separate from the legacy free-text `riders` field so we don't lose any
+   * historic notes. New UI writes here.
+   */
+  ridersJson             Json?
+  // Life-insurance corporate fields. All nullable — other policy types ignore them.
+  policyTermYears        Int?
+  premiumPayingTermYears Int?
+  maturityValue          Decimal?              @db.Decimal(14, 2)
+  bonusAccrued           Decimal?              @db.Decimal(14, 2)
+  bonusLastRevisedAt     DateTime?
+  /**
+   * Kind-specific structured extras (e.g. for GOLD: { type, purity, wastage, making, gst }).
+   */
+  metadata               Json?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
-  transactions Transaction[]
-  reminders    InvestmentReminder[] @relation("ReminderInvestment")
+  vehicleId String?
+  vehicle   Vehicle? @relation("VehicleInsurance", fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  transactions   Transaction[]
+  reminders      InvestmentReminder[] @relation("ReminderInvestment")
+  insuredMembers InsuredMember[]      @relation("InsuranceMembers")
+  claims         InsuranceClaim[]     @relation("InsuranceClaims")
 
   @@index([workspaceId, kind, active])
   @@index([workspaceId, ownerUserId])
+  @@index([vehicleId])
 }
 
 model StockWishlist {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   workspaceId       String
   workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   ownerUserId       String?
-  ownerUser         User?    @relation("StockWishlistOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sharedWithUserIds String[] @default([])
+  ownerUser         User?     @relation("StockWishlistOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]  @default([])
   symbol            String
   name              String?
   exchange          String?
-  targetPrice       Decimal? @db.Decimal(14, 4)
+  targetPrice       Decimal?  @db.Decimal(14, 4)
   notes             String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([workspaceId])
   @@index([workspaceId, ownerUserId])
 }
 
 model InvestmentReminder {
-  id                    String                @id @default(uuid())
-  workspaceId           String
-  workspace             Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  investmentId          String?
-  investment            Investment?           @relation("ReminderInvestment", fields: [investmentId], references: [id], onDelete: Cascade)
-  loanId                String?
-  loan                  Loan?                 @relation("ReminderLoan", fields: [loanId], references: [id], onDelete: Cascade)
-  leaseScheduleId       String?
-  leaseSchedule         LeasePaymentSchedule? @relation("ReminderLeaseSchedule", fields: [leaseScheduleId], references: [id], onDelete: Cascade)
-  cardStatementId       String?
-  cardStatement         CardStatement?        @relation("ReminderCardStatement", fields: [cardStatementId], references: [id], onDelete: Cascade)
-  kind                  ReminderKind
-  dueDate               DateTime              @db.Date
-  amount                Decimal?              @db.Decimal(14, 2)
-  status                ReminderStatus        @default(UPCOMING)
-  confirmedTransactionId String?              @unique
-  confirmedTransaction  Transaction?          @relation("ReminderConfirmation", fields: [confirmedTransactionId], references: [id], onDelete: SetNull)
-  skippedReason         String?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
+  id                     String                @id @default(uuid())
+  workspaceId            String
+  workspace              Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  investmentId           String?
+  investment             Investment?           @relation("ReminderInvestment", fields: [investmentId], references: [id], onDelete: Cascade)
+  insuredMemberId        String?
+  insuredMember          InsuredMember?        @relation("ReminderInsuredMember", fields: [insuredMemberId], references: [id], onDelete: Cascade)
+  loanId                 String?
+  loan                   Loan?                 @relation("ReminderLoan", fields: [loanId], references: [id], onDelete: Cascade)
+  leaseScheduleId        String?
+  leaseSchedule          LeasePaymentSchedule? @relation("ReminderLeaseSchedule", fields: [leaseScheduleId], references: [id], onDelete: Cascade)
+  cardStatementId        String?
+  cardStatement          CardStatement?        @relation("ReminderCardStatement", fields: [cardStatementId], references: [id], onDelete: Cascade)
+  kind                   ReminderKind
+  dueDate                DateTime              @db.Date
+  amount                 Decimal?              @db.Decimal(14, 2)
+  status                 ReminderStatus        @default(UPCOMING)
+  confirmedTransactionId String?               @unique
+  confirmedTransaction   Transaction?          @relation("ReminderConfirmation", fields: [confirmedTransactionId], references: [id], onDelete: SetNull)
+  skippedReason          String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   @@index([workspaceId, status, dueDate])
   @@index([investmentId])
+  @@index([insuredMemberId])
   @@index([loanId])
+}
+
+model InsuredMember {
+  id               String            @id @default(uuid())
+  workspaceId      String
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  investmentId     String
+  investment       Investment        @relation("InsuranceMembers", fields: [investmentId], references: [id], onDelete: Cascade)
+  contactId        String
+  contact          Contact           @relation("InsuredMemberContact", fields: [contactId], references: [id], onDelete: Restrict)
+  premiumAmount    Decimal?          @db.Decimal(14, 2)
+  premiumFrequency PremiumFrequency?
+  sumAssured       Decimal?          @db.Decimal(14, 2)
+  coverageStart    DateTime?
+  coverageEnd      DateTime?
+  active           Boolean           @default(true)
+  notes            String?
+  // For LIFE policies a member can be a BENEFICIARY instead of the
+  // insured. Beneficiary shares are stored as a percentage and the API
+  // validates that all BENEFICIARY shares on a policy sum to ≤ 100.
+  role             InsuredMemberRole @default(INSURED)
+  sharePercent     Decimal?          @db.Decimal(5, 2)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  reminders InvestmentReminder[] @relation("ReminderInsuredMember")
+  claims    InsuranceClaim[]     @relation("ClaimInsuredMember")
+
+  @@unique([investmentId, contactId])
+  @@index([workspaceId, active])
+}
+
+model InsuranceClaim {
+  id                String           @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  investmentId      String
+  investment        Investment       @relation("InsuranceClaims", fields: [investmentId], references: [id], onDelete: Cascade)
+  insuredMemberId   String?
+  insuredMember     InsuredMember?   @relation("ClaimInsuredMember", fields: [insuredMemberId], references: [id], onDelete: SetNull)
+  vehicleId         String?
+  vehicle           Vehicle?         @relation("VehicleClaims", fields: [vehicleId], references: [id], onDelete: SetNull)
+  hospitalizationId String?          @unique
+  hospitalization   Hospitalization? @relation("HospitalizationClaim", fields: [hospitalizationId], references: [id], onDelete: SetNull)
+  claimNumber       String?
+  incidentDate      DateTime
+  filedAt           DateTime?
+  status            ClaimStatus      @default(FILED)
+  claimedAmount     Decimal?         @db.Decimal(14, 2)
+  approvedAmount    Decimal?         @db.Decimal(14, 2)
+  receivedAmount    Decimal?         @db.Decimal(14, 2)
+  notes             String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  transactions Transaction[] @relation("TransactionClaim")
+
+  @@index([workspaceId, status])
+  @@index([investmentId])
+  @@index([vehicleId])
+}
+
+model Hospitalization {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  patientContactId String
+  patientContact   Contact   @relation("HospitalizationPatient", fields: [patientContactId], references: [id], onDelete: Restrict)
+  hospitalName     String
+  diagnosis        String?
+  admittedAt       DateTime
+  dischargedAt     DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  transactions Transaction[]   @relation("TransactionHospitalization")
+  claim        InsuranceClaim? @relation("HospitalizationClaim")
+
+  @@index([workspaceId, admittedAt])
+  @@index([workspaceId, patientContactId])
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  workspaceId String
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /**
+   * Null = workspace-wide broadcast (shown to every member).
+   */
+  userId      String?
+  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind        NotificationKind
+  title       String
+  body        String?
+  /**
+   * Deep link (e.g. /insurance/123, /medical/45) used by the inbox row.
+   */
+  link        String?
+  readAt      DateTime?
+  emailedAt   DateTime?
+  /**
+   * Optional source-row identifiers. Used by the cron sweep to dedupe
+   * — re-running the sweep won't create duplicate rows for the same
+   * (reminderId, kind) pair.
+   */
+  reminderId  String?
+  claimId     String?
+  createdAt   DateTime         @default(now())
+
+  @@index([workspaceId, userId, readAt])
+  @@index([workspaceId, createdAt])
+  @@index([reminderId, kind])
+}
+
+model Vehicle {
+  id             String      @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerContactId String
+  ownerContact   Contact     @relation("VehicleOwner", fields: [ownerContactId], references: [id], onDelete: Restrict)
+  kind           VehicleKind
+  name           String
+  make           String?
+  model          String?
+  year           Int?
+  registrationNo String?     @unique
+  purchaseDate   DateTime?
+  purchasePrice  Decimal?    @db.Decimal(14, 2)
+  odometerStart  Int?
+  active         Boolean     @default(true)
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  insurances   Investment[]     @relation("VehicleInsurance")
+  loans        Loan[]           @relation("VehicleLoan")
+  claims       InsuranceClaim[] @relation("VehicleClaims")
+  transactions Transaction[]    @relation("VehicleTransaction")
+
+  @@index([workspaceId, active])
+  @@index([workspaceId, ownerContactId])
 }
 
 //
@@ -1085,24 +1333,24 @@ model InvestmentReminder {
 //
 
 model Worker {
-  id                   String                @id @default(uuid())
-  workspaceId          String
-  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  name                 String
-  phone                String?
-  dailyRate            Decimal?              @db.Decimal(10, 2)
-  settlementCadence    WageSettlementCadence @default(AS_NEEDED)
-  customCadenceDays    Int?
-  active               Boolean               @default(true)
-  archivedAt           DateTime?
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  id                String                @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name              String
+  phone             String?
+  dailyRate         Decimal?              @db.Decimal(10, 2)
+  settlementCadence WageSettlementCadence @default(AS_NEEDED)
+  customCadenceDays Int?
+  active            Boolean               @default(true)
+  archivedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
 
-  attendance         Attendance[]
-  wagePayments       WagePayment[]
-  wageSettlements    WageSettlement[]
-  advanceRepayments  AdvanceRepayment[]
-  transactions       Transaction[]
+  attendance        Attendance[]
+  wagePayments      WagePayment[]
+  wageSettlements   WageSettlement[]
+  advanceRepayments AdvanceRepayment[]
+  transactions      Transaction[]
 
   @@index([workspaceId, active])
 }
@@ -1151,25 +1399,25 @@ model WagePayment {
 // Append-only: deletes happen via reversal entries (reversedAt + linked
 // pair), never DELETE.
 model AdvanceRepayment {
-  id                String       @id @default(uuid())
-  workspaceId       String
-  workspace         Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  workerId          String
-  worker            Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
-  amount            Decimal      @db.Decimal(12, 2)
-  receivedAt        DateTime
-  receivedByUserId  String
-  receivedByUser    User         @relation("AdvanceRepaymentReceiver", fields: [receivedByUserId], references: [id], onDelete: Restrict)
-  notes             String?
-  idempotencyKey    String?
-  transactionId     String?      @unique
-  transaction       Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  reversedAt        DateTime?
-  reversedByUserId  String?
-  reversedByUser    User?        @relation("AdvanceRepaymentReverser", fields: [reversedByUserId], references: [id], onDelete: SetNull)
-  reversalReason    String?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  id               String       @id @default(uuid())
+  workspaceId      String
+  workspace        Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workerId         String
+  worker           Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  amount           Decimal      @db.Decimal(12, 2)
+  receivedAt       DateTime
+  receivedByUserId String
+  receivedByUser   User         @relation("AdvanceRepaymentReceiver", fields: [receivedByUserId], references: [id], onDelete: Restrict)
+  notes            String?
+  idempotencyKey   String?
+  transactionId    String?      @unique
+  transaction      Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversedByUser   User?        @relation("AdvanceRepaymentReverser", fields: [reversedByUserId], references: [id], onDelete: SetNull)
+  reversalReason   String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@unique([workerId, idempotencyKey])
   @@index([workspaceId, receivedAt])

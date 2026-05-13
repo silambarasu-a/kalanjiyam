@@ -81,6 +81,12 @@ export async function GET(
         fdStatus: inv.fdStatus,
         compoundingFrequency: inv.compoundingFrequency,
         metadata: inv.metadata ?? null,
+        policyTermYears: inv.policyTermYears ?? null,
+        premiumPayingTermYears: inv.premiumPayingTermYears ?? null,
+        maturityValue: inv.maturityValue == null ? null : Number(inv.maturityValue),
+        bonusAccrued: inv.bonusAccrued == null ? null : Number(inv.bonusAccrued),
+        bonusLastRevisedAt: inv.bonusLastRevisedAt?.toISOString() ?? null,
+        ridersJson: inv.ridersJson ?? null,
       },
       transactions: transactions.map((t) => ({
         id: t.id,
@@ -226,6 +232,8 @@ export async function PATCH(
               cardId: s.cardId ?? null,
               investmentId: id,
               investmentAction: InvestmentAction.BUY,
+              goldForm:
+                inv.kind === "GOLD" && data.goldForm ? data.goldForm : null,
               userId: ctx.userId,
               createdByUserId: ctx.userId,
             };
@@ -259,9 +267,29 @@ export async function PATCH(
           dividends: data.dividends ?? inv.dividends,
           exchange: data.exchange ?? inv.exchange,
           currency: data.currency ?? inv.currency,
+          policyNumber: data.policyNumber ?? inv.policyNumber,
+          policyType: data.policyType ?? inv.policyType,
           premiumAmount: data.premiumAmount ?? inv.premiumAmount,
+          premiumFrequency: data.premiumFrequency ?? inv.premiumFrequency,
+          sumAssured: data.sumAssured ?? inv.sumAssured,
           nextDueDate: data.nextDueDate ? new Date(data.nextDueDate) : inv.nextDueDate,
           nominee: data.nominee ?? inv.nominee,
+          // Phase 2 — vehicle link for VEHICLE policies.
+          vehicleId: data.vehicleId ?? inv.vehicleId,
+          // Phase 3 — life-insurance corporate fields.
+          policyTermYears: data.policyTermYears ?? inv.policyTermYears,
+          premiumPayingTermYears:
+            data.premiumPayingTermYears ?? inv.premiumPayingTermYears,
+          maturityValue: data.maturityValue ?? inv.maturityValue,
+          bonusAccrued: data.bonusAccrued ?? inv.bonusAccrued,
+          bonusLastRevisedAt: data.bonusLastRevisedAt
+            ? new Date(data.bonusLastRevisedAt)
+            : inv.bonusLastRevisedAt,
+          ridersJson:
+            data.ridersJson !== undefined
+              ? ((data.ridersJson as Prisma.InputJsonValue | null) ??
+                Prisma.JsonNull)
+              : (inv.ridersJson ?? Prisma.JsonNull),
           metadata:
             data.metadata !== undefined
               ? (data.metadata as Prisma.InputJsonValue | null) ?? Prisma.JsonNull

@@ -33,8 +33,19 @@ export type DashboardStats = {
   period: { start: string; end: string; income: number; expense: number; net: number };
   netWorth: number;
   liquid: number;
+  /**
+   * Market Investments tile — limited to STOCK / MUTUAL_FUND / SIP. These
+   * have a measurable mark-to-market and are commonly referred to as
+   * "investments" in casual conversation. Other holdings (FD / RD / GOLD /
+   * INSURANCE / OTHER) live on a separate tile so the headline figure
+   * isn't a mixed-asset blob.
+   */
   investedAmount: number;
   investedCurrent: number;
+  /** FD / RD / GOLD / INSURANCE / OTHER — sum of cost basis. */
+  otherHoldingsAmount: number;
+  /** FD / RD / GOLD / INSURANCE / OTHER — sum of currentValue (falls back to cost). */
+  otherHoldingsCurrent: number;
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
@@ -50,7 +61,21 @@ export type DashboardCashflow = {
    * tile can subtract `cardOutstanding` (which already reflects every
    * card charge, billed or not) without double-counting card bills. */
   currentMonthNonCardDueRemaining: number;
+  /** Insurance premiums due this month (subset of currentMonthDueRemaining).
+   * Surfaced so the Upcoming Dues section can flag the insurance subtotal. */
+  currentMonthInsuranceDue: number;
+  /**
+   * Next month's projected outflow — always populated regardless of the
+   * current-month-only display filter. Breakdown lets the dashboard tile
+   * show a Cards · Insurance · Loans · Leases tooltip.
+   */
   nextMonthDue: number;
+  nextMonthBreakdown: {
+    cards: number;
+    insurance: number;
+    loans: number;
+    leases: number;
+  };
 };
 
 /**
@@ -82,7 +107,8 @@ export async function getDashboardStats(args: {
       where: { workspaceId, active: true },
       _sum: { outstanding: true },
     }),
-    prisma.investment.aggregate({
+    prisma.investment.groupBy({
+      by: ["kind"],
       where: { workspaceId, active: true },
       _sum: { amount: true, currentValue: true },
     }),
@@ -122,15 +148,34 @@ export async function getDashboardStats(args: {
   }
 
   const loanOutstanding = Number(activeLoans._sum.outstanding ?? 0);
-  const investedAmount = Number(investmentsTotal._sum.amount ?? 0);
-  const investedCurrent = Number(
-    investmentsTotal._sum.currentValue ?? investedAmount,
-  );
+  // Split market-traded holdings (Market Investments tile) from the rest
+  // (Other Holdings small card). Net worth includes BOTH — only the
+  // dashboard presentation is split.
+  const MARKET_KINDS = new Set(["STOCK", "MUTUAL_FUND", "SIP"]);
+  let investedAmount = 0;
+  let investedCurrent = 0;
+  let otherHoldingsAmount = 0;
+  let otherHoldingsCurrent = 0;
+  for (const row of investmentsTotal) {
+    const amt = Number(row._sum.amount ?? 0);
+    const cur = Number(row._sum.currentValue ?? row._sum.amount ?? 0);
+    if (MARKET_KINDS.has(row.kind)) {
+      investedAmount += amt;
+      investedCurrent += cur;
+    } else {
+      otherHoldingsAmount += amt;
+      otherHoldingsCurrent += cur;
+    }
+  }
   const chargesOutstanding =
     Number(outstandingCharges._sum.amount ?? 0) -
     Number(outstandingCharges._sum.settledAmount ?? 0);
   const netWorth =
-    liquid + investedCurrent - cardOutstanding - loanOutstanding;
+    liquid +
+    investedCurrent +
+    otherHoldingsCurrent -
+    cardOutstanding -
+    loanOutstanding;
   const income = Number(monthIncomeAgg._sum.amount ?? 0);
   const expense = Number(monthExpenseAgg._sum.amount ?? 0);
 
@@ -146,6 +191,8 @@ export async function getDashboardStats(args: {
     liquid,
     investedAmount,
     investedCurrent,
+    otherHoldingsAmount,
+    otherHoldingsCurrent,
     cardOutstanding,
     loanOutstanding,
     chargesOutstanding,
@@ -702,17 +749,36 @@ export async function getDashboardCashflow(args: {
   settled.sort((a, b) => b.paidAt.localeCompare(a.paidAt));
 
   // ── MONTHLY TOTALS ────────────────────────────────────────────────
+  // Run the totals over the FULL `dues` list (not `visibleDues`) so the
+  // "Due Next Month" tile always reports a real figure regardless of the
+  // current-month display filter.
   const nextMonthStart = nextMonthBegin.getTime();
+  const nextMonthEnd = new Date(
+    nextMonthBegin.getFullYear(),
+    nextMonthBegin.getMonth() + 1,
+    1,
+  ).getTime();
   let currentMonthDueRemaining = 0;
   let currentMonthNonCardDueRemaining = 0;
+  let currentMonthInsuranceDue = 0;
   let nextMonthDue = 0;
-  for (const d of visibleDues) {
+  const nextMonthBreakdown = { cards: 0, insurance: 0, loans: 0, leases: 0 };
+  for (const d of dues) {
     if (d.amount == null) continue;
     const t = new Date(d.dueDate).getTime();
+    const isInsurance = d.source === "REMINDER" && d.kind === "INSURANCE_PREMIUM";
     if (t < nextMonthStart) {
       currentMonthDueRemaining += d.amount;
       if (d.source !== "CARD_STATEMENT") currentMonthNonCardDueRemaining += d.amount;
-    } else nextMonthDue += d.amount;
+      if (isInsurance) currentMonthInsuranceDue += d.amount;
+    } else if (t < nextMonthEnd) {
+      nextMonthDue += d.amount;
+      if (d.source === "CARD_STATEMENT") nextMonthBreakdown.cards += d.amount;
+      else if (isInsurance) nextMonthBreakdown.insurance += d.amount;
+      else if (d.source === "LOAN" || d.kind === "LOAN_EMI")
+        nextMonthBreakdown.loans += d.amount;
+      else if (d.source === "LEASE") nextMonthBreakdown.leases += d.amount;
+    }
   }
   const currentMonthDueGross = currentMonthDuePaid + currentMonthDueRemaining;
 
@@ -723,6 +789,8 @@ export async function getDashboardCashflow(args: {
     currentMonthDuePaid,
     currentMonthDueRemaining,
     currentMonthNonCardDueRemaining,
+    currentMonthInsuranceDue,
     nextMonthDue,
+    nextMonthBreakdown,
   };
 }
