@@ -10,6 +10,12 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { InsurerPicker } from "@/components/ui/insurer-picker";
 import {
+  EMPTY_COVERAGE,
+  serializeCoverage,
+  VehicleCoverageEditor,
+  type VehicleCoverageDraft,
+} from "@/components/investments/vehicle-coverage-editor";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -285,6 +291,7 @@ function NewPolicyDialog({
   const [premiumPayingTermYears, setPremiumPayingTermYears] = useState("");
   const [maturityValue, setMaturityValue] = useState("");
   const [bonusAccrued, setBonusAccrued] = useState("");
+  const [coverage, setCoverage] = useState<VehicleCoverageDraft>(EMPTY_COVERAGE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -320,6 +327,7 @@ function NewPolicyDialog({
     setPremiumPayingTermYears("");
     setMaturityValue("");
     setBonusAccrued("");
+    setCoverage(EMPTY_COVERAGE);
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open]);
@@ -389,6 +397,13 @@ function NewPolicyDialog({
           isLifeFamily(policyType) && maturityValue ? Number(maturityValue) : undefined,
         bonusAccrued:
           isLifeFamily(policyType) && bonusAccrued ? Number(bonusAccrued) : undefined,
+        metadata:
+          policyType === "VEHICLE"
+            ? (() => {
+                const c = serializeCoverage(coverage);
+                return c ? { coverage: c } : undefined;
+              })()
+            : undefined,
         // No transaction is created — this records an existing policy.
         isExisting: true,
       };
@@ -554,6 +569,10 @@ function NewPolicyDialog({
                 </p>
               )}
             </label>
+          )}
+
+          {policyType === "VEHICLE" && (
+            <VehicleCoverageEditor value={coverage} onChange={setCoverage} />
           )}
 
           {isLifeFamily(policyType) && (
