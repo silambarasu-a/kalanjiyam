@@ -74,7 +74,7 @@ export async function POST(
       role: parsed.data.role,
       ttlDays: INVITE_TTL_DAYS,
     });
-    await sendEmail({ to: invite.email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+    await sendEmail({ to: invite.email, subject: tpl.subject, html: tpl.html, text: tpl.text, category: "invite" });
 
     return NextResponse.json({
       id: invite.id,
