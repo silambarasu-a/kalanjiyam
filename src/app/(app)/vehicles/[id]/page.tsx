@@ -1019,10 +1019,6 @@ type VehicleDocument = {
   issuedAt: string | null;
   expiryAt: string | null;
   notes: string | null;
-  hasAttachment: boolean;
-  attachmentFilename: string | null;
-  attachmentMimeType: string | null;
-  attachmentSize: number | null;
 };
 
 const DOC_KIND_LABEL: Record<VehicleDocumentKind, string> = {

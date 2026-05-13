@@ -7,6 +7,7 @@ import {
 } from "@/lib/workspace";
 import { vehicleUpdateSchema } from "@/lib/validators-domain";
 import { VehicleKind } from "@/generated/prisma/client";
+import { archiveAttachmentsForOwners } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -220,7 +221,25 @@ export async function DELETE(
         { status: 409 },
       );
     }
-    await prisma.vehicle.delete({ where: { id } });
+    // Find every VehicleDocument that will cascade-delete with the
+    // vehicle so we can archive their Attachments first (the
+    // polymorphic FK doesn't cascade automatically).
+    const docs = await prisma.vehicleDocument.findMany({
+      where: { vehicleId: id },
+      select: { id: true },
+    });
+    await prisma.$transaction(async (tx) => {
+      if (docs.length > 0) {
+        await archiveAttachmentsForOwners({
+          workspaceId: ctx.workspaceId,
+          ownerKind: "VEHICLE_DOCUMENT",
+          ownerIds: docs.map((d) => d.id),
+          userId: ctx.userId,
+          tx,
+        });
+      }
+      await tx.vehicle.delete({ where: { id } });
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

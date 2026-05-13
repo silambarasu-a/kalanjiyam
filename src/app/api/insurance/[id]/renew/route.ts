@@ -8,6 +8,7 @@ import {
   InvestmentKind,
   InsuranceStatus,
   PremiumFrequency,
+  Prisma,
   ReminderKind,
   ReminderStatus,
 } from "@/generated/prisma/client";
@@ -145,6 +146,13 @@ export async function POST(
           bonusAccrued: policy.bonusAccrued,
           bonusLastRevisedAt: policy.bonusLastRevisedAt,
           ridersJson: (policy.ridersJson ?? undefined) as never,
+          // Carry policy-level JSON forward so VEHICLE coverage breakdown
+          // (IDV / OD / TP / add-ons) and any other metadata survives the
+          // renewal into a new policy row.
+          metadata:
+            policy.metadata == null
+              ? Prisma.JsonNull
+              : (policy.metadata as Prisma.InputJsonValue),
           renewedFromInvestmentId: policy.id,
         },
       });

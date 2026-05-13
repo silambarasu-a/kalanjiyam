@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { getAttachmentPolicy, type AttachmentOwnerKind } from "@/lib/attachments";
 import { isS3Configured, presignGet, S3ConfigError } from "@/lib/s3";
@@ -31,6 +32,11 @@ export async function GET(
         { error: "File storage is not configured" },
         { status: 503 },
       );
+    }
+    // Auth gate FIRST — see DELETE route for rationale.
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
     const { id } = await context.params;
     const att = await prisma.attachment.findUnique({ where: { id } });

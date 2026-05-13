@@ -797,22 +797,9 @@ export const vehicleDocumentCreateSchema = z.object({
   issuedAt: z.string().optional().nullable(),
   expiryAt: z.string().optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
-  // Attachment fields are only set after the client uploads to S3 using
-  // the presigned URL; the route validates that the key starts with the
-  // expected workspace prefix.
-  attachmentKey: z.string().min(1).max(512).optional().nullable(),
-  attachmentFilename: z.string().trim().max(200).optional().nullable(),
-  attachmentMimeType: z.string().trim().max(100).optional().nullable(),
-  attachmentSize: z.number().int().nonnegative().max(20_000_000).optional().nullable(),
 });
 
 export const vehicleDocumentUpdateSchema = vehicleDocumentCreateSchema.partial();
-
-export const vehicleDocumentUploadUrlSchema = z.object({
-  filename: z.string().trim().min(1).max(200),
-  contentType: z.string().trim().min(1).max(100),
-  size: z.number().int().positive().max(20_000_000),
-});
 
 /* ---- Generic Attachment schemas (polymorphic per AttachmentOwnerKind) ---- */
 

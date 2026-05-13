@@ -40,10 +40,6 @@ export async function GET(
         issuedAt: d.issuedAt?.toISOString() ?? null,
         expiryAt: d.expiryAt?.toISOString() ?? null,
         notes: d.notes,
-        hasAttachment: !!d.attachmentKey,
-        attachmentFilename: d.attachmentFilename,
-        attachmentMimeType: d.attachmentMimeType,
-        attachmentSize: d.attachmentSize,
       })),
     });
   } catch (e) {
@@ -71,21 +67,6 @@ export async function POST(
       );
     }
     const data = parsed.data;
-    // If an attachment key was supplied, verify it belongs to this
-    // workspace+vehicle prefix. Prevents a malicious client from
-    // attaching another workspace's S3 key to their own doc row.
-    if (data.attachmentKey) {
-      const expectedPrefix = `workspaces/${ctx.workspaceId}/vehicles/${id}/`;
-      const prefix = process.env.AWS_S3_PREFIX
-        ? process.env.AWS_S3_PREFIX.replace(/^\/+|\/+$/g, "") + "/"
-        : "";
-      if (!data.attachmentKey.startsWith(prefix + expectedPrefix)) {
-        return NextResponse.json(
-          { error: "Attachment key doesn't belong to this vehicle" },
-          { status: 400 },
-        );
-      }
-    }
 
     const created = await prisma.$transaction(async (tx) => {
       const doc = await tx.vehicleDocument.create({
@@ -98,14 +79,10 @@ export async function POST(
           issuedAt: data.issuedAt ? new Date(data.issuedAt) : null,
           expiryAt: data.expiryAt ? new Date(data.expiryAt) : null,
           notes: data.notes,
-          attachmentKey: data.attachmentKey,
-          attachmentFilename: data.attachmentFilename,
-          attachmentMimeType: data.attachmentMimeType,
-          attachmentSize: data.attachmentSize,
         },
       });
       // Seed a renewal reminder for the expiry date. The cron sweep
-      // picks it up at 30 / 14 / 7 / 0 days out and emits notifications.
+      // picks it up at 7 / 3 / 0 days out and emits notifications.
       if (doc.expiryAt) {
         await tx.investmentReminder.create({
           data: {
