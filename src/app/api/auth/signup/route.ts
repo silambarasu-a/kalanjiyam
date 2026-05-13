@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     const verifyUrl = `${appUrl}/verify-email?token=${encodeURIComponent(rawToken)}`;
     const ttlHours = Number(process.env.EMAIL_VERIFICATION_TTL_HOURS ?? 24);
     const tpl = verifyEmailTemplate({ name, verifyUrl, appUrl, ttlHours });
-    await sendEmail({ to: email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+    await sendEmail({ to: email, subject: tpl.subject, html: tpl.html, text: tpl.text, category: "auth" });
 
     return NextResponse.json({
       message: CHECK_INBOX_MESSAGE,

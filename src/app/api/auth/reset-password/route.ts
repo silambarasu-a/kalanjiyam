@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         changedAt: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
         appUrl: getAppUrl(),
       });
-      await sendEmail({ to: user.email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+      await sendEmail({ to: user.email, subject: tpl.subject, html: tpl.html, text: tpl.text, category: "auth" });
     }
 
     return NextResponse.json({ ok: true });

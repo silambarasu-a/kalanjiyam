@@ -5,6 +5,11 @@ import type {
 } from "@/generated/prisma/client";
 import { sendEmail } from "@/lib/email/send";
 import { getAppUrl } from "@/lib/email/mailer";
+import {
+  notificationKindLabel,
+  notificationTemplate,
+} from "@/lib/email/templates/notification";
+import { signUnsubscribeToken } from "@/lib/email/unsubscribe-token";
 
 export type CreateNotificationInput = {
   workspaceId: string;
@@ -102,25 +107,37 @@ async function dispatchEmail(
 
   const base = getAppUrl();
   const link = input.link ? `${base}${input.link}` : null;
-  const subject = input.title;
-  const text = [
-    input.title,
-    input.body ?? "",
-    link ? `\n\nDetails: ${link}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const html = renderEmailHtml({
-    title: input.title,
-    body: input.body ?? null,
-    link,
-  });
 
   let anyDelivered = false;
   for (const m of recipients) {
     const to = m.user.email;
     if (!to) continue;
-    const ok = await sendEmail({ to, subject, text, html });
+    // Token is per-WorkspaceMember so each recipient's unsubscribe
+    // link only flips their own emailPrefs. Long TTL so the link
+    // works months after the mail was opened.
+    const token = signUnsubscribeToken(m.id);
+    const unsubscribeUrl = `${base}/api/email/unsubscribe?u=${encodeURIComponent(token)}`;
+
+    const { subject, html, text } = notificationTemplate({
+      title: input.title,
+      body: input.body ?? null,
+      link,
+      kindLabel: notificationKindLabel(input.kind),
+      appUrl: base,
+      unsubscribeUrl,
+    });
+
+    const ok = await sendEmail({
+      to,
+      subject,
+      text,
+      html,
+      // Deliverability — bulk-sender hints. These tell Gmail / Yahoo
+      // that this is a low-risk transactional broadcast the user opted
+      // into, and how to unsubscribe.
+      category: "notification",
+      unsubscribeUrl,
+    });
     if (ok) anyDelivered = true;
   }
 
@@ -132,26 +149,6 @@ async function dispatchEmail(
   }
 }
 
-function renderEmailHtml(args: {
-  title: string;
-  body: string | null;
-  link: string | null;
-}): string {
-  const safe = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return [
-    `<div style="font-family:-apple-system,system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#111">`,
-    `<h2 style="font-size:18px;margin:0 0 12px">${safe(args.title)}</h2>`,
-    args.body
-      ? `<p style="font-size:14px;line-height:1.5;color:#444;margin:0 0 16px">${safe(args.body)}</p>`
-      : "",
-    args.link
-      ? `<p style="font-size:14px;margin:0"><a href="${args.link}" style="display:inline-block;padding:8px 14px;background:#111;color:#fff;border-radius:6px;text-decoration:none">Open in Kalanjiyam</a></p>`
-      : "",
-    `<p style="font-size:11px;color:#888;margin-top:24px">You receive these because email notifications are enabled in your profile settings.</p>`,
-    `</div>`,
-  ].join("");
-}
 
 function shouldEmail(
   m: { emailPrefs: WorkspaceMember["emailPrefs"] },

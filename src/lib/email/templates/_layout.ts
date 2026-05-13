@@ -32,10 +32,33 @@ export type LayoutArgs = {
   preheader: string;
   bodyHtml: string;
   appUrl: string;
+  /**
+   * Optional one-click unsubscribe URL with a signed token. When set,
+   * the footer renders a real "Unsubscribe" link that lands on the
+   * public /unsubscribe page (no login). Auth-related templates
+   * (password reset, verify email) intentionally omit it — those mails
+   * can't be unsubscribed from.
+   */
+  unsubscribeUrl?: string;
 };
 
-export function renderLayout({ title, preheader, bodyHtml }: LayoutArgs): string {
+export function renderLayout({
+  title,
+  preheader,
+  bodyHtml,
+  appUrl,
+  unsubscribeUrl,
+}: LayoutArgs): string {
   const wordmark = `<span style="font-family:${FONT_STACK};font-size:20px;font-weight:600;color:${COLORS.primary};letter-spacing:-0.01em;">Kalanjiyam</span>`;
+  // Gmail/Yahoo bulk-sender expectations: postal address + visible
+  // unsubscribe affordance in the footer. The address is configurable
+  // via env so it stays accurate without code changes — falls back to
+  // a non-empty placeholder so the footer still passes parser checks
+  // even when COMPANY_ADDRESS isn't set in production.
+  const address =
+    process.env.COMPANY_ADDRESS ??
+    "Kalanjiyam, Tamil Nadu, India";
+  const settingsUrl = `${appUrl.replace(/\/$/, "")}/settings`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -51,8 +74,16 @@ export function renderLayout({ title, preheader, bodyHtml }: LayoutArgs): string
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:${COLORS.card};border:1px solid ${COLORS.border};border-radius:12px;overflow:hidden;">
         <tr><td style="padding:24px 32px;border-bottom:1px solid ${COLORS.border};">${wordmark}</td></tr>
         <tr><td style="padding:32px;font-size:15px;line-height:1.6;color:${COLORS.textDark};">${bodyHtml}</td></tr>
-        <tr><td style="padding:20px 32px 24px 32px;background:${COLORS.pageBg};border-top:1px solid ${COLORS.border};font-size:12px;color:${COLORS.textMuted};line-height:1.6;">
-          &copy; ${new Date().getFullYear()} Kalanjiyam &middot; Household finance &amp; farm management
+        <tr><td style="padding:20px 32px 24px 32px;background:${COLORS.pageBg};border-top:1px solid ${COLORS.border};font-size:12px;color:${COLORS.textMuted};line-height:1.7;">
+          <div>&copy; ${new Date().getFullYear()} Kalanjiyam &middot; Household finance &amp; farm management</div>
+          <div style="margin-top:4px;">${escape(address)}</div>
+          <div style="margin-top:8px;">
+            <a href="${escape(settingsUrl)}" style="color:${COLORS.textMuted};text-decoration:underline;">Manage email preferences</a>${
+              unsubscribeUrl
+                ? ` &middot; <a href="${escape(unsubscribeUrl)}" style="color:${COLORS.textMuted};text-decoration:underline;">Unsubscribe</a>`
+                : ""
+            }
+          </div>
         </td></tr>
       </table>
     </td></tr>
