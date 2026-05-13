@@ -60,6 +60,8 @@ type Stats = {
   liquid: number;
   investedAmount: number;
   investedCurrent: number;
+  otherHoldingsAmount: number;
+  otherHoldingsCurrent: number;
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
@@ -72,7 +74,14 @@ type Cashflow = {
   currentMonthDuePaid: number;
   currentMonthDueRemaining: number;
   currentMonthNonCardDueRemaining: number;
+  currentMonthInsuranceDue: number;
   nextMonthDue: number;
+  nextMonthBreakdown: {
+    cards: number;
+    insurance: number;
+    loans: number;
+    leases: number;
+  };
 };
 
 type StockLite = {
@@ -234,7 +243,7 @@ export default function DashboardPage() {
           icon={<Landmark className="h-5 w-5" />}
         />
         <BigStat
-          label="Invested"
+          label="Market Investments"
           value={
             investedCurrentLive != null
               ? formatINR(investedCurrentLive)
@@ -254,7 +263,11 @@ export default function DashboardPage() {
                 })()
               : undefined
           }
-          hint={stats ? `Cost ${formatINR(stats.investedAmount)}` : ""}
+          hint={
+            stats
+              ? `Stocks · MF · SIP · Cost ${formatINR(stats.investedAmount)}`
+              : ""
+          }
           icon={<ArrowDownLeft className="h-5 w-5" />}
         />
       </div>
@@ -295,14 +308,30 @@ export default function DashboardPage() {
             value={
               cashflow ? formatINR(cashflow.currentMonthDueRemaining) : "—"
             }
-            hint="Still owed this month"
+            hint={
+              cashflow && cashflow.currentMonthInsuranceDue > 0
+                ? `Still owed this month · incl. ${formatINR(cashflow.currentMonthInsuranceDue)} insurance`
+                : "Still owed this month"
+            }
             icon={<Hourglass className="h-4 w-4" />}
           />
-          {cashflow && cashflow.nextMonthDue > 0 && (
+          <SmallCard
+            title="Due next month"
+            value={cashflow ? formatINR(cashflow.nextMonthDue) : "—"}
+            hint={
+              cashflow
+                ? nextMonthBreakdownHint(cashflow.nextMonthBreakdown)
+                : ""
+            }
+            icon={<CalendarClock className="h-4 w-4" />}
+          />
+          {stats && stats.otherHoldingsCurrent > 0 && (
             <SmallCard
-              title="Due next month"
-              value={formatINR(cashflow.nextMonthDue)}
-              icon={<CalendarClock className="h-4 w-4" />}
+              title="Other holdings"
+              value={formatINR(stats.otherHoldingsCurrent)}
+              hint="FD · RD · Gold · Insurance · Other"
+              icon={<Landmark className="h-4 w-4" />}
+              href="/investments"
             />
           )}
           <SmallCard
@@ -673,4 +702,18 @@ function SmallCard({
       {inner}
     </Link>
   );
+}
+
+function nextMonthBreakdownHint(b: {
+  cards: number;
+  insurance: number;
+  loans: number;
+  leases: number;
+}): string {
+  const parts: string[] = [];
+  if (b.cards > 0) parts.push(`Cards ${formatINR(b.cards)}`);
+  if (b.insurance > 0) parts.push(`Insurance ${formatINR(b.insurance)}`);
+  if (b.loans > 0) parts.push(`Loans ${formatINR(b.loans)}`);
+  if (b.leases > 0) parts.push(`Leases ${formatINR(b.leases)}`);
+  return parts.length > 0 ? parts.join(" · ") : "Projected outflow";
 }

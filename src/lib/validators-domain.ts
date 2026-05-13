@@ -113,6 +113,14 @@ export const transactionCreateSchema = z
     refundForTransactionId: z.string().uuid().optional().nullable(),
     beneficiaryContactId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
+    vehicleId: z.string().uuid().optional().nullable(),
+    claimId: z.string().uuid().optional().nullable(),
+    hospitalizationId: z.string().uuid().optional().nullable(),
+    hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
+    goldForm: z
+      .enum(["ORNAMENT", "COIN", "BAR", "BISCUIT", "JEWELLERY_MAKING"])
+      .optional()
+      .nullable(),
   })
   .refine((d) => !!d.accountId || !!d.cardId, {
     message: "Pick an account or a card",
@@ -138,6 +146,14 @@ export const transactionUpdateSchema = z.object({
   categoryId: z.string().uuid().optional().nullable(),
   beneficiaryContactId: z.string().uuid().optional().nullable(),
   memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional(),
+  vehicleId: z.string().uuid().optional().nullable(),
+  claimId: z.string().uuid().optional().nullable(),
+  hospitalizationId: z.string().uuid().optional().nullable(),
+  hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
+  goldForm: z
+    .enum(["ORNAMENT", "COIN", "BAR", "BISCUIT", "JEWELLERY_MAKING"])
+    .optional()
+    .nullable(),
   editNote: z.string().trim().max(200).optional(),
 });
 
@@ -596,6 +612,33 @@ const investmentCreateBase = z.object({
   nominee: z.string().trim().max(120).optional(),
   /** Kind-specific structured extras (e.g. for GOLD: type, purity, wastage, making, gst). */
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
+  /** Link a VEHICLE-type insurance policy to a Vehicle row. */
+  vehicleId: z.string().uuid().optional().nullable(),
+  /**
+   * For GOLD investments only: form of the gold being bought. Stamped on
+   * the BUY transaction(s) so reports can separate investment-grade gold
+   * (COIN / BAR / BISCUIT) from ornaments routed through Expense.
+   */
+  goldForm: z.enum(["COIN", "BAR", "BISCUIT"]).optional().nullable(),
+  // Life-insurance corporate fields. All optional — only meaningful when
+  // policyType is LIFE / TERM / ULIP / ENDOWMENT.
+  policyTermYears: z.number().int().positive().max(120).optional().nullable(),
+  premiumPayingTermYears: z.number().int().positive().max(120).optional().nullable(),
+  maturityValue: z.number().nonnegative().optional().nullable(),
+  bonusAccrued: z.number().nonnegative().optional().nullable(),
+  bonusLastRevisedAt: z.string().optional().nullable(),
+  ridersJson: z
+    .object({
+      list: z.array(
+        z.object({
+          name: z.string().trim().min(1).max(80),
+          sumAssured: z.number().nonnegative().optional().nullable(),
+          notes: z.string().trim().max(200).optional(),
+        }),
+      ),
+    })
+    .optional()
+    .nullable(),
   accountId: z.string().uuid().optional().nullable(),
   /**
    * Optional split-payment list. When present, replaces `accountId` — a BUY
@@ -649,3 +692,90 @@ export const reminderConfirmSchema = z.object({
   date: z.string().optional(),
   notes: z.string().trim().max(200).optional(),
 });
+
+/**
+ * Insured-member: a Contact covered under an insurance policy. For HEALTH
+ * policies that's the patient; for future LIFE policies it'll be the
+ * beneficiary (role discriminator lands in Phase 3). Premium fields are
+ * optional — when null, the member inherits the policy's premiumAmount/
+ * frequency. When set, they let one policy charge different premiums per
+ * insured (common for family-floater health policies with age-based slabs).
+ */
+const insuredMemberBase = z.object({
+  contactId: z.string().uuid(),
+  premiumAmount: z.number().positive().optional().nullable(),
+  premiumFrequency: premiumFreqEnum.optional().nullable(),
+  sumAssured: z.number().positive().optional().nullable(),
+  coverageStart: z.string().optional().nullable(),
+  coverageEnd: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+  role: z.enum(["INSURED", "BENEFICIARY"]).optional(),
+  sharePercent: z.number().min(0).max(100).optional().nullable(),
+});
+
+export const insuredMemberCreateSchema = insuredMemberBase.refine(
+  (d) => d.role !== "BENEFICIARY" || d.sharePercent != null,
+  { message: "Beneficiary needs a share %", path: ["sharePercent"] },
+);
+
+export const insuredMemberUpdateSchema = insuredMemberBase
+  .partial()
+  .extend({ active: z.boolean().optional() });
+
+const claimStatusEnum = z.enum([
+  "FILED",
+  "INTIMATED",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "PARTIALLY_APPROVED",
+  "REJECTED",
+  "PAID",
+  "CLOSED",
+]);
+
+export const insuranceClaimCreateSchema = z.object({
+  insuredMemberId: z.string().uuid().optional().nullable(),
+  hospitalizationId: z.string().uuid().optional().nullable(),
+  vehicleId: z.string().uuid().optional().nullable(),
+  claimNumber: z.string().trim().max(80).optional(),
+  incidentDate: z.string(),
+  filedAt: z.string().optional().nullable(),
+  status: claimStatusEnum.optional(),
+  claimedAmount: z.number().nonnegative().optional().nullable(),
+  approvedAmount: z.number().nonnegative().optional().nullable(),
+  receivedAmount: z.number().nonnegative().optional().nullable(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const insuranceClaimUpdateSchema = insuranceClaimCreateSchema.partial();
+
+const vehicleKindEnum = z.enum(["BIKE", "CAR", "TRACTOR", "TRUCK", "SCOOTER", "OTHER"]);
+
+export const vehicleCreateSchema = z.object({
+  ownerContactId: z.string().uuid(),
+  kind: vehicleKindEnum,
+  name: z.string().trim().min(1).max(80),
+  make: z.string().trim().max(60).optional(),
+  model: z.string().trim().max(60).optional(),
+  year: z.number().int().min(1900).max(2100).optional().nullable(),
+  registrationNo: z.string().trim().max(40).optional(),
+  purchaseDate: z.string().optional().nullable(),
+  purchasePrice: z.number().positive().optional().nullable(),
+  odometerStart: z.number().int().nonnegative().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+export const vehicleUpdateSchema = vehicleCreateSchema
+  .partial()
+  .extend({ active: z.boolean().optional() });
+
+export const hospitalizationCreateSchema = z.object({
+  patientContactId: z.string().uuid(),
+  hospitalName: z.string().trim().min(1).max(120),
+  diagnosis: z.string().trim().max(200).optional(),
+  admittedAt: z.string(),
+  dischargedAt: z.string().optional().nullable(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export const hospitalizationUpdateSchema = hospitalizationCreateSchema.partial();

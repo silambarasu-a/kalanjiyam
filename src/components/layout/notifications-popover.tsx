@@ -40,6 +40,15 @@ export function NotificationsPopover() {
   const { data } = useSWR<Payload>("/api/notifications", fetcher, {
     refreshInterval: 60_000,
   });
+  // Persistent inbox unread count (Phase 7 — separate from the
+  // computed dues feed above). The bell badge combines both so a single
+  // surface signals everything actionable.
+  const { data: inbox } = useSWR<{ count: number }>(
+    "/api/inbox/unread-count",
+    (url: string) => fetch(url).then((r) => (r.ok ? r.json() : { count: 0 })),
+    { refreshInterval: 60_000 },
+  );
+  const inboxUnread = inbox?.count ?? 0;
   const { isDismissed, dismiss, dismissMany, undismiss, clearAll } =
     useDismissedNotifications();
 
@@ -51,6 +60,8 @@ export function NotificationsPopover() {
   const total = unreadItems.length;
   const dueSoon = total - overdue;
   const readCount = allItems.length - unreadItems.length;
+  // Bell badge sums dues + inbox so a single dot covers both surfaces.
+  const badgeTotal = total + inboxUnread;
   // Sort unread first (chronological), then read (chronological). Keeps
   // actionable items at the top of the constrained popover surface.
   const orderedItems = [
@@ -74,7 +85,7 @@ export function NotificationsPopover() {
         className="relative h-9 w-9 rounded-md hover:bg-accent flex items-center justify-center text-muted-foreground transition-colors"
       >
         <Bell className="h-4 w-4" />
-        {total > 0 && (
+        {badgeTotal > 0 && (
           <span
             aria-hidden
             style={{ top: "0.3rem", right: "0.35rem" }}
@@ -117,6 +128,15 @@ export function NotificationsPopover() {
                 >
                   <Undo2 className="h-3 w-3" /> Restore
                 </button>
+              )}
+              {inboxUnread > 0 && (
+                <Link
+                  href="/inbox"
+                  className="rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
+                  title="Open inbox"
+                >
+                  Inbox ({inboxUnread})
+                </Link>
               )}
               <Link
                 href="/notifications"

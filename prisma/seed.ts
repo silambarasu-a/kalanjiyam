@@ -31,6 +31,11 @@ const DEFAULT_CATEGORIES: CategoryDef[] = [
   { name: "Feed", types: [TransactionType.EXPENSE], group: "Expense" },
   { name: "Vaccination", types: [TransactionType.EXPENSE], group: "Expense" },
   { name: "Loan Payment", types: [TransactionType.EXPENSE], group: "Expense" },
+  { name: "Vehicle Purchase", types: [TransactionType.EXPENSE], group: "Expense" },
+  { name: "Vehicle Service", types: [TransactionType.EXPENSE], group: "Expense" },
+  { name: "Fuel", types: [TransactionType.EXPENSE], group: "Expense" },
+  { name: "Hospital", types: [TransactionType.EXPENSE], group: "Expense" },
+  { name: "Gold/Jewellery", types: [TransactionType.EXPENSE], group: "Expense" },
   { name: "Other Expense", types: [TransactionType.EXPENSE], group: "Expense" },
 
   // Investment

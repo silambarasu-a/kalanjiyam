@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw, RotateCcw } from "lucide-react";
@@ -244,6 +245,7 @@ function DialogBody({
           defaultCreatingNew={defaultCreatingNew}
           editingInvestmentId={editingInvestmentId}
           onClose={onClose}
+          onSwitchToExpense={() => setType("EXPENSE")}
         />
       ) : type === "REFUND" ? (
         <RefundForm cards={cards} onClose={onClose} />
@@ -304,6 +306,43 @@ function IncomeExpenseForm({
   const selectedCategory = categories.find((c) => c.id === categoryId);
   const isWageMode =
     type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
+  const VEHICLE_CATEGORIES = new Set(["vehicle purchase", "vehicle service", "fuel"]);
+  const isVehicleMode =
+    type === "EXPENSE" &&
+    !!selectedCategory?.name &&
+    VEHICLE_CATEGORIES.has(selectedCategory.name.toLowerCase());
+  const [vehicleId, setVehicleId] = useState<string | null>(null);
+  const { data: vehiclesData } = useSWR<{
+    vehicles: { id: string; name: string; kind: string; registrationNo: string | null }[];
+  }>(isVehicleMode ? "/api/vehicles" : null, fetcher);
+  const vehicles = vehiclesData?.vehicles ?? [];
+
+  const isHospitalMode =
+    type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "hospital";
+  const [hospitalizationId, setHospitalizationId] = useState<string | null>(null);
+  const [hospitalizationStage, setHospitalizationStage] = useState<
+    "PRE" | "DURING" | "POST"
+  >("DURING");
+  const [hospitalPatientFilter, setHospitalPatientFilter] = useState<string>("");
+  const { data: contactsForHospital } = useSWR<{
+    members: { id: string; name: string }[];
+  }>(isHospitalMode ? "/api/contacts" : null, fetcher);
+  const hospitalContacts = contactsForHospital?.members ?? [];
+  const { data: hospitalizationsData } = useSWR<{
+    hospitalizations: {
+      id: string;
+      hospitalName: string;
+      admittedAt: string;
+      dischargedAt: string | null;
+      patientContact: { id: string; name: string };
+    }[];
+  }>(
+    isHospitalMode && hospitalPatientFilter
+      ? `/api/hospitalizations?patientContactId=${hospitalPatientFilter}`
+      : null,
+    fetcher,
+  );
+  const episodes = hospitalizationsData?.hospitalizations ?? [];
 
   const amtNum = parseFloat(amount) || 0;
   // Pay-from picker grouped by funding-source kind so users scan by
@@ -464,6 +503,19 @@ function IncomeExpenseForm({
         payload.beneficiaryContactId = beneficiaryContactId;
         payload.memberChargeType = chargeFlag;
       }
+      if (isVehicleMode && vehicleId) payload.vehicleId = vehicleId;
+      if (isHospitalMode && hospitalizationId) {
+        payload.hospitalizationId = hospitalizationId;
+        payload.hospitalizationStage = hospitalizationStage;
+      }
+      // Gold/Jewellery expense → stamp ORNAMENT so reports can split
+      // ornament purchases from investment-grade gold.
+      if (
+        type === "EXPENSE" &&
+        selectedCategory?.name?.toLowerCase() === "gold/jewellery"
+      ) {
+        payload.goldForm = "ORNAMENT";
+      }
       if (tagSource.startsWith("crop:")) payload.cropBatchId = tagSource.slice(5);
       if (tagSource.startsWith("livestock:")) payload.livestockBatchId = tagSource.slice(10);
       const res = await fetch("/api/transactions", {
@@ -542,6 +594,107 @@ function IncomeExpenseForm({
           customAmounts={customAmounts}
           setCustomAmounts={setCustomAmounts}
         />
+      )}
+
+      {isVehicleMode && (
+        <div className="rounded-md border bg-muted/30 p-3">
+          <div className="text-xs font-medium">Vehicle</div>
+          <div className="text-[10px] text-muted-foreground">
+            Tag this {selectedCategory?.name?.toLowerCase()} to a specific vehicle so
+            running costs roll up on the Vehicles page.
+          </div>
+          <select
+            className="mt-2 w-full rounded-md border bg-background px-3 py-2 text-sm"
+            value={vehicleId ?? ""}
+            onChange={(e) => setVehicleId(e.target.value || null)}
+          >
+            <option value="">— pick a vehicle —</option>
+            {vehicles.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+                {v.registrationNo ? ` · ${v.registrationNo}` : ""} ({v.kind.toLowerCase()})
+              </option>
+            ))}
+          </select>
+          {vehicles.length === 0 && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              No vehicles yet.{" "}
+              <Link href="/vehicles" className="underline">
+                Add a vehicle
+              </Link>{" "}
+              first, then come back.
+            </p>
+          )}
+        </div>
+      )}
+
+      {isHospitalMode && (
+        <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+          <div className="text-xs font-medium">Hospitalization</div>
+          <div className="text-[10px] text-muted-foreground">
+            Tag this medical bill to a patient + episode + stage so it groups under
+            Medical Records.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+              value={hospitalPatientFilter}
+              onChange={(e) => {
+                setHospitalPatientFilter(e.target.value);
+                setHospitalizationId(null);
+              }}
+            >
+              <option value="">— patient —</option>
+              {hospitalContacts.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+              value={hospitalizationStage}
+              onChange={(e) =>
+                setHospitalizationStage(e.target.value as "PRE" | "DURING" | "POST")
+              }
+            >
+              <option value="PRE">Pre-hospitalization</option>
+              <option value="DURING">Hospitalization</option>
+              <option value="POST">Post-hospitalization</option>
+            </select>
+          </div>
+          {hospitalPatientFilter && (
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={hospitalizationId ?? ""}
+              onChange={(e) => setHospitalizationId(e.target.value || null)}
+            >
+              <option value="">— pick episode —</option>
+              {episodes.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.hospitalName} · admitted {new Date(h.admittedAt).toLocaleDateString()}
+                </option>
+              ))}
+            </select>
+          )}
+          {hospitalContacts.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              No contacts yet.{" "}
+              <Link href="/contacts" className="underline">
+                Add the patient on Contacts
+              </Link>
+              .
+            </p>
+          ) : hospitalPatientFilter && episodes.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              No hospitalizations for this patient yet.{" "}
+              <Link href="/medical" className="underline">
+                Add one on Medical Records
+              </Link>
+              .
+            </p>
+          ) : null}
+        </div>
       )}
 
       {(cropBatches.length > 0 || livestockBatches.length > 0) && (
@@ -1629,6 +1782,7 @@ function InvestmentForm({
   defaultCreatingNew = false,
   editingInvestmentId = null,
   onClose,
+  onSwitchToExpense,
 }: {
   accounts: Account[];
   cards: Card[];
@@ -1640,6 +1794,10 @@ function InvestmentForm({
    * fields. Submit then PATCHes instead of POSTing. */
   editingInvestmentId?: string | null;
   onClose: () => void;
+  /** Switch the parent dialog to the Expense tab. Used by the GOLD →
+   * ORNAMENTS warning to nudge users toward recording jewellery as
+   * expense (it shouldn't inflate net-worth). */
+  onSwitchToExpense?: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const { data: invData } = useSWR<{ investments: InvestmentHolding[] }>(
@@ -2426,6 +2584,18 @@ function InvestmentForm({
                 : undefined,
             startedAt: date,
             accountId: isGoldCreate ? undefined : accountId,
+            // Stamp the BUY transaction with the canonical GoldForm enum
+            // for investment-grade gold (COIN / BAR / BISCUIT). SGB / DIGITAL
+            // / ETF aren't physical gold and stay unstamped. ORNAMENTS is
+            // blocked here — the warning UI nudges users to Expense.
+            goldForm:
+              newKind === "GOLD"
+                ? newGoldType === "COIN"
+                  ? "COIN"
+                  : newGoldType === "BAR"
+                    ? "BAR"
+                    : undefined
+                : undefined,
             splits: isGoldCreate
               ? goldSplits.map((s) => {
                   const [k, sid] = s.source.split(":");
@@ -2716,25 +2886,21 @@ function InvestmentForm({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-xs font-medium">Premium (₹)</span>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                  <span className="text-xs font-medium">
+                    Premium <span className="font-normal text-muted-foreground">per cycle</span>
+                  </span>
+                  <AmountInput
                     value={newPremium}
-                    onChange={(e) => setNewPremium(e.target.value)}
+                    onChange={setNewPremium}
                     placeholder="0"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs font-medium">Sum assured (₹)</span>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                  <span className="text-xs font-medium">Sum assured</span>
+                  <AmountInput
                     value={newSumAssured}
-                    onChange={(e) => setNewSumAssured(e.target.value)}
-                    placeholder="Coverage amount"
+                    onChange={setNewSumAssured}
+                    placeholder="0"
                   />
                 </label>
               </div>
@@ -2858,6 +3024,24 @@ function InvestmentForm({
                   </div>
                 </label>
               </div>
+              {newGoldType === "ORNAMENTS" && (
+                <div className="rounded-md border border-amber-300 bg-amber-50/40 p-3 text-xs dark:border-amber-700 dark:bg-amber-950/20">
+                  <div className="font-medium">Ornaments are not investment-grade</div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    Resale bleeds wastage + making — most households don&apos;t treat
+                    jewellery as an investment. Record this on the{" "}
+                    <button
+                      type="button"
+                      onClick={() => onSwitchToExpense?.()}
+                      className="underline"
+                    >
+                      Expense tab
+                    </button>{" "}
+                    under <strong>Gold/Jewellery</strong> instead so it reduces this
+                    month&apos;s cash without inflating net-worth.
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">

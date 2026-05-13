@@ -29,6 +29,10 @@ export type IconName =
   | "loans"
   | "card-emi"
   | "investments"
+  | "insurance"
+  | "vehicles"
+  | "medical"
+  | "inbox"
   | "reminders"
   | "notifications"
   | "reports"
@@ -82,8 +86,22 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Protect",
+    items: [
+      { label: "Insurance", href: "/insurance", feature: "insurance", icon: "insurance" },
+      { label: "Medical Records", href: "/medical", feature: "medical", icon: "medical" },
+    ],
+  },
+  {
+    label: "Assets",
+    items: [
+      { label: "Vehicles", href: "/vehicles", feature: "vehicles", icon: "vehicles" },
+    ],
+  },
+  {
     label: "Insight",
     items: [
+      { label: "Inbox", href: "/inbox", feature: "reminders", icon: "inbox" },
       { label: "Notifications", href: "/notifications", feature: "reminders", icon: "notifications" },
       { label: "Reports", href: "/reports", feature: "reports", icon: "reports" },
     ],
