@@ -8,7 +8,7 @@ import {
 } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { insuredMemberCreateSchema } from "@/lib/validators-domain";
-import { computeReminderSchedule } from "@/lib/reminder-schedule";
+import { computeReminderSchedule, policyReminderCount } from "@/lib/reminder-schedule";
 import {
   InvestmentKind,
   PremiumFrequency,
@@ -146,10 +146,18 @@ export async function POST(
       const memberFreq = data.premiumFrequency;
       const memberAmount = data.premiumAmount;
       if (memberFreq && memberAmount && policy.nextDueDate) {
-        const dates = computeReminderSchedule({
-          firstDueDate: new Date(policy.nextDueDate),
+        const firstDue = new Date(policy.nextDueDate);
+        const count = policyReminderCount({
           frequency: memberFreq as PremiumFrequency,
-          count: 12,
+          firstDueDate: firstDue,
+          premiumPayingTermYears: policy.premiumPayingTermYears,
+          policyTermYears: policy.policyTermYears,
+          maturityAt: policy.maturityAt,
+        });
+        const dates = computeReminderSchedule({
+          firstDueDate: firstDue,
+          frequency: memberFreq as PremiumFrequency,
+          count,
         });
         await tx.investmentReminder.createMany({
           data: dates.map((d) => ({

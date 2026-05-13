@@ -8,8 +8,15 @@ import { checkDayWindowEditAllowed } from "@/lib/transaction-edit-lock";
 import {
   TransactionType,
   InvestmentAction,
+  ReminderKind,
+  ReminderStatus,
   Prisma,
 } from "@/generated/prisma/client";
+import {
+  computeReminderSchedule,
+  policyReminderCount,
+  type PremiumFrequency,
+} from "@/lib/reminder-schedule";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -26,7 +33,32 @@ export async function GET(
     const ctx = await requireWorkspace("investments", "read");
     const session = await auth();
     const { id } = await context.params;
-    const inv = await prisma.investment.findUnique({ where: { id } });
+    const inv = await prisma.investment.findUnique({
+      where: { id },
+      include: {
+        renewedFrom: {
+          select: {
+            id: true,
+            name: true,
+            policyNumber: true,
+            insuranceStatus: true,
+            startedAt: true,
+            nextDueDate: true,
+          },
+        },
+        successors: {
+          select: {
+            id: true,
+            name: true,
+            policyNumber: true,
+            insuranceStatus: true,
+            startedAt: true,
+            nextDueDate: true,
+          },
+          orderBy: { startedAt: "asc" },
+        },
+      },
+    });
     if (!inv || inv.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -46,7 +78,9 @@ export async function GET(
       prisma.investmentReminder.findMany({
         where: { investmentId: id },
         orderBy: { dueDate: "asc" },
-        take: 24,
+        // Long-pay insurance can have hundreds of reminders (20y monthly
+        // = 240). Hard cap is the schema-side seed cap of 600.
+        take: 600,
       }),
     ]);
     return NextResponse.json({
@@ -87,6 +121,25 @@ export async function GET(
         bonusAccrued: inv.bonusAccrued == null ? null : Number(inv.bonusAccrued),
         bonusLastRevisedAt: inv.bonusLastRevisedAt?.toISOString() ?? null,
         ridersJson: inv.ridersJson ?? null,
+        renewedFromInvestmentId: inv.renewedFromInvestmentId ?? null,
+        renewedFrom: inv.renewedFrom
+          ? {
+              id: inv.renewedFrom.id,
+              name: inv.renewedFrom.name,
+              policyNumber: inv.renewedFrom.policyNumber,
+              insuranceStatus: inv.renewedFrom.insuranceStatus,
+              startedAt: inv.renewedFrom.startedAt.toISOString(),
+              nextDueDate: inv.renewedFrom.nextDueDate?.toISOString() ?? null,
+            }
+          : null,
+        successors: inv.successors.map((s) => ({
+          id: s.id,
+          name: s.name,
+          policyNumber: s.policyNumber,
+          insuranceStatus: s.insuranceStatus,
+          startedAt: s.startedAt.toISOString(),
+          nextDueDate: s.nextDueDate?.toISOString() ?? null,
+        })),
       },
       transactions: transactions.map((t) => ({
         id: t.id,
@@ -137,13 +190,16 @@ export async function PATCH(
     }
     const data = parsed.data;
 
-    // Day-window lock — same rule the rest of the app uses for editing
-    // older records. The investment's `startedAt` is the anchor: after the
-    // workspace's edit window passes, only OWNER/ADMIN can edit (with a
-    // `force: true` flag). Members get a 423 with the standard message.
-    {
+    // Day-window lock — anchored on the RECORD's `createdAt`, not the
+    // investment's `startedAt`. For insurance policies in particular,
+    // `startedAt` is the policy's real-life effective date (which can be
+    // months or years in the past); the lock is meant to prevent
+    // back-dated tampering of transactional entries, not stop a user
+    // from correcting a typo in a policy they just added today.
+    // Insurance policies are long-lived metadata and skip the lock entirely.
+    if (inv.kind !== "INSURANCE") {
       const lock = await checkDayWindowEditAllowed({
-        date: inv.startedAt,
+        date: inv.createdAt,
         workspaceId: inv.workspaceId,
         role: ctx.role,
         force: body?.force === true,
@@ -297,6 +353,50 @@ export async function PATCH(
         },
       });
     });
+
+    // Top up INSURANCE premium reminders after the edit. If the user
+    // extended maturity or set a longer policy term, the schedule
+    // should grow to match — without this, a 36-month policy edited
+    // from a 12-month seed would still show only 12 reminders.
+    if (updated.kind === "INSURANCE" && updated.premiumFrequency && updated.nextDueDate) {
+      const expected = policyReminderCount({
+        frequency: updated.premiumFrequency as PremiumFrequency,
+        firstDueDate: updated.nextDueDate,
+        premiumPayingTermYears: updated.premiumPayingTermYears,
+        policyTermYears: updated.policyTermYears,
+        maturityAt: updated.maturityAt,
+      });
+      const existing = await prisma.investmentReminder.findMany({
+        where: { investmentId: id, kind: ReminderKind.INSURANCE_PREMIUM },
+        select: { dueDate: true },
+      });
+      if (existing.length < expected) {
+        const dates = computeReminderSchedule({
+          firstDueDate: updated.nextDueDate,
+          frequency: updated.premiumFrequency as PremiumFrequency,
+          count: expected,
+        });
+        const have = new Set(
+          existing.map((r) => r.dueDate.toISOString().slice(0, 10)),
+        );
+        const missing = dates.filter(
+          (d) => !have.has(d.toISOString().slice(0, 10)),
+        );
+        if (missing.length > 0) {
+          await prisma.investmentReminder.createMany({
+            data: missing.map((d) => ({
+              workspaceId: updated.workspaceId,
+              investmentId: id,
+              kind: ReminderKind.INSURANCE_PREMIUM,
+              dueDate: d,
+              amount: updated.premiumAmount ?? null,
+              status: ReminderStatus.UPCOMING,
+            })),
+          });
+        }
+      }
+    }
+
     return NextResponse.json({ id: updated.id });
   } catch (e) {
     return err(e);
@@ -318,13 +418,15 @@ export async function DELETE(
     if (!canModifyRecord(session, inv)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    // Day-window lock for delete (matches PATCH). DELETE has no body,
-    // so the force-override is passed via `?force=1` query string.
-    {
+    // Day-window lock for delete (matches PATCH). Anchored on
+    // `createdAt`, and skipped entirely for INSURANCE policies (see PATCH
+    // comment above). DELETE has no body, so the force-override is
+    // passed via `?force=1` query string.
+    if (inv.kind !== "INSURANCE") {
       const force =
         new URL(request.url).searchParams.get("force") === "1";
       const lock = await checkDayWindowEditAllowed({
-        date: inv.startedAt,
+        date: inv.createdAt,
         workspaceId: inv.workspaceId,
         role: ctx.role,
         force,
@@ -337,11 +439,30 @@ export async function DELETE(
         );
       }
     }
+    // Chain-integrity guard for insurance policies: if this policy is
+    // the predecessor of a renewal chain (someone renewed it into a new
+    // row), refuse delete. The FK is SET NULL so the successor would
+    // survive — but losing the predecessor breaks the audit trail of
+    // "this policy used to be X". User must delete the successor first
+    // or archive instead.
+    const successor = await prisma.investment.findFirst({
+      where: { renewedFromInvestmentId: id },
+      select: { id: true, name: true },
+    });
+    if (successor) {
+      return NextResponse.json(
+        {
+          error: `This policy was renewed into "${successor.name}". Delete the renewed policy first, or archive this one instead.`,
+        },
+        { status: 409 },
+      );
+    }
     // Cascade-delete linked transactions first so the holding can be
     // removed cleanly. The Transaction.investmentId FK is `onDelete:
     // SetNull` (set in schema) which would orphan the rows otherwise —
     // we want them gone with the holding since that's what the user just
-    // confirmed. InvestmentReminder cascades automatically via its FK.
+    // confirmed. InvestmentReminder + InsuredMember + InsuranceClaim
+    // cascade automatically via their FKs.
     // Wrapped in a $transaction so a failure mid-delete rolls back.
     await prisma.$transaction(async (tx) => {
       await tx.transaction.deleteMany({ where: { investmentId: id } });
