@@ -27,6 +27,16 @@ const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   SIP_BUY: NotificationKind.GENERIC,
   FD_INTEREST: NotificationKind.GENERIC,
   LEASE_PAYMENT: NotificationKind.GENERIC,
+  VEHICLE_DOC_RENEWAL: NotificationKind.GENERIC,
+};
+
+const VEHICLE_DOC_KIND_LABEL: Record<string, string> = {
+  RC: "RC book",
+  FC: "Fitness Certificate",
+  PUC: "Pollution Certificate",
+  ROAD_TAX: "Road tax",
+  INSURANCE_COPY: "Insurance copy",
+  OTHER: "Vehicle document",
 };
 
 function authorize(request: Request): boolean {
@@ -71,6 +81,15 @@ async function run() {
     include: {
       investment: { select: { name: true, id: true, kind: true, policyType: true } },
       loan: { select: { id: true, lender: true } },
+      vehicleDocument: {
+        select: {
+          id: true,
+          kind: true,
+          label: true,
+          vehicleId: true,
+          vehicle: { select: { id: true, name: true, registrationNo: true } },
+        },
+      },
     },
   });
 
@@ -92,29 +111,57 @@ async function run() {
           : NotificationKind.PREMIUM_DUE_SOON
         : baseKind;
 
-    const label =
-      r.investment?.name ??
-      r.loan?.lender ??
-      r.kind.replace("_", " ").toLowerCase();
+    let label: string;
+    if (r.kind === ReminderKind.VEHICLE_DOC_RENEWAL && r.vehicleDocument) {
+      const docLabel =
+        r.vehicleDocument.label ??
+        VEHICLE_DOC_KIND_LABEL[r.vehicleDocument.kind] ??
+        "Vehicle document";
+      const vehicleLabel =
+        r.vehicleDocument.vehicle?.name ??
+        r.vehicleDocument.vehicle?.registrationNo ??
+        "vehicle";
+      label = `${docLabel} (${vehicleLabel})`;
+    } else {
+      label =
+        r.investment?.name ??
+        r.loan?.lender ??
+        r.kind.replace(/_/g, " ").toLowerCase();
+    }
+
+    const isExpiry = r.kind === ReminderKind.VEHICLE_DOC_RENEWAL;
     const title =
       daysOut === 0
-        ? `${label} is due today`
+        ? isExpiry
+          ? `${label} expires today`
+          : `${label} is due today`
         : daysOut < 0
-          ? `${label} is overdue`
-          : `${label} due in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
-    const link = r.investment?.id
-      ? r.investment.kind === "INSURANCE"
-        ? `/insurance/${r.investment.id}`
-        : `/investments/${r.investment.id}`
-      : r.loan?.id
-        ? `/loans/${r.loan.id}`
-        : "/notifications";
+          ? isExpiry
+            ? `${label} has expired`
+            : `${label} is overdue`
+          : isExpiry
+            ? `${label} expires in ${daysOut} day${daysOut === 1 ? "" : "s"}`
+            : `${label} due in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
+    const link = r.vehicleDocument?.vehicleId
+      ? `/vehicles/${r.vehicleDocument.vehicleId}`
+      : r.investment?.id
+        ? r.investment.kind === "INSURANCE"
+          ? `/insurance/${r.investment.id}`
+          : `/investments/${r.investment.id}`
+        : r.loan?.id
+          ? `/loans/${r.loan.id}`
+          : "/notifications";
 
+    const body = isExpiry
+      ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`
+      : r.amount != null
+        ? `Amount: ₹${Number(r.amount).toLocaleString("en-IN")}`
+        : null;
     const result = await createNotification({
       workspaceId: r.workspaceId,
       kind,
       title,
-      body: r.amount != null ? `Amount: ₹${Number(r.amount).toLocaleString("en-IN")}` : null,
+      body,
       link,
       reminderId: r.id,
     });

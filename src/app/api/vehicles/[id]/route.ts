@@ -27,6 +27,9 @@ export async function GET(
       where: { id },
       include: {
         ownerContact: { select: { id: true, name: true } },
+        disposalContact: { select: { id: true, name: true } },
+        replacedBy: { select: { id: true, name: true, registrationNo: true } },
+        replaces: { select: { id: true, name: true, registrationNo: true } },
         insurances: {
           select: {
             id: true,
@@ -95,6 +98,13 @@ export async function GET(
         active: vehicle.active,
         notes: vehicle.notes,
         ownerContact: vehicle.ownerContact,
+        disposedAt: vehicle.disposedAt?.toISOString() ?? null,
+        disposalKind: vehicle.disposalKind,
+        disposalAmount:
+          vehicle.disposalAmount == null ? null : Number(vehicle.disposalAmount),
+        disposalContact: vehicle.disposalContact,
+        replacedBy: vehicle.replacedBy,
+        replaces: vehicle.replaces,
         insurances: vehicle.insurances.map((i) => ({
           ...i,
           premiumAmount: i.premiumAmount == null ? null : Number(i.premiumAmount),

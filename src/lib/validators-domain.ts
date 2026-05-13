@@ -780,3 +780,72 @@ export const hospitalizationCreateSchema = z.object({
 });
 
 export const hospitalizationUpdateSchema = hospitalizationCreateSchema.partial();
+
+const vehicleDocumentKindEnum = z.enum([
+  "RC",
+  "FC",
+  "PUC",
+  "ROAD_TAX",
+  "INSURANCE_COPY",
+  "OTHER",
+]);
+
+export const vehicleDocumentCreateSchema = z.object({
+  kind: vehicleDocumentKindEnum,
+  label: z.string().trim().max(80).optional().nullable(),
+  number: z.string().trim().max(80).optional().nullable(),
+  issuedAt: z.string().optional().nullable(),
+  expiryAt: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
+  // Attachment fields are only set after the client uploads to S3 using
+  // the presigned URL; the route validates that the key starts with the
+  // expected workspace prefix.
+  attachmentKey: z.string().min(1).max(512).optional().nullable(),
+  attachmentFilename: z.string().trim().max(200).optional().nullable(),
+  attachmentMimeType: z.string().trim().max(100).optional().nullable(),
+  attachmentSize: z.number().int().nonnegative().max(20_000_000).optional().nullable(),
+});
+
+export const vehicleDocumentUpdateSchema = vehicleDocumentCreateSchema.partial();
+
+export const vehicleDocumentUploadUrlSchema = z.object({
+  filename: z.string().trim().min(1).max(200),
+  contentType: z.string().trim().min(1).max(100),
+  size: z.number().int().positive().max(20_000_000),
+});
+
+/* ---- Generic Attachment schemas (polymorphic per AttachmentOwnerKind) ---- */
+
+const attachmentOwnerKindEnum = z.enum([
+  "VEHICLE_DOCUMENT",
+  "INSURANCE_POLICY",
+  "CARD_STATEMENT",
+  "TRANSACTION_RECEIPT",
+  "CROP_BATCH_BILL",
+  "LOAN_DOCUMENT",
+  "INCOME_PROOF",
+]);
+
+export const attachmentUploadUrlSchema = z.object({
+  ownerKind: attachmentOwnerKindEnum,
+  ownerId: z.string().min(1).max(64),
+  filename: z.string().trim().min(1).max(200),
+  contentType: z.string().trim().min(1).max(100),
+  // Hard ceiling 50 MB; per-kind policy enforces tighter limits server-side.
+  size: z.number().int().positive().max(50_000_000),
+});
+
+export const attachmentFinalizeSchema = z.object({
+  ownerKind: attachmentOwnerKindEnum,
+  ownerId: z.string().min(1).max(64),
+  s3Key: z.string().min(1).max(1024),
+  filename: z.string().trim().min(1).max(200),
+  mimeType: z.string().trim().min(1).max(100),
+  sizeBytes: z.number().int().positive().max(50_000_000),
+  checksum: z.string().trim().min(1).max(128).optional().nullable(),
+});
+
+export const attachmentListQuerySchema = z.object({
+  ownerKind: attachmentOwnerKindEnum,
+  ownerId: z.string().min(1).max(64),
+});
