@@ -8,6 +8,7 @@ import {
   VehicleDocumentKind,
 } from "@/generated/prisma/client";
 import { deleteObject, isS3Configured } from "@/lib/s3";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -49,10 +50,6 @@ export async function GET(
         issuedAt: doc.issuedAt?.toISOString() ?? null,
         expiryAt: doc.expiryAt?.toISOString() ?? null,
         notes: doc.notes,
-        hasAttachment: !!doc.attachmentKey,
-        attachmentFilename: doc.attachmentFilename,
-        attachmentMimeType: doc.attachmentMimeType,
-        attachmentSize: doc.attachmentSize,
       },
     });
   } catch (e) {
@@ -80,22 +77,7 @@ export async function PATCH(
       );
     }
     const data = parsed.data;
-    // If an attachment key is being set / replaced, make sure it lives
-    // under this workspace+vehicle prefix.
-    if (data.attachmentKey) {
-      const expectedPrefix = `workspaces/${ctx.workspaceId}/vehicles/${id}/`;
-      const prefix = process.env.AWS_S3_PREFIX
-        ? process.env.AWS_S3_PREFIX.replace(/^\/+|\/+$/g, "") + "/"
-        : "";
-      if (!data.attachmentKey.startsWith(prefix + expectedPrefix)) {
-        return NextResponse.json(
-          { error: "Attachment key doesn't belong to this vehicle" },
-          { status: 400 },
-        );
-      }
-    }
 
-    const oldAttachmentKey = doc.attachmentKey;
     const newExpiryAt =
       data.expiryAt === undefined
         ? doc.expiryAt
@@ -125,20 +107,6 @@ export async function PATCH(
                 ? new Date(data.expiryAt)
                 : null,
           notes: data.notes === undefined ? undefined : data.notes,
-          attachmentKey:
-            data.attachmentKey === undefined ? undefined : data.attachmentKey,
-          attachmentFilename:
-            data.attachmentFilename === undefined
-              ? undefined
-              : data.attachmentFilename,
-          attachmentMimeType:
-            data.attachmentMimeType === undefined
-              ? undefined
-              : data.attachmentMimeType,
-          attachmentSize:
-            data.attachmentSize === undefined
-              ? undefined
-              : data.attachmentSize,
         },
       });
 
@@ -166,21 +134,6 @@ export async function PATCH(
       return next;
     });
 
-    // If a new attachment replaced an old one, delete the old object from
-    // S3 so we don't accumulate orphans. Best-effort; ignore errors.
-    if (
-      data.attachmentKey &&
-      oldAttachmentKey &&
-      oldAttachmentKey !== data.attachmentKey &&
-      isS3Configured()
-    ) {
-      try {
-        await deleteObject(oldAttachmentKey);
-      } catch (delErr) {
-        console.warn("[vehicles/documents] failed to delete old object", delErr);
-      }
-    }
-
     return NextResponse.json({ id: updated.id });
   } catch (e) {
     return err(e);
@@ -198,13 +151,24 @@ export async function DELETE(
     if (!doc) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    const attachmentKey = doc.attachmentKey;
-    await prisma.vehicleDocument.delete({ where: { id: docId } });
-    if (attachmentKey && isS3Configured()) {
+    const legacyKey = doc.attachmentKey;
+    await prisma.$transaction(async (tx) => {
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "VEHICLE_DOCUMENT",
+        ownerId: docId,
+        userId: ctx.userId,
+        tx,
+      });
+      await tx.vehicleDocument.delete({ where: { id: docId } });
+    });
+    // Pre-migration legacy column — clean up the inline S3 object too
+    // (the new Attachment archival doesn't know about it).
+    if (legacyKey && isS3Configured()) {
       try {
-        await deleteObject(attachmentKey);
+        await deleteObject(legacyKey);
       } catch (delErr) {
-        console.warn("[vehicles/documents] failed to delete object", delErr);
+        console.warn("[vehicles/documents] failed to delete legacy object", delErr);
       }
     }
     return NextResponse.json({ ok: true });

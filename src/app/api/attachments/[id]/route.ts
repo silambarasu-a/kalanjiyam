@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { getAttachmentPolicy, type AttachmentOwnerKind } from "@/lib/attachments";
 import { deleteObject, isS3Configured } from "@/lib/s3";
@@ -22,6 +23,12 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Auth gate FIRST — never reveal attachment-id existence to
+    // unauthenticated callers via a 401-vs-404 oracle.
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
     const { id } = await context.params;
     const att = await prisma.attachment.findUnique({ where: { id } });
     if (!att) {
