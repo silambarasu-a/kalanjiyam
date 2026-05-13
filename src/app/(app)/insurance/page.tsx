@@ -333,8 +333,31 @@ function NewPolicyDialog({
     return undefined;
   })();
 
+  // Any partially-filled member row is a red flag — better to bail
+  // early than save the policy + silently drop those rows. This is the
+  // bug we hit: a user typed a premium on a row without picking a
+  // contact, expected the row to save, and it disappeared.
+  const incompleteMembers = members
+    .map((m, idx) => ({ m, idx }))
+    .filter(({ m }) => {
+      if (!m.contactId) {
+        // Row has any per-row data → it was clearly intended to save.
+        return !!(m.premiumAmount || m.sharePercent);
+      }
+      // Contact picked but role-specific field missing.
+      if (m.role === "BENEFICIARY" && !m.sharePercent) return true;
+      return false;
+    });
+
   async function submit() {
     setError(null);
+    if (incompleteMembers.length > 0) {
+      const rows = incompleteMembers.map(({ idx }) => `#${idx + 1}`).join(", ");
+      setError(
+        `Member ${rows} ${incompleteMembers.length === 1 ? "is" : "are"} missing required fields — pick a contact${members.some((m) => m.role === "BENEFICIARY" && !m.sharePercent) ? " and share %" : ""}, or remove the row.`,
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {
@@ -639,8 +662,14 @@ function NewPolicyDialog({
                   const usedIds = new Set(
                     members.map((x, i) => (i === idx ? "" : x.contactId)).filter(Boolean),
                   );
+                  const isIncomplete =
+                    (!m.contactId && (m.premiumAmount || m.sharePercent)) ||
+                    (m.contactId && m.role === "BENEFICIARY" && !m.sharePercent);
                   return (
-                    <div key={idx} className="flex items-start gap-2">
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-2 ${isIncomplete ? "rounded border border-destructive/40 bg-destructive/5 p-2" : ""}`}
+                    >
                       <select
                         className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
                         value={m.contactId}
@@ -750,7 +779,13 @@ function NewPolicyDialog({
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button
             onClick={submit}
-            disabled={submitting || !name.trim() || !premiumAmount || Number(premiumAmount) <= 0}
+            disabled={
+              submitting ||
+              !name.trim() ||
+              !premiumAmount ||
+              Number(premiumAmount) <= 0 ||
+              incompleteMembers.length > 0
+            }
           >
             Add policy
           </Button>

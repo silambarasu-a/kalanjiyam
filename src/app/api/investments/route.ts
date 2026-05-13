@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { investmentCreateSchema } from "@/lib/validators-domain";
-import { computeReminderSchedule } from "@/lib/reminder-schedule";
+import { computeReminderSchedule, policyReminderCount } from "@/lib/reminder-schedule";
 import {
   InvestmentKind,
   InsurancePolicyType,
@@ -248,15 +248,21 @@ export async function POST(request: Request) {
         });
       }
       if (data.kind === "INSURANCE" && data.premiumFrequency && data.nextDueDate) {
-        // Policy-level reminders are created here at policy creation time.
-        // When per-member premium overrides are later added via
-        // POST /api/insurance/[id]/members, additional per-member reminders
-        // are layered on top. UI surfaces both streams; deduplication is
-        // deferred until Phase 7 (notifications) consolidates them.
-        const dates = computeReminderSchedule({
-          firstDueDate: new Date(data.nextDueDate),
+        // Seed the full premium-paying schedule (capped at 600). For a
+        // 20-year endowment paid monthly, that's 240 reminders; for an
+        // unlimited-term health policy it's 24. Renewal regenerates.
+        const firstDue = new Date(data.nextDueDate);
+        const count = policyReminderCount({
           frequency: data.premiumFrequency as PremiumFrequency,
-          count: 12,
+          firstDueDate: firstDue,
+          premiumPayingTermYears: data.premiumPayingTermYears,
+          policyTermYears: data.policyTermYears,
+          maturityAt: data.maturityAt ? new Date(data.maturityAt) : null,
+        });
+        const dates = computeReminderSchedule({
+          firstDueDate: firstDue,
+          frequency: data.premiumFrequency as PremiumFrequency,
+          count,
         });
         await tx.investmentReminder.createMany({
           data: dates.map((d) => ({

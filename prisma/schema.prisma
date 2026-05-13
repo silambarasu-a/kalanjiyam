@@ -141,6 +141,7 @@ enum InsuranceStatus {
   MATURED
   SURRENDERED
   CLAIMED
+  RENEWED
 }
 
 enum ClaimStatus {
@@ -1127,6 +1128,15 @@ model Investment {
   vehicleId String?
   vehicle   Vehicle? @relation("VehicleInsurance", fields: [vehicleId], references: [id], onDelete: SetNull)
 
+  // Renewal chain for INSURANCE policies — when a renewal issues a new
+  // policy number, we create a fresh Investment row and link back to
+  // the predecessor here. Deleting the predecessor sets this null so
+  // the successor isn't cascade-deleted (the new row is the system of
+  // record going forward).
+  renewedFromInvestmentId String?
+  renewedFrom             Investment?  @relation("InvestmentRenewal", fields: [renewedFromInvestmentId], references: [id], onDelete: SetNull)
+  successors              Investment[] @relation("InvestmentRenewal")
+
   transactions   Transaction[]
   reminders      InvestmentReminder[] @relation("ReminderInvestment")
   insuredMembers InsuredMember[]      @relation("InsuranceMembers")
@@ -1135,6 +1145,7 @@ model Investment {
   @@index([workspaceId, kind, active])
   @@index([workspaceId, ownerUserId])
   @@index([vehicleId])
+  @@index([renewedFromInvestmentId])
 }
 
 model StockWishlist {

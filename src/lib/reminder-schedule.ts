@@ -36,6 +36,45 @@ export function computeReminderSchedule(args: {
   return out;
 }
 
+/**
+ * Compute the right number of reminders to seed for a recurring
+ * investment based on its term, with a hard cap.
+ *
+ * Priority:
+ *   1. `premiumPayingTermYears` — limited-pay window (e.g. pay-for-10
+ *      on a 20-year endowment). After this the user stops paying.
+ *   2. `policyTermYears` — fallback when paying-term isn't set.
+ *   3. `maturityAt` — date-based fallback if neither term is set.
+ *   4. Default 24 cycles.
+ *
+ * Hard-capped at 600 so a misconfigured 999-year policy doesn't seed
+ * an absurd number of rows.
+ */
+export function policyReminderCount(args: {
+  frequency: PremiumFrequency;
+  firstDueDate: Date;
+  premiumPayingTermYears?: number | null;
+  policyTermYears?: number | null;
+  maturityAt?: Date | null;
+}): number {
+  const months = monthsForFrequency(args.frequency);
+  if (!months) return 1;
+  const HARD_CAP = 600;
+
+  const termYears = args.premiumPayingTermYears ?? args.policyTermYears;
+  if (termYears && termYears > 0) {
+    return Math.min(HARD_CAP, Math.ceil((termYears * 12) / months));
+  }
+  if (args.maturityAt) {
+    const ms = args.maturityAt.getTime() - args.firstDueDate.getTime();
+    if (ms > 0) {
+      const monthsToMaturity = ms / (1000 * 60 * 60 * 24 * 30.4375);
+      return Math.min(HARD_CAP, Math.max(1, Math.ceil(monthsToMaturity / months)));
+    }
+  }
+  return 24;
+}
+
 export function advanceDate(date: Date, frequency: PremiumFrequency): Date {
   const months = monthsForFrequency(frequency);
   if (!months) return date;

@@ -52,6 +52,7 @@ export async function GET(request: Request) {
         startedAt: p.startedAt.toISOString(),
         maturityAt: p.maturityAt?.toISOString() ?? null,
         active: p.active,
+        renewedFromInvestmentId: p.renewedFromInvestmentId,
         ownerUser: p.ownerUser,
         memberCount: p.insuredMembers.length,
         members: p.insuredMembers.map((m) => ({
