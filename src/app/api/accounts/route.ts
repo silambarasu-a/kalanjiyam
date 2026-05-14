@@ -34,6 +34,7 @@ export async function GET() {
       include: {
         ownerUser: { select: { id: true, name: true, email: true } },
         ownerContact: { select: { id: true, name: true } },
+        linkedCard: { select: { id: true } },
       },
     });
 
@@ -50,23 +51,32 @@ export async function GET() {
       Promise.all(
         accounts.map(async (a) => {
           if (a.kind !== "CARD") return null;
+          // 1. Prefer a still-owing manual override.
           if (a.nextBillAmount != null) {
             const manualAmount = Number(a.nextBillAmount);
             const cutoff = a.nextBillDue ?? new Date();
             const paidUntagged = await untaggedPaymentsToCard(a.id, cutoff);
-            return Math.max(0, manualAmount - paidUntagged);
+            const remaining = Math.max(0, manualAmount - paidUntagged);
+            if (remaining > 0) {
+              return { amount: remaining, dueDate: a.nextBillDue ?? null };
+            }
+            // Manual override fully paid — fall through to the next
+            // materialised statement.
           }
           const unpaid = await prisma.cardStatement.findFirst({
             where: { accountId: a.id, paidAt: null },
             orderBy: { dueDate: "asc" },
             select: {
               totalDue: true,
+              dueDate: true,
               payments: { select: { amount: true } },
             },
           });
           if (!unpaid) return null;
           const paid = unpaid.payments.reduce((s, p) => s + Number(p.amount), 0);
-          return Math.max(0, Number(unpaid.totalDue) - paid);
+          const outstanding = Math.max(0, Number(unpaid.totalDue) - paid);
+          if (outstanding === 0) return null;
+          return { amount: outstanding, dueDate: unpaid.dueDate };
         }),
       ),
     ]);
@@ -86,7 +96,9 @@ export async function GET() {
         sharedWithUserIds: a.sharedWithUserIds,
         balance: balances[i].balance,
         availableLimit: availableLimits[i],
-        upcomingBillAmount: upcomingBills[i],
+        upcomingBillAmount: upcomingBills[i]?.amount ?? null,
+        nextBillDue: upcomingBills[i]?.dueDate?.toISOString() ?? null,
+        linkedCardId: a.linkedCard?.id ?? null,
       })),
     });
   } catch (err) {

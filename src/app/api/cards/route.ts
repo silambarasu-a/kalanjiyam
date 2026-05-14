@@ -115,6 +115,7 @@ export async function GET() {
       Promise.all(
         cards.map(async (c) => {
           if (c.kind !== "CREDIT" || !c.accountId) return null;
+          // 1. Prefer a still-owing manual override.
           if (c.account?.nextBillAmount != null) {
             const manualAmount = Number(c.account.nextBillAmount);
             const cutoff = c.account.nextBillDue ?? new Date();
@@ -122,13 +123,19 @@ export async function GET() {
               c.accountId,
               cutoff,
             );
-            return Math.max(0, manualAmount - paidUntagged);
+            const remaining = Math.max(0, manualAmount - paidUntagged);
+            if (remaining > 0) {
+              return { amount: remaining, dueDate: c.account.nextBillDue ?? null };
+            }
+            // Manual override fully paid — fall through to the next
+            // materialised statement (e.g. the cycle the cron just closed).
           }
           const unpaid = await prisma.cardStatement.findFirst({
             where: { accountId: c.accountId, paidAt: null },
             orderBy: { dueDate: "asc" },
             select: {
               totalDue: true,
+              dueDate: true,
               payments: { select: { amount: true } },
             },
           });
@@ -137,7 +144,9 @@ export async function GET() {
             (s, p) => s + Number(p.amount),
             0,
           );
-          return Math.max(0, Number(unpaid.totalDue) - paid);
+          const outstanding = Math.max(0, Number(unpaid.totalDue) - paid);
+          if (outstanding === 0) return null;
+          return { amount: outstanding, dueDate: unpaid.dueDate };
         }),
       ),
     ]);
@@ -167,7 +176,10 @@ export async function GET() {
           creditLimit: effectiveLimit == null ? null : Number(effectiveLimit),
           statementDate: c.account?.statementDate ?? null,
           gracePeriod: c.account?.gracePeriod ?? null,
-          nextBillDue: c.account?.nextBillDue?.toISOString() ?? null,
+          nextBillDue:
+            upcomingBills[i]?.dueDate?.toISOString() ??
+            c.account?.nextBillDue?.toISOString() ??
+            null,
           nextBillAmount:
             c.account?.nextBillAmount != null
               ? Number(c.account.nextBillAmount)
@@ -175,7 +187,7 @@ export async function GET() {
           availableLimit: availableLimits[i],
           linkedBalance: debitBalances[i],
           currentBalance: creditBalances[i],
-          upcomingBillAmount: upcomingBills[i],
+          upcomingBillAmount: upcomingBills[i]?.amount ?? null,
           sharedWithUserIds: c.sharedWithUserIds,
         };
       }),

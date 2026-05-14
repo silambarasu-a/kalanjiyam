@@ -781,14 +781,28 @@ export async function getDashboardCashflow(args: {
       if (d.source !== "CARD_STATEMENT") currentMonthNonCardDueRemaining += d.amount;
       if (isInsurance) currentMonthInsuranceDue += d.amount;
     } else if (t < nextMonthEnd) {
+      // Cards are added to the next-month tile from the full unpaid
+      // balance below — skip them here so they're not double-counted.
+      if (d.source === "CARD_STATEMENT") continue;
       nextMonthDue += d.amount;
-      if (d.source === "CARD_STATEMENT") nextMonthBreakdown.cards += d.amount;
-      else if (isInsurance) nextMonthBreakdown.insurance += d.amount;
+      if (isInsurance) nextMonthBreakdown.insurance += d.amount;
       else if (d.source === "LOAN" || d.kind === "LOAN_EMI")
         nextMonthBreakdown.loans += d.amount;
       else if (d.source === "LEASE") nextMonthBreakdown.leases += d.amount;
     }
   }
+  // Card outstanding for the next-month tile = the live card-account
+  // balance (opening + expense − income + transfersOut − transfersIn).
+  // This includes the OPEN cycle's spend (e.g. a gold-on-card buy
+  // posted today) and works for cards that have never had a statement
+  // materialised yet. `unpaidTotalForCardAccount` only sees closed
+  // cycles and would miss both cases.
+  let cardsOutstanding = 0;
+  for (const cb of cardBalances) {
+    cardsOutstanding += Math.max(0, cb.balance);
+  }
+  nextMonthDue += cardsOutstanding;
+  nextMonthBreakdown.cards = cardsOutstanding;
   const currentMonthDueGross = currentMonthDuePaid + currentMonthDueRemaining;
 
   return {
