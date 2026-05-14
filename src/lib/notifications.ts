@@ -199,9 +199,14 @@ function shouldEmail(
   m: { emailPrefs: WorkspaceMember["emailPrefs"] },
   kind: NotificationKind,
 ): boolean {
+  // Default = opted in. Only an explicit `enabled: false` suppresses
+  // emails — unset/null prefs mean "send by default; user can opt out
+  // later from /settings". The feature-permission gate in
+  // memberHasFeatureAccess still narrows recipients to members with the
+  // relevant feature access (e.g. CARD_STATEMENT_DUE → cards:view).
   const prefs = (m.emailPrefs ?? {}) as EmailPrefs;
-  if (!prefs.enabled) return false;
+  if (prefs.enabled === false) return false;
   const allowed = prefs.kinds;
-  if (!allowed || allowed.length === 0) return true; // enabled = all kinds
+  if (!allowed || allowed.length === 0) return true; // all kinds
   return allowed.includes(kind);
 }

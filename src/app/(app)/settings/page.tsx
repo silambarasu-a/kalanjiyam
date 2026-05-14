@@ -472,12 +472,15 @@ function EmailNotificationsCard() {
   useEffect(() => {
     if (!data) return;
     /* eslint-disable react-hooks/set-state-in-effect -- sync server-supplied prefs once */
-    setEnabled(!!data.emailPrefs.enabled);
+    // Default = opted-in. Only an explicit `enabled: false` shows OFF;
+    // unset/missing prefs render as ON, matching the server's
+    // shouldEmail() opt-out model.
+    setEnabled(data.emailPrefs.enabled !== false);
     setKinds(new Set(data.emailPrefs.kinds ?? []));
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [data]);
 
-  const current = enabled ?? !!data?.emailPrefs.enabled;
+  const current = enabled ?? data?.emailPrefs.enabled !== false;
   const allKinds = Object.keys(NOTIFICATION_KIND_LABELS);
   const allSelected = current && (kinds.size === 0 || kinds.size === allKinds.length);
 
