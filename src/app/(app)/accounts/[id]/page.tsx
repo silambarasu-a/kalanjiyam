@@ -75,7 +75,12 @@ export default async function AccountDetailPage({
           amount: true,
           description: true,
           date: true,
-          category: { select: { name: true } },
+          category: {
+            select: {
+              name: true,
+              parent: { select: { name: true } },
+            },
+          },
         },
       })
     : [];
@@ -127,8 +132,12 @@ export default async function AccountDetailPage({
   const categoryMap = new Map<string, number>();
   for (const t of transactions) {
     if (t.type !== "EXPENSE") continue;
-    const name = t.category?.name ?? "Uncategorized";
-    categoryMap.set(name, (categoryMap.get(name) ?? 0) + Number(t.amount));
+    const label = t.category
+      ? t.category.parent?.name
+        ? `${t.category.parent.name} › ${t.category.name}`
+        : t.category.name
+      : "Uncategorized";
+    categoryMap.set(label, (categoryMap.get(label) ?? 0) + Number(t.amount));
   }
   const categorySlices: CategorySlice[] = Array.from(categoryMap.entries())
     .map(([name, amount]) => ({ name, amount }))
@@ -287,7 +296,16 @@ export default async function AccountDetailPage({
                     <td className="px-5 py-2.5">
                       {t.category?.name ? (
                         <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                          {t.category.name}
+                          {t.category.parent?.name ? (
+                            <>
+                              <span className="opacity-60">
+                                {t.category.parent.name} ›{" "}
+                              </span>
+                              {t.category.name}
+                            </>
+                          ) : (
+                            t.category.name
+                          )}
                         </span>
                       ) : (
                         <span className="text-muted-foreground">—</span>

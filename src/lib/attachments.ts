@@ -19,7 +19,8 @@ export type AttachmentOwnerKind =
   | "TRANSACTION_RECEIPT"
   | "CROP_BATCH_BILL"
   | "LOAN_DOCUMENT"
-  | "INCOME_PROOF";
+  | "INCOME_PROOF"
+  | "EVENT_DOCUMENT";
 
 export type AttachmentPolicy = {
   /** S3 path segment for this owner kind. Stable; never rename. */
@@ -83,6 +84,13 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     mime: ["application/pdf", "image/*"],
     maxMB: 25,
     sensitive: true,
+  },
+  EVENT_DOCUMENT: {
+    entityPath: "events",
+    feature: "events",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    sensitive: false,
   },
 };
 

@@ -253,6 +253,20 @@ const body = await request.json();
             parsed.data.hospitalizationStage === undefined
               ? t.hospitalizationStage
               : parsed.data.hospitalizationStage,
+          eventId:
+            parsed.data.eventId === undefined ? t.eventId : parsed.data.eventId,
+          fuelQuantity:
+            parsed.data.fuelQuantity === undefined
+              ? t.fuelQuantity
+              : parsed.data.fuelQuantity,
+          fuelUnit:
+            parsed.data.fuelUnit === undefined
+              ? t.fuelUnit
+              : parsed.data.fuelUnit,
+          fuelOdometer:
+            parsed.data.fuelOdometer === undefined
+              ? t.fuelOdometer
+              : parsed.data.fuelOdometer,
           goldForm:
             parsed.data.goldForm === undefined ? t.goldForm : parsed.data.goldForm,
           editNote: parsed.data.editNote ?? null,

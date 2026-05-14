@@ -55,7 +55,17 @@ export async function GET(request: Request) {
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: limit,
       include: {
-        category: { select: { id: true, name: true, group: true } },
+        category: {
+          select: {
+            id: true,
+            name: true,
+            group: true,
+            // Pull the parent so the UI can render "Vehicle › Fuel".
+            // Falls back to plain name when parent is null (top-level
+            // categories).
+            parent: { select: { id: true, name: true } },
+          },
+        },
         account: { select: { id: true, name: true, kind: true } },
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
@@ -117,6 +127,7 @@ export async function GET(request: Request) {
           transferDirection,
           transferCounterparty,
           refundForTransactionId: t.refundForTransactionId,
+          eventId: t.eventId,
         };
       }),
     });
@@ -304,6 +315,10 @@ export async function POST(request: Request) {
           claimId: data.claimId ?? null,
           hospitalizationId: data.hospitalizationId ?? null,
           hospitalizationStage: data.hospitalizationStage ?? null,
+          eventId: data.eventId ?? null,
+          fuelQuantity: data.fuelQuantity ?? null,
+          fuelUnit: data.fuelUnit ?? null,
+          fuelOdometer: data.fuelOdometer ?? null,
           goldForm: data.goldForm ?? null,
           userId: ctx.userId,
           createdByUserId: ctx.userId,

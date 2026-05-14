@@ -69,6 +69,13 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "EVENT_DOCUMENT": {
+      const row = await prisma.event.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     default: {
       const exhaustive: never = ownerKind;
       void exhaustive;

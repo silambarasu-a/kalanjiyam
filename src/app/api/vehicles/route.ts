@@ -6,7 +6,7 @@ import {
   assertWorkspaceContact,
 } from "@/lib/workspace";
 import { vehicleCreateSchema } from "@/lib/validators-domain";
-import { VehicleKind } from "@/generated/prisma/client";
+import { VehicleKind, VehicleFuelType } from "@/generated/prisma/client";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -38,6 +38,7 @@ export async function GET() {
         model: v.model,
         year: v.year,
         registrationNo: v.registrationNo,
+        fuelType: v.fuelType,
         purchaseDate: v.purchaseDate?.toISOString() ?? null,
         purchasePrice: v.purchasePrice == null ? null : Number(v.purchasePrice),
         odometerStart: v.odometerStart,
@@ -77,6 +78,7 @@ export async function POST(request: Request) {
         model: data.model,
         year: data.year ?? null,
         registrationNo: data.registrationNo?.trim() || null,
+        fuelType: (data.fuelType ?? null) as VehicleFuelType | null,
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : null,
         purchasePrice: data.purchasePrice ?? null,
         odometerStart: data.odometerStart ?? null,

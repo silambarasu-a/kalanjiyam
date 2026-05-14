@@ -32,6 +32,7 @@ export type IconName =
   | "insurance"
   | "vehicles"
   | "medical"
+  | "events"
   | "inbox"
   | "reminders"
   | "notifications"
@@ -96,6 +97,12 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Assets",
     items: [
       { label: "Vehicles", href: "/vehicles", feature: "vehicles", icon: "vehicles" },
+    ],
+  },
+  {
+    label: "Track",
+    items: [
+      { label: "Events & Trips", href: "/events", feature: "events", icon: "events" },
     ],
   },
   {
