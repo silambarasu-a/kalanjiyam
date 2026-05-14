@@ -93,6 +93,24 @@ type StockLite = {
   active: boolean;
 };
 
+type ExpiringDocument = {
+  id: string;
+  kind: "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER";
+  label: string | null;
+  expiryAt: string;
+  daysLeft: number;
+  vehicle: { id: string; name: string; registrationNo: string | null };
+};
+
+const VEHICLE_DOC_KIND_LABEL: Record<ExpiringDocument["kind"], string> = {
+  RC: "RC",
+  FC: "FC",
+  PUC: "PUC",
+  ROAD_TAX: "Road tax",
+  INSURANCE_COPY: "Insurance copy",
+  OTHER: "Document",
+};
+
 const fetcher = async (url: string) => {
   const r = await fetch(url);
   if (!r.ok) throw new Error(String(r.status));
@@ -117,6 +135,11 @@ export default function DashboardPage() {
     "/api/dashboard/cashflow",
     fetcher,
   );
+  const { data: expiringDocsData } = useSWR<{ documents: ExpiringDocument[] }>(
+    "/api/dashboard/expiring-docs",
+    fetcher,
+  );
+  const expiringDocs = expiringDocsData?.documents ?? [];
 
   // Live stock marking — overrides stats.investedCurrent for stocks so
   // the Invested tile reflects today's market price + USD/INR rate
@@ -275,6 +298,9 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
         <div className="space-y-4">
           <UpcomingDues dues={cashflow?.dues ?? null} />
+          {expiringDocs.length > 0 && (
+            <ExpiringDocsSection documents={expiringDocs} />
+          )}
           <SettledThisMonth settled={cashflow?.settled ?? null} />
         </div>
 
@@ -421,6 +447,89 @@ function UpcomingDues({ dues }: { dues: Due[] | null }) {
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+function ExpiringDocsSection({
+  documents,
+}: {
+  documents: ExpiringDocument[];
+}) {
+  // Bucket by tone so the user can see urgency at a glance. Same
+  // thresholds as the per-row badge on the vehicle detail page.
+  const groups = useMemo(() => {
+    const overdue: ExpiringDocument[] = [];
+    const soon: ExpiringDocument[] = [];
+    const upcoming: ExpiringDocument[] = [];
+    for (const d of documents) {
+      if (d.daysLeft < 0) overdue.push(d);
+      else if (d.daysLeft <= 7) soon.push(d);
+      else upcoming.push(d);
+    }
+    return { overdue, soon, upcoming };
+  }, [documents]);
+
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-base font-semibold">Documents expiring soon</h2>
+          <p className="text-xs text-muted-foreground">
+            RC · FC · PUC · Road tax · Insurance copies — next 30 days
+          </p>
+        </div>
+        <Link
+          href="/vehicles"
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          All vehicles →
+        </Link>
+      </div>
+      <ul className="divide-y">
+        {[...groups.overdue, ...groups.soon, ...groups.upcoming].map((d) => {
+          const tone =
+            d.daysLeft < 0
+              ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+              : d.daysLeft <= 7
+                ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                : d.daysLeft <= 30
+                  ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
+          const toneLabel =
+            d.daysLeft < 0
+              ? `Expired ${Math.abs(d.daysLeft)}d ago`
+              : d.daysLeft === 0
+                ? "Expires today"
+                : `${d.daysLeft}d left`;
+          return (
+            <li key={d.id}>
+              <Link
+                href={`/vehicles/${d.vehicle.id}`}
+                className="flex items-center justify-between gap-3 py-2.5 hover:bg-muted/40 -mx-2 px-2 rounded-md"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium truncate">
+                    {VEHICLE_DOC_KIND_LABEL[d.kind]}
+                    {d.label ? ` · ${d.label}` : ""}
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {d.vehicle.name}
+                    {d.vehicle.registrationNo
+                      ? ` · ${d.vehicle.registrationNo}`
+                      : ""}
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${tone}`}
+                >
+                  {toneLabel}
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

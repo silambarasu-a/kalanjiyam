@@ -19,25 +19,30 @@
  *     (existing behaviour preserved).
  */
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+// NOTE: Always read `process.env.FOO` by literal property name below.
+// Next.js only inlines `NEXT_PUBLIC_*` vars into the client bundle when they
+// are accessed as a static property — a computed `process.env[name]` lookup
+// gets erased on the client and silently falls back to the default.
+function envInt(raw: string | undefined, fallback: number): number {
   if (raw == null || raw === "") return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+const SESSION_MAX_AGE_MINUTES = envInt(process.env.SESSION_MAX_AGE_MINUTES, 15);
+
 export const TIMING = {
   // ── Auth & session ────────────────────────────────────────────────
   /** Idle minutes before the session locks (re-auth required). Client-readable. */
-  sessionIdleLockMinutes: envInt("NEXT_PUBLIC_SESSION_IDLE_LOCK_MINUTES", 2),
+  sessionIdleLockMinutes: envInt(process.env.NEXT_PUBLIC_SESSION_IDLE_LOCK_MINUTES, 2),
   /** JWT lifetime in minutes — user has to re-login after this. */
-  sessionMaxAgeMinutes: envInt("SESSION_MAX_AGE_MINUTES", 15),
+  sessionMaxAgeMinutes: SESSION_MAX_AGE_MINUTES,
   /**
    * How many minutes before expiry to show the "session about to expire"
    * popup. Client-readable.
    */
   sessionExpiryWarningMinutes: envInt(
-    "NEXT_PUBLIC_SESSION_EXPIRY_WARNING_MINUTES",
+    process.env.NEXT_PUBLIC_SESSION_EXPIRY_WARNING_MINUTES,
     2,
   ),
   /**
@@ -46,17 +51,17 @@ export const TIMING = {
    * a smaller value to grant only a partial extension.
    */
   sessionExtendMinutes: envInt(
-    "SESSION_EXTEND_MINUTES",
-    envInt("SESSION_MAX_AGE_MINUTES", 15),
+    process.env.SESSION_EXTEND_MINUTES,
+    SESSION_MAX_AGE_MINUTES,
   ),
 
   // ── Token TTLs ────────────────────────────────────────────────────
   /** Email-verification token expiry. */
-  emailVerificationTtlHours: envInt("EMAIL_VERIFICATION_TTL_HOURS", 24),
+  emailVerificationTtlHours: envInt(process.env.EMAIL_VERIFICATION_TTL_HOURS, 24),
   /** Password-reset token expiry. */
-  passwordResetTtlMinutes: envInt("PASSWORD_RESET_TTL_MINUTES", 60),
+  passwordResetTtlMinutes: envInt(process.env.PASSWORD_RESET_TTL_MINUTES, 60),
   /** Workspace invite link expiry. */
-  inviteTtlDays: envInt("INVITE_TTL_DAYS", 7),
+  inviteTtlDays: envInt(process.env.INVITE_TTL_DAYS, 7),
 
   // ── Edit windows ──────────────────────────────────────────────────
   /**
@@ -65,13 +70,13 @@ export const TIMING = {
    * win when set; this env value is the fallback (and the default for new
    * workspaces in future).
    */
-  defaultEditWindowDays: envInt("EDIT_WINDOW_DAYS", 30),
+  defaultEditWindowDays: envInt(process.env.EDIT_WINDOW_DAYS, 30),
   /** Grace window (days) for editing/deleting the closing EMI of a closed loan. */
-  loanEmiGraceDays: envInt("LOAN_EMI_GRACE_DAYS", 3),
+  loanEmiGraceDays: envInt(process.env.LOAN_EMI_GRACE_DAYS, 3),
 
   // ── Dashboard ─────────────────────────────────────────────────────
   /** How far ahead to look for "upcoming dues". */
-  dashboardUpcomingDuesDays: envInt("DASHBOARD_DUES_WINDOW_DAYS", 30),
+  dashboardUpcomingDuesDays: envInt(process.env.DASHBOARD_DUES_WINDOW_DAYS, 30),
 } as const;
 
 // Convenience exports for ms math used throughout the codebase. Avoids

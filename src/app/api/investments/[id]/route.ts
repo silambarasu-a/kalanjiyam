@@ -5,6 +5,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { investmentUpdateSchema } from "@/lib/validators-domain";
 import { checkDayWindowEditAllowed } from "@/lib/transaction-edit-lock";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 import {
   TransactionType,
   InvestmentAction,
@@ -466,6 +467,16 @@ export async function DELETE(
     // Wrapped in a $transaction so a failure mid-delete rolls back.
     await prisma.$transaction(async (tx) => {
       await tx.transaction.deleteMany({ where: { investmentId: id } });
+      // Archive any uploaded policy documents (insurance scans, etc.)
+      // — soft delete + best-effort S3 cleanup. Polymorphic FK isn't
+      // cascaded so this has to be explicit.
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "INSURANCE_POLICY",
+        ownerId: id,
+        userId: ctx.userId,
+        tx,
+      });
       await tx.investment.delete({ where: { id } });
     });
     return NextResponse.json({ ok: true });
