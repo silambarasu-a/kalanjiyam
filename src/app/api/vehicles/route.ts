@@ -44,6 +44,8 @@ export async function GET() {
         active: v.active,
         notes: v.notes,
         ownerContact: v.ownerContact,
+        disposedAt: v.disposedAt?.toISOString() ?? null,
+        disposalKind: v.disposalKind,
         counts: v._count,
       })),
     });

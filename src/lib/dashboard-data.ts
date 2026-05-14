@@ -29,6 +29,15 @@ export type SettledItem = {
   href: string;
 };
 
+export type ExpiringDocument = {
+  id: string;
+  kind: "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER";
+  label: string | null;
+  expiryAt: string;
+  daysLeft: number;
+  vehicle: { id: string; name: string; registrationNo: string | null };
+};
+
 export type DashboardStats = {
   period: { start: string; end: string; income: number; expense: number; net: number };
   netWorth: number;
@@ -793,4 +802,51 @@ export async function getDashboardCashflow(args: {
     nextMonthDue,
     nextMonthBreakdown,
   };
+}
+
+/**
+ * Vehicle documents (RC / FC / PUC / Road Tax / Insurance copy / Other)
+ * whose expiry falls within the next `windowDays` (or already passed).
+ * Powers the "Documents expiring soon" tile on the dashboard. Cheap —
+ * one indexed lookup; small result set in practice.
+ */
+export async function getExpiringVehicleDocuments(args: {
+  workspaceId: string;
+  today: Date;
+  windowDays?: number;
+}): Promise<ExpiringDocument[]> {
+  const window = args.windowDays ?? 30;
+  const horizon = new Date(args.today);
+  horizon.setUTCDate(horizon.getUTCDate() + window);
+
+  const docs = await prisma.vehicleDocument.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      expiryAt: { lte: horizon },
+    },
+    orderBy: { expiryAt: "asc" },
+    take: 50,
+    include: {
+      vehicle: { select: { id: true, name: true, registrationNo: true } },
+    },
+  });
+
+  return docs.map((d) => {
+    const expiry = d.expiryAt as Date;
+    const days = Math.round(
+      (expiry.getTime() - args.today.getTime()) / 86_400_000,
+    );
+    return {
+      id: d.id,
+      kind: d.kind,
+      label: d.label,
+      expiryAt: expiry.toISOString(),
+      daysLeft: days,
+      vehicle: {
+        id: d.vehicle.id,
+        name: d.vehicle.name,
+        registrationNo: d.vehicle.registrationNo,
+      },
+    };
+  });
 }

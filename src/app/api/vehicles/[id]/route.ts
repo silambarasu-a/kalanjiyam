@@ -7,6 +7,7 @@ import {
 } from "@/lib/workspace";
 import { vehicleUpdateSchema } from "@/lib/validators-domain";
 import { VehicleKind } from "@/generated/prisma/client";
+import { archiveAttachmentsForOwners } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -27,6 +28,9 @@ export async function GET(
       where: { id },
       include: {
         ownerContact: { select: { id: true, name: true } },
+        disposalContact: { select: { id: true, name: true } },
+        replacedBy: { select: { id: true, name: true, registrationNo: true } },
+        replaces: { select: { id: true, name: true, registrationNo: true } },
         insurances: {
           select: {
             id: true,
@@ -95,6 +99,13 @@ export async function GET(
         active: vehicle.active,
         notes: vehicle.notes,
         ownerContact: vehicle.ownerContact,
+        disposedAt: vehicle.disposedAt?.toISOString() ?? null,
+        disposalKind: vehicle.disposalKind,
+        disposalAmount:
+          vehicle.disposalAmount == null ? null : Number(vehicle.disposalAmount),
+        disposalContact: vehicle.disposalContact,
+        replacedBy: vehicle.replacedBy,
+        replaces: vehicle.replaces,
         insurances: vehicle.insurances.map((i) => ({
           ...i,
           premiumAmount: i.premiumAmount == null ? null : Number(i.premiumAmount),
@@ -210,7 +221,25 @@ export async function DELETE(
         { status: 409 },
       );
     }
-    await prisma.vehicle.delete({ where: { id } });
+    // Find every VehicleDocument that will cascade-delete with the
+    // vehicle so we can archive their Attachments first (the
+    // polymorphic FK doesn't cascade automatically).
+    const docs = await prisma.vehicleDocument.findMany({
+      where: { vehicleId: id },
+      select: { id: true },
+    });
+    await prisma.$transaction(async (tx) => {
+      if (docs.length > 0) {
+        await archiveAttachmentsForOwners({
+          workspaceId: ctx.workspaceId,
+          ownerKind: "VEHICLE_DOCUMENT",
+          ownerIds: docs.map((d) => d.id),
+          userId: ctx.userId,
+          tx,
+        });
+      }
+      await tx.vehicle.delete({ where: { id } });
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { familyUpdateSchema } from "@/lib/validators-domain";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -54,7 +55,16 @@ export async function DELETE(
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    await prisma.contact.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "INCOME_PROOF",
+        ownerId: id,
+        userId: ctx.userId,
+        tx,
+      });
+      await tx.contact.delete({ where: { id } });
+    });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return error(err);

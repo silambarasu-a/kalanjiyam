@@ -11,6 +11,13 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { InsurerPicker } from "@/components/ui/insurer-picker";
 import {
+  coverageFromMetadata,
+  EMPTY_COVERAGE,
+  serializeCoverage,
+  VehicleCoverageEditor,
+  type VehicleCoverageDraft,
+} from "@/components/investments/vehicle-coverage-editor";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -83,6 +90,7 @@ type Policy = {
   renewedFromInvestmentId: string | null;
   renewedFrom: ChainLink | null;
   successors: ChainLink[];
+  metadata: Record<string, unknown> | null;
 };
 
 type ChainLink = {
@@ -234,6 +242,10 @@ export default function InsuranceDetailPage({
         <SummaryCell label="Status" value={policy.insuranceStatus ?? "—"} />
       </div>
 
+      {policy.policyType === "VEHICLE" && policy.metadata && (
+        <VehicleCoverageCard metadata={policy.metadata} />
+      )}
+
       {isLifeFamily(policy.policyType) &&
         (policy.policyTermYears ||
           policy.premiumPayingTermYears ||
@@ -357,6 +369,67 @@ function ScheduleCell({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="mt-0.5 font-medium tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function VehicleCoverageCard({ metadata }: { metadata: Record<string, unknown> }) {
+  const c = metadata.coverage;
+  if (!c || typeof c !== "object") return null;
+  const cov = c as {
+    idv?: number | null;
+    od?: number | null;
+    tp?: number | null;
+    addOns?: { name?: string; premium?: number | null }[];
+  };
+  const addOns = Array.isArray(cov.addOns) ? cov.addOns : [];
+  if (
+    cov.idv == null &&
+    cov.od == null &&
+    cov.tp == null &&
+    addOns.length === 0
+  ) {
+    return null;
+  }
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        Coverage breakdown
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+        <ScheduleCell
+          label="IDV"
+          value={cov.idv != null ? formatINR(cov.idv) : "—"}
+        />
+        <ScheduleCell
+          label="Own damage"
+          value={cov.od != null ? formatINR(cov.od) : "—"}
+        />
+        <ScheduleCell
+          label="Third party"
+          value={cov.tp != null ? formatINR(cov.tp) : "—"}
+        />
+      </div>
+      {addOns.length > 0 && (
+        <div className="mt-3 border-t pt-3">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Add-ons
+          </div>
+          <ul className="mt-1 space-y-1 text-sm">
+            {addOns.map((a, i) => (
+              <li
+                key={i}
+                className="flex items-center justify-between gap-2 tabular-nums"
+              >
+                <span className="truncate">{a.name ?? "—"}</span>
+                <span className="text-muted-foreground">
+                  {a.premium != null ? formatINR(a.premium) : "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -1121,6 +1194,7 @@ function EditPolicyDialog({
   const [maturityAt, setMaturityAt] = useState("");
   const [nominee, setNominee] = useState("");
   const [notes, setNotes] = useState("");
+  const [coverage, setCoverage] = useState<VehicleCoverageDraft>(EMPTY_COVERAGE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1138,6 +1212,7 @@ function EditPolicyDialog({
     setMaturityAt(policy.maturityAt ? policy.maturityAt.slice(0, 10) : "");
     setNominee(policy.nominee ?? "");
     setNotes(policy.notes ?? "");
+    setCoverage(coverageFromMetadata(policy.metadata));
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, policy]);
@@ -1146,6 +1221,30 @@ function EditPolicyDialog({
     setError(null);
     setSubmitting(true);
     try {
+      // Preserve any existing metadata keys we don't manage in this dialog;
+      // only overwrite the `coverage` slice so a future caller editing
+      // riders/whatever via API doesn't lose their work.
+      const baseMetadata =
+        policy.metadata && typeof policy.metadata === "object"
+          ? { ...policy.metadata }
+          : {};
+      let metadataPatch: Record<string, unknown> | null = null;
+      if (policyType === "VEHICLE") {
+        const c = serializeCoverage(coverage);
+        if (c) {
+          metadataPatch = { ...baseMetadata, coverage: c };
+        } else if ("coverage" in baseMetadata) {
+          const next = { ...baseMetadata };
+          delete next.coverage;
+          metadataPatch = Object.keys(next).length === 0 ? null : next;
+        }
+      } else if ("coverage" in baseMetadata) {
+        // Policy type changed away from VEHICLE — strip stale coverage.
+        const next = { ...baseMetadata };
+        delete next.coverage;
+        metadataPatch = Object.keys(next).length === 0 ? null : next;
+      }
+
       const payload: Record<string, unknown> = {
         name: name.trim(),
         institution: institution.trim() || null,
@@ -1158,6 +1257,9 @@ function EditPolicyDialog({
         maturityAt: maturityAt || null,
         nominee: nominee.trim() || null,
         notes: notes.trim() || null,
+        ...(metadataPatch !== null || policyType === "VEHICLE"
+          ? { metadata: metadataPatch }
+          : {}),
       };
       const res = await fetch(`/api/investments/${policy.id}`, {
         method: "PATCH",
@@ -1248,6 +1350,9 @@ function EditPolicyDialog({
             <span className="text-xs font-medium">Sum assured</span>
             <AmountInput value={sumAssured} onChange={setSumAssured} placeholder="0" />
           </label>
+          {policyType === "VEHICLE" && (
+            <VehicleCoverageEditor value={coverage} onChange={setCoverage} />
+          )}
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Next due</span>
