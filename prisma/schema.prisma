@@ -415,9 +415,11 @@ model WorkspaceMember {
   /**
    * Per-member email-notification preferences. Shape:
    * { enabled: boolean, kinds: NotificationKind[] }
-   * Default empty = no email. UI toggles populate it.
+   * Default = opted in for all kinds; users opt out from /settings.
+   * The server-side `shouldEmail()` also treats unset/missing `enabled`
+   * as opted-in, so this default + that fallback both point the same way.
    */
-  emailPrefs  Json          @default("{}")
+  emailPrefs  Json          @default("{\"enabled\":true}")
   invitedAt   DateTime      @default(now())
   acceptedAt  DateTime?
   createdAt   DateTime      @default(now())
