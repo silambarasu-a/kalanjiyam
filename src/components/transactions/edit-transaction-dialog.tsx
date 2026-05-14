@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AttachmentList } from "@/components/attachments/attachment-list";
 
 export type EditableTransaction = {
   id: string;
@@ -132,6 +133,15 @@ export function EditTransactionDialog({
               Linked records — loan outstanding, investment holdings, wage and
               feed logs — are kept in sync automatically.
             </p>
+            <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+              <div className="text-xs font-medium">Receipts / supporting files</div>
+              <AttachmentList
+                ownerKind="TRANSACTION_RECEIPT"
+                ownerId={transaction.id}
+                emptyMessage="No receipts attached. Upload PDF or image (max 10 MB)."
+                accept="image/*,application/pdf"
+              />
+            </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
         )}

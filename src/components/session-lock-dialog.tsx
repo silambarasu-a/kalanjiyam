@@ -12,6 +12,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TIMING } from "@/lib/timing";
 
 export function SessionLockDialog() {
   const { data: session, update } = useSession();
@@ -80,7 +81,7 @@ export function SessionLockDialog() {
               Session locked
             </DialogTitle>
             <DialogDescription className="mt-2 max-w-[280px] text-sm leading-relaxed text-muted-foreground">
-              For your security, we paused your session after 2 minutes of inactivity. Enter your password to continue.
+              For your security, we paused your session after {TIMING.sessionIdleLockMinutes} {TIMING.sessionIdleLockMinutes === 1 ? "minute" : "minutes"} of inactivity. Enter your password to continue.
             </DialogDescription>
           </div>
 

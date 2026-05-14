@@ -23,6 +23,14 @@ import { BankPicker } from "@/components/ui/bank-picker";
 import { InsurerPicker } from "@/components/ui/insurer-picker";
 import type { InsurerCategory } from "@/lib/insurers";
 import {
+  EMPTY_INSURANCE_EXTRAS,
+  buildInsuranceExtraPayload,
+  incompleteMemberRows,
+  InsurancePolicyExtrasFields,
+  submitPolicyMembers,
+  type InsurancePolicyExtras,
+} from "@/components/insurance/policy-extras-fields";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -317,6 +325,17 @@ function IncomeExpenseForm({
   }>(isVehicleMode ? "/api/vehicles" : null, fetcher);
   const vehicles = vehiclesData?.vehicles ?? [];
 
+  // "Also log this as a document renewal" — when ticked, the same submit
+  // creates a VehicleDocument tied to the picked vehicle so the system
+  // schedules the next renewal reminder. Receipt PDF can be attached
+  // afterwards from either the transaction edit dialog or the doc row.
+  const [createVehicleDoc, setCreateVehicleDoc] = useState(false);
+  const [vehicleDocKind, setVehicleDocKind] = useState<
+    "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER"
+  >("PUC");
+  const [vehicleDocExpiryAt, setVehicleDocExpiryAt] = useState("");
+  const [vehicleDocNumber, setVehicleDocNumber] = useState("");
+
   const isHospitalMode =
     type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "hospital";
   const [hospitalizationId, setHospitalizationId] = useState<string | null>(null);
@@ -488,6 +507,17 @@ function IncomeExpenseForm({
       return;
     }
 
+    if (
+      isVehicleMode &&
+      vehicleId &&
+      createVehicleDoc &&
+      !vehicleDocExpiryAt
+    ) {
+      setError(
+        "Pick a new expiry date for the document — that's what the renewal reminder is anchored on.",
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {
@@ -528,6 +558,38 @@ function IncomeExpenseForm({
         setError(body.error ?? "Failed");
       } else {
         toast.success(type === "INCOME" ? "Income recorded" : "Expense recorded");
+        // Optional follow-up: also create a VehicleDocument so the
+        // system schedules the next renewal reminder. Failure here is
+        // surfaced as a warning toast; the transaction stays.
+        if (
+          isVehicleMode &&
+          vehicleId &&
+          createVehicleDoc &&
+          vehicleDocExpiryAt
+        ) {
+          const docRes = await fetch(
+            `/api/vehicles/${vehicleId}/documents`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                kind: vehicleDocKind,
+                expiryAt: vehicleDocExpiryAt,
+                number: vehicleDocNumber.trim() || null,
+              }),
+            },
+          );
+          if (!docRes.ok) {
+            const dbody = await docRes.json().catch(() => ({}));
+            toast.warning(
+              `Transaction saved, but renewal reminder failed: ${
+                dbody.error ?? "unknown error"
+              }`,
+            );
+          } else {
+            toast.success("Renewal reminder scheduled");
+          }
+        }
         await mutateBalances();
         onClose();
       }
@@ -624,6 +686,70 @@ function IncomeExpenseForm({
               </Link>{" "}
               first, then come back.
             </p>
+          )}
+          {vehicleId && (
+            <div className="mt-3 border-t pt-3">
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={createVehicleDoc}
+                  onChange={(e) => setCreateVehicleDoc(e.target.checked)}
+                />
+                <span className="font-medium">
+                  Also log this as a document renewal
+                </span>
+              </label>
+              <p className="mt-1 ml-6 text-[10px] text-muted-foreground">
+                Schedules a renewal reminder before the new expiry date so
+                you don&apos;t miss the next one.
+              </p>
+              {createVehicleDoc && (
+                <div className="mt-2 ml-6 grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] font-medium">Document</span>
+                    <select
+                      className="mt-0.5 w-full rounded-md border bg-background px-2 py-1.5 text-xs"
+                      value={vehicleDocKind}
+                      onChange={(e) =>
+                        setVehicleDocKind(
+                          e.target.value as typeof vehicleDocKind,
+                        )
+                      }
+                    >
+                      <option value="RC">RC book</option>
+                      <option value="FC">Fitness Certificate</option>
+                      <option value="PUC">Pollution (PUC)</option>
+                      <option value="ROAD_TAX">Road tax</option>
+                      <option value="INSURANCE_COPY">Insurance copy</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-medium">New expiry</span>
+                    <DateInput
+                      value={vehicleDocExpiryAt}
+                      onChange={(e) => setVehicleDocExpiryAt(e.target.value)}
+                      className="mt-0.5 h-8 text-xs"
+                    />
+                  </label>
+                  <label className="col-span-2 block">
+                    <span className="text-[10px] font-medium">
+                      Document #{" "}
+                      <span className="font-normal text-muted-foreground">
+                        (optional)
+                      </span>
+                    </span>
+                    <Input
+                      value={vehicleDocNumber}
+                      onChange={(e) => setVehicleDocNumber(e.target.value)}
+                      maxLength={80}
+                      placeholder="As printed on the doc"
+                      className="mt-0.5 h-8 text-xs"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -1843,6 +1969,30 @@ function InvestmentForm({
   // silently skips the InvestmentReminder generation.
   const [newPremiumFrequency, setNewPremiumFrequency] = useState("MONTHLY");
   const [newNextDueDate, setNewNextDueDate] = useState("");
+  // INSURANCE extras — same shape as the /insurance page's New Policy
+  // dialog so the two flows stay in lockstep.
+  const [insuranceExtras, setInsuranceExtras] = useState<InsurancePolicyExtras>(
+    EMPTY_INSURANCE_EXTRAS,
+  );
+  // Lookups for the extras component — only fetched when relevant so
+  // FD/SIP/Stock creators don't pay the round-trip.
+  const isInsuranceCreate = creatingNew && newKind === "INSURANCE";
+  const { data: insuranceContactsData } = useSWR<{
+    members: { id: string; name: string }[];
+  }>(isInsuranceCreate ? "/api/contacts" : null, fetcher);
+  const insuranceContacts = insuranceContactsData?.members ?? [];
+  const { data: insuranceVehiclesData } = useSWR<{
+    vehicles: {
+      id: string;
+      name: string;
+      kind: string;
+      registrationNo: string | null;
+    }[];
+  }>(
+    isInsuranceCreate && newPolicyType === "VEHICLE" ? "/api/vehicles" : null,
+    fetcher,
+  );
+  const insuranceVehicles = insuranceVehiclesData?.vehicles ?? [];
   // GOLD-specific
   const [newGoldType, setNewGoldType] = useState<
     "ORNAMENTS" | "BAR" | "COIN" | "SGB" | "DIGITAL" | "ETF"
@@ -2441,6 +2591,21 @@ function InvestmentForm({
       setError("Pick a holding");
       return;
     }
+    // Block submit on partially-filled member rows for new INSURANCE
+    // policies — same guard as the /insurance NewPolicyDialog.
+    const insuranceMemberIncomplete =
+      creatingNew && newKind === "INSURANCE" && !isEditing
+        ? incompleteMemberRows(insuranceExtras.members)
+        : [];
+    if (insuranceMemberIncomplete.length > 0) {
+      const rows = insuranceMemberIncomplete
+        .map(({ idx }) => `#${idx + 1}`)
+        .join(", ");
+      setError(
+        `Member ${rows} ${insuranceMemberIncomplete.length === 1 ? "is" : "are"} missing required fields — pick a contact, or remove the row.`,
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       if (creatingNew) {
@@ -2448,12 +2613,19 @@ function InvestmentForm({
         // — the same payload shape works there because the schema is a partial
         // of the create base, and PATCH replaces BUY transactions when splits
         // are supplied.
+        // Insurance extras (vehicle picker, life corporate fields, vehicle
+        // coverage) merge in only when creating a fresh INSURANCE policy.
+        const insuranceExtraPayload =
+          newKind === "INSURANCE" && !isEditing
+            ? buildInsuranceExtraPayload(insuranceExtras, newPolicyType)
+            : {};
         const res = await fetch(
           isEditing ? `/api/investments/${editingInvestmentId}` : "/api/investments",
           {
             method: isEditing ? "PATCH" : "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
+            ...insuranceExtraPayload,
             kind: newKind,
             name: newName.trim(),
             symbol: newKind === "STOCK" ? newSymbol.trim().toUpperCase() : undefined,
@@ -2614,6 +2786,26 @@ function InvestmentForm({
         if (!res.ok) {
           setError(body.error ?? "Failed");
           return;
+        }
+        // For new INSURANCE policies, write the covered members /
+        // beneficiaries. Each call is independent — a partial failure
+        // surfaces a warning toast but the policy stays.
+        if (
+          newKind === "INSURANCE" &&
+          !isEditing &&
+          insuranceExtras.members.length > 0 &&
+          body.id
+        ) {
+          const memberErrors = await submitPolicyMembers(
+            body.id,
+            insuranceExtras.members,
+            newPremiumFrequency,
+          );
+          if (memberErrors.length > 0) {
+            toast.warning(
+              `Policy created, but some members failed: ${memberErrors.join("; ")}`,
+            );
+          }
         }
         toast.success(isEditing ? "Investment updated" : "Holding created and purchase recorded");
         await mutateBalances();
@@ -2941,6 +3133,14 @@ function InvestmentForm({
                 {" "}seeds 12 upcoming reminders so the policy shows up under
                 /reminders.
               </p>
+              <InsurancePolicyExtrasFields
+                policyType={newPolicyType}
+                premiumFrequency={newPremiumFrequency}
+                value={insuranceExtras}
+                onChange={setInsuranceExtras}
+                contacts={insuranceContacts}
+                vehicles={insuranceVehicles}
+              />
             </>
           )}
 
