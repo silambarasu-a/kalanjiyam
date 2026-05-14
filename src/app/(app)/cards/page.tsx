@@ -2,9 +2,9 @@
 import { toast } from "sonner";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Plus, Pencil, Trash2, CreditCard } from "lucide-react";
+import { Plus, Pencil, Trash2, CreditCard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -100,154 +100,7 @@ export default function CardsPage() {
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {(data?.cards ?? []).map((c) => (
-          <div
-            key={c.id}
-            className="relative rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30"
-          >
-            {/* Stretched link covers the whole card. Body content uses
-                pointer-events-none so clicks pass through to the link;
-                the action buttons override with pointer-events-auto so
-                they stay clickable. The link can't wrap the buttons —
-                nested <a><button> is invalid HTML and breaks layout on
-                some mobile browsers. */}
-            <Link
-              href={`/cards/${c.id}`}
-              aria-label={`Open ${c.name}`}
-              className="absolute inset-0 z-0 rounded-lg focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
-            />
-            <div className="relative flex items-start justify-between gap-3 pointer-events-none">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <CreditCard className="h-4 w-4 text-muted-foreground" />
-                  <h3 className="truncate font-semibold">{c.name}</h3>
-                </div>
-                <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
-                  {c.kind} · {c.network}
-                  {c.supportsUpi ? " · UPI" : ""}
-                  {c.last4 ? ` · ••${c.last4}` : ""}
-                </div>
-              </div>
-              <div className="relative z-10 flex gap-1 pointer-events-auto">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setEditOpen(c)}
-                  aria-label="Edit"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={async () => {
-                    if (!confirm(`Delete ${c.name}?`)) return;
-                    const res = await fetch(`/api/cards/${c.id}`, { method: "DELETE" });
-                    if (!res.ok) {
-                      const body = await res.json();
-                      toast.error(body.error ?? "Failed");
-                    }
-                    globalMutate("/api/cards");
-                  }}
-                  aria-label="Delete"
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-            </div>
-            {c.kind === "CREDIT" && c.creditLimit != null && (
-              <div className="relative pointer-events-none">
-                {(() => {
-                  const avail = c.availableLimit ?? c.creditLimit;
-                  const outstanding = Math.max(0, c.creditLimit - avail);
-                  const pct = c.creditLimit > 0 ? avail / c.creditLimit : 1;
-                  const tone =
-                    pct > 0.5 ? "gain" : pct > 0.2 ? "outstanding" : "loss";
-                  return (
-                    <>
-                      <div className="text-xs text-muted-foreground">
-                        Available limit
-                      </div>
-                      <MoneyValue
-                        tone={tone}
-                        value={formatINR(avail)}
-                        className="text-2xl font-semibold mt-1"
-                        icon={false}
-                      />
-                      <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                        <div
-                          className={
-                            tone === "gain"
-                              ? "h-full bg-primary"
-                              : tone === "outstanding"
-                                ? "h-full bg-amber-500"
-                                : "h-full bg-destructive"
-                          }
-                          style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
-                        />
-                      </div>
-                      <div className="mt-1 flex items-center justify-between text-xs">
-                        {outstanding > 0 ? (
-                          <span className="font-medium text-destructive tabular-nums">
-                            Outstanding {formatINR(outstanding)}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">No dues</span>
-                        )}
-                        <span className="text-muted-foreground tabular-nums">
-                          of {formatINR(c.creditLimit)}
-                        </span>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            )}
-            {c.kind === "CREDIT" &&
-              (c.upcomingBillAmount ?? 0) > 0 &&
-              c.accountId && (
-                <div className="relative z-10 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 pointer-events-auto">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                      Bill due
-                    </div>
-                    <div className="text-sm font-semibold tabular-nums text-destructive">
-                      {formatINR(c.upcomingBillAmount ?? 0)}
-                      {c.nextBillDue && (
-                        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
-                          by {new Date(c.nextBillDue).toLocaleDateString("en-IN")}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <PayBillButton
-                    cardName={c.name}
-                    toAccountId={c.accountId}
-                    outstanding={c.upcomingBillAmount ?? 0}
-                    dueDate={c.nextBillDue}
-                  />
-                </div>
-              )}
-            {c.kind === "DEBIT" && c.parentAccount && (
-              <div className="relative pointer-events-none">
-                <div className="text-xs text-muted-foreground">Available balance</div>
-                <MoneyValue
-                  tone={
-                    c.linkedBalance == null
-                      ? "neutral"
-                      : c.linkedBalance > 0
-                        ? "gain"
-                        : "loss"
-                  }
-                  value={c.linkedBalance == null ? "—" : formatINR(c.linkedBalance)}
-                  className="text-2xl font-semibold mt-1"
-                  icon={false}
-                />
-                <div className="mt-1 text-xs text-muted-foreground">
-                  via {c.parentAccount.name}
-                </div>
-              </div>
-            )}
-          </div>
+          <CardRow key={c.id} card={c} onEdit={() => setEditOpen(c)} />
         ))}
         {(data?.cards ?? []).length === 0 && !isLoading && (
           <div className="col-span-full rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
@@ -299,6 +152,184 @@ function SummaryStat({
       </div>
       {hint && (
         <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>
+      )}
+    </div>
+  );
+}
+
+function CardRow({ card: c, onEdit }: { card: Card; onEdit: () => void }) {
+  const router = useRouter();
+  const [navigating, setNavigating] = useState(false);
+  const href = `/cards/${c.id}`;
+  const go = () => {
+    if (navigating) return;
+    setNavigating(true);
+    router.push(href);
+  };
+  const stop = (e: React.MouseEvent | React.KeyboardEvent) => e.stopPropagation();
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={go}
+      onKeyDown={(e) => {
+        if (navigating) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          go();
+        }
+      }}
+      aria-label={`Open ${c.name}`}
+      aria-busy={navigating}
+      className="relative cursor-pointer rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <CreditCard className="h-4 w-4 text-muted-foreground" />
+            <h3 className="truncate font-semibold">{c.name}</h3>
+          </div>
+          <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
+            {c.kind} · {c.network}
+            {c.supportsUpi ? " · UPI" : ""}
+            {c.last4 ? ` · ••${c.last4}` : ""}
+          </div>
+        </div>
+        <div className="flex gap-1" onClick={stop}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+            aria-label="Edit"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!confirm(`Delete ${c.name}?`)) return;
+              const res = await fetch(`/api/cards/${c.id}`, { method: "DELETE" });
+              if (!res.ok) {
+                const body = await res.json();
+                toast.error(body.error ?? "Failed");
+              }
+              globalMutate("/api/cards");
+            }}
+            aria-label="Delete"
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+      </div>
+      {c.kind === "CREDIT" && c.creditLimit != null && (
+        <div>
+          {(() => {
+            const avail = c.availableLimit ?? c.creditLimit;
+            const outstanding = Math.max(0, c.creditLimit - avail);
+            const pct = c.creditLimit > 0 ? avail / c.creditLimit : 1;
+            const tone =
+              pct > 0.5 ? "gain" : pct > 0.2 ? "outstanding" : "loss";
+            return (
+              <>
+                <div className="text-xs text-muted-foreground">
+                  Available limit
+                </div>
+                <MoneyValue
+                  tone={tone}
+                  value={formatINR(avail)}
+                  className="text-2xl font-semibold mt-1"
+                  icon={false}
+                />
+                <div className="mt-1.5 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={
+                      tone === "gain"
+                        ? "h-full bg-primary"
+                        : tone === "outstanding"
+                          ? "h-full bg-amber-500"
+                          : "h-full bg-destructive"
+                    }
+                    style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
+                  />
+                </div>
+                <div className="mt-1 flex items-center justify-between text-xs">
+                  {outstanding > 0 ? (
+                    <span className="font-medium text-destructive tabular-nums">
+                      Outstanding {formatINR(outstanding)}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">No dues</span>
+                  )}
+                  <span className="text-muted-foreground tabular-nums">
+                    of {formatINR(c.creditLimit)}
+                  </span>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+      {c.kind === "CREDIT" &&
+        (c.upcomingBillAmount ?? 0) > 0 &&
+        c.accountId && (
+          <div
+            className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2"
+            onClick={stop}
+          >
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Bill due
+              </div>
+              <div className="text-sm font-semibold tabular-nums text-destructive">
+                {formatINR(c.upcomingBillAmount ?? 0)}
+                {c.nextBillDue && (
+                  <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                    by {new Date(c.nextBillDue).toLocaleDateString("en-IN")}
+                  </span>
+                )}
+              </div>
+            </div>
+            <PayBillButton
+              cardName={c.name}
+              toAccountId={c.accountId}
+              outstanding={c.upcomingBillAmount ?? 0}
+              dueDate={c.nextBillDue}
+            />
+          </div>
+        )}
+      {c.kind === "DEBIT" && c.parentAccount && (
+        <div>
+          <div className="text-xs text-muted-foreground">Available balance</div>
+          <MoneyValue
+            tone={
+              c.linkedBalance == null
+                ? "neutral"
+                : c.linkedBalance > 0
+                  ? "gain"
+                  : "loss"
+            }
+            value={c.linkedBalance == null ? "—" : formatINR(c.linkedBalance)}
+            className="text-2xl font-semibold mt-1"
+            icon={false}
+          />
+          <div className="mt-1 text-xs text-muted-foreground">
+            via {c.parentAccount.name}
+          </div>
+        </div>
+      )}
+      {navigating && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-card/70 backdrop-blur-[1px]"
+          aria-hidden
+        >
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        </div>
       )}
     </div>
   );

@@ -820,7 +820,7 @@ function nextMonthBreakdownHint(b: {
   leases: number;
 }): string {
   const parts: string[] = [];
-  if (b.cards > 0) parts.push(`Cards ${formatINR(b.cards)}`);
+  if (b.cards > 0) parts.push(`Cards (outstanding) ${formatINR(b.cards)}`);
   if (b.insurance > 0) parts.push(`Insurance ${formatINR(b.insurance)}`);
   if (b.loans > 0) parts.push(`Loans ${formatINR(b.loans)}`);
   if (b.leases > 0) parts.push(`Leases ${formatINR(b.leases)}`);
