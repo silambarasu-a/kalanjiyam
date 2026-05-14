@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useSession, signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { mutate as globalMutate } from "swr";
 import { LockKeyhole, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
 import {
   Dialog,
@@ -16,6 +18,7 @@ import { TIMING } from "@/lib/timing";
 
 export function SessionLockDialog() {
   const { data: session, update } = useSession();
+  const router = useRouter();
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +47,14 @@ export function SessionLockDialog() {
       if (res.ok) {
         await update();
         setPassword("");
+        // The dialog covered every dashboard / list page for the full
+        // idle window, so any SWR-cached data the user is about to see
+        // is stale (transactions added from another tab, statements
+        // materialised, etc.). Mark every SWR key for revalidation +
+        // re-run the route's server components so the page reflects
+        // current state without a manual reload.
+        await globalMutate(() => true, undefined, { revalidate: true });
+        router.refresh();
       } else if (res.status === 400 || res.status === 401) {
         setError("Incorrect password");
       } else {
