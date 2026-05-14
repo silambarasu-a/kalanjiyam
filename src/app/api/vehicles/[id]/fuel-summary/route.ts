@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { isS3Configured, presignGet, S3ConfigError } from "@/lib/s3";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -70,6 +71,59 @@ export async function GET(
       },
     });
 
+    // Pull attachments for every fill in one query so each row can
+    // surface its receipt inline. We only show the most recent ~30
+    // fills, but the same map serves the full list cheaply.
+    const fillIds = fills.map((f) => f.id);
+    const attachmentsRaw = fillIds.length
+      ? await prisma.attachment.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            ownerKind: "TRANSACTION_RECEIPT",
+            ownerId: { in: fillIds },
+            archivedAt: null,
+          },
+          orderBy: { uploadedAt: "desc" },
+          select: {
+            id: true,
+            ownerId: true,
+            s3Key: true,
+            filename: true,
+            mimeType: true,
+          },
+        })
+      : [];
+    // Generate short-lived presigned GET URLs in one batch so the
+    // client renders thumbnails / open-links without per-attachment
+    // round trips. Falls back to no URLs when S3 isn't configured.
+    const canSign = isS3Configured();
+    const attachmentsByOwner = new Map<
+      string,
+      { id: string; filename: string; mimeType: string; url: string | null }[]
+    >();
+    for (const a of attachmentsRaw) {
+      let url: string | null = null;
+      if (canSign) {
+        try {
+          url = await presignGet(a.s3Key, 300);
+        } catch (sigErr) {
+          if (sigErr instanceof S3ConfigError) {
+            url = null;
+          } else {
+            console.warn("[fuel-summary] presignGet failed", sigErr);
+          }
+        }
+      }
+      const list = attachmentsByOwner.get(a.ownerId) ?? [];
+      list.push({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        url,
+      });
+      attachmentsByOwner.set(a.ownerId, list);
+    }
+
     let totalSpent = 0;
     let totalQty = 0;
     const fillRows: {
@@ -82,6 +136,12 @@ export async function GET(
       odometer: number | null;
       kmSincePrev: number | null;
       mileage: number | null; // km per unit, between this fill and the previous
+      attachments: {
+        id: string;
+        filename: string;
+        mimeType: string;
+        url: string | null;
+      }[];
     }[] = [];
     let prevOdo: number | null = null;
     for (const f of fills) {
@@ -104,6 +164,7 @@ export async function GET(
         odometer: odo,
         kmSincePrev,
         mileage,
+        attachments: attachmentsByOwner.get(f.id) ?? [],
       });
       if (odo != null) prevOdo = odo;
     }

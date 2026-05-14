@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import useSWR from "swr";
@@ -8,6 +7,7 @@ import { Calendar, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { EventDialog } from "@/components/events/event-dialog";
 import { hasPermission } from "@/lib/permissions";
 import { formatINR, formatDate } from "@/lib/utils";
@@ -191,9 +191,10 @@ function EventCard({ event }: { event: EventRow }) {
           : "bg-emerald-500";
 
   return (
-    <Link
+    <NavigatingCard
       href={`/events/${event.id}`}
       className="group rounded-xl border bg-card p-4 hover:bg-muted/40 transition-colors"
+      ariaLabel={`Open ${event.name}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -240,6 +241,6 @@ function EventCard({ event }: { event: EventRow }) {
           />
         </div>
       )}
-    </Link>
+    </NavigatingCard>
   );
 }

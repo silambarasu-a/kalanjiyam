@@ -108,6 +108,10 @@ export function LoanPaymentHistory({
                         onClick={() => {
                           setEditing({
                             id: p.id,
+                            // Loan repayments are EXPENSE rows tagged
+                            // to a loan; we only edit the cash-side
+                            // fields here.
+                            type: "EXPENSE",
                             amount: p.amount,
                             date: p.date,
                             description: p.description,

@@ -39,6 +39,15 @@ export function getS3(): S3Client {
   cached = new S3Client({
     region,
     credentials: { accessKeyId, secretAccessKey },
+    // AWS SDK v3.729+ auto-adds CRC32 checksum headers
+    // (`x-amz-sdk-checksum-algorithm`, `x-amz-checksum-crc32`) to every
+    // request and includes them in the presigned signature. Browsers
+    // can't supply those headers when PUTing the file, so the upload
+    // signature mismatches and S3 rejects with 403. Force the SDK to
+    // skip checksums unless the request explicitly requires them.
+    // See: https://github.com/aws/aws-sdk-js-v3/issues/6810
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   return cached;
 }

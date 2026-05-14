@@ -3,9 +3,16 @@ import { toast } from "sonner";
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { ArrowRight, Plus, Trash2, User, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  ListFilterBar,
+  PaginationFooter,
+  periodToRange,
+  type PeriodValue,
+} from "@/components/transactions/list-filter-bar";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
@@ -45,14 +52,32 @@ function PartyLabel({
   return null;
 }
 
+const PAGE_SIZE = 50;
+
 export default function TransfersPage() {
   const search = useSearchParams();
   const contactId = search?.get("contact") ?? null;
-  const url = contactId
-    ? `/api/transfers?contact=${encodeURIComponent(contactId)}`
-    : "/api/transfers";
-  const { data, isLoading } = useSWR<{ transfers: Transfer[] }>(url, fetcher);
+  const [period, setPeriod] = useState<PeriodValue>({ kind: "all" });
+  const [offset, setOffset] = useState(0);
+  const url = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(offset));
+    if (contactId) params.set("contact", contactId);
+    const { from, to } = periodToRange(period);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return `/api/transfers?${params.toString()}`;
+  }, [contactId, period, offset]);
+  const { data, isLoading } = useSWR<{
+    transfers: Transfer[];
+    pagination: { total: number; offset: number; limit: number };
+  }>(url, fetcher);
   const { openDialog } = useTransactionDialog();
+  function setPeriodReset(next: PeriodValue) {
+    setPeriod(next);
+    setOffset(0);
+  }
 
   const contactName = (() => {
     if (!contactId || !data?.transfers) return null;
@@ -77,19 +102,24 @@ export default function TransfersPage() {
         </Button>
       </div>
 
-      {contactId && (
-        <div className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs">
-          <span className="text-muted-foreground">Filtered by contact:</span>
-          <span className="font-medium">{contactName ?? "(loading)"}</span>
-          <Link
-            href="/transfers"
-            aria-label="Clear filter"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-3 w-3" />
-          </Link>
+      <div className="flex flex-wrap items-center gap-3">
+        {contactId && (
+          <div className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs">
+            <span className="text-muted-foreground">Filtered by contact:</span>
+            <span className="font-medium">{contactName ?? "(loading)"}</span>
+            <Link
+              href="/transfers"
+              aria-label="Clear filter"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </Link>
+          </div>
+        )}
+        <div className="sm:ml-auto">
+          <ListFilterBar value={period} onChange={setPeriodReset} />
         </div>
-      )}
+      </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
@@ -132,6 +162,15 @@ export default function TransfersPage() {
           </div>
         )}
       </div>
+
+      {data?.pagination && (
+        <PaginationFooter
+          total={data.pagination.total}
+          offset={data.pagination.offset}
+          limit={data.pagination.limit}
+          onChange={setOffset}
+        />
+      )}
     </div>
   );
 }

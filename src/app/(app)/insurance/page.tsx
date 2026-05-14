@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Plus, ShieldCheck, Users, AlertTriangle } from "lucide-react";
@@ -185,9 +185,10 @@ function PolicyRow({ policy }: { policy: Policy }) {
   const isOverdue =
     policy.nextDueDate && new Date(policy.nextDueDate) < new Date();
   return (
-    <Link
+    <NavigatingCard
       href={`/insurance/${policy.id}`}
       className="flex items-start justify-between gap-3 p-4 hover:bg-muted/40"
+      ariaLabel={`Open ${policy.name}`}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -237,7 +238,7 @@ function PolicyRow({ policy }: { policy: Policy }) {
           </div>
         )}
       </div>
-    </Link>
+    </NavigatingCard>
   );
 }
 
