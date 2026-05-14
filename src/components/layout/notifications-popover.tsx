@@ -13,7 +13,7 @@ import { useDismissedNotifications } from "@/lib/use-dismissed-notifications";
 
 type Item = {
   id: string;
-  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT";
+  source: "REMINDER" | "LOAN" | "LEASE" | "CARD_STATEMENT" | "INBOX";
   kind: string;
   label: string;
   dueDate: string;
@@ -28,6 +28,17 @@ type Payload = {
   items: Item[];
   counts: { total: number; overdue: number; dueSoon: number };
 };
+
+type InboxNotification = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  readAt: string | null;
+  createdAt: string;
+};
+type InboxPayload = { notifications: InboxNotification[] };
 
 const fetcher = (url: string) =>
   fetch(url).then((r) =>
@@ -49,10 +60,56 @@ export function NotificationsPopover() {
     { refreshInterval: 60_000 },
   );
   const inboxUnread = inbox?.count ?? 0;
+  // Pull the persisted Notification rows themselves so events that don't
+  // have a corresponding computed-due (e.g. "Statement generated",
+  // claim status changes, policy renewal heads-up) actually appear in
+  // the bell popover, not just in /inbox.
+  const { data: inboxList } = useSWR<InboxPayload>(
+    "/api/inbox?filter=unread&take=20",
+    (url: string) =>
+      fetch(url).then((r) => (r.ok ? r.json() : { notifications: [] })),
+    { refreshInterval: 60_000 },
+  );
   const { isDismissed, dismiss, dismissMany, undismiss, clearAll } =
     useDismissedNotifications();
 
-  const allItems = data?.items ?? [];
+  const dueItems = data?.items ?? [];
+  // Convert each unread Notification row into the same Item shape as
+  // the dues feed so a single rendering path handles both. Each inbox
+  // kind that has an equivalent computed-due source is then deduped
+  // against the active dues list — otherwise the user sees two rows
+  // (one event row, one status row) referring to the same thing.
+  const inboxItems: Item[] = (inboxList?.notifications ?? []).map((n) => ({
+    id: `inbox:${n.id}`,
+    source: "INBOX",
+    kind: n.kind,
+    label: n.title,
+    dueDate: n.createdAt,
+    amount: null,
+    href: n.link ?? "/inbox",
+    overdue: false,
+  }));
+  // Mapping of inbox NotificationKind → the equivalent computed-due
+  // source. Kinds NOT in this map (POLICY_RENEWING, CLAIM_STATUS_CHANGED,
+  // GENERIC, etc.) have no computed-due counterpart and always show.
+  const INBOX_KIND_DEDUP_SOURCES: Record<string, Item["source"][]> = {
+    CARD_STATEMENT_DUE: ["CARD_STATEMENT"],
+    LOAN_EMI_DUE: ["LOAN"],
+    PREMIUM_DUE_SOON: ["REMINDER"],
+    PREMIUM_OVERDUE: ["REMINDER"],
+  };
+  const filteredInbox = inboxItems.filter((i) => {
+    const dedupSources = INBOX_KIND_DEDUP_SOURCES[i.kind];
+    if (!dedupSources) return true;
+    const inboxLabel = i.label.toLowerCase();
+    return !dueItems.some(
+      (d) =>
+        dedupSources.includes(d.source) &&
+        d.label &&
+        inboxLabel.includes(d.label.toLowerCase()),
+    );
+  });
+  const allItems: Item[] = [...dueItems, ...filteredInbox];
   const unreadItems = allItems.filter((i) => !isDismissed(i.id, i.dueDate));
   // Bell badge + header counts reflect unread only — read items stay
   // listed but don't count.
@@ -312,5 +369,7 @@ function sourceLabel(s: Item["source"]): string {
       return "Lease";
     case "CARD_STATEMENT":
       return "Card bill";
+    case "INBOX":
+      return "Notification";
   }
 }
