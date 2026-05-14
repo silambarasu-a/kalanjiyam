@@ -30,12 +30,31 @@ export async function GET(request: Request) {
     const beneficiaryContactId = url.searchParams.get("beneficiaryContactId");
     const limitParam = Number(url.searchParams.get("limit") ?? "50");
     const limit = Math.min(Math.max(limitParam, 1), 200);
+    const offsetParam = Number(url.searchParams.get("offset") ?? "0");
+    const offset = Math.max(0, Number.isFinite(offsetParam) ? offsetParam : 0);
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
 
     const where: Record<string, unknown> = { workspaceId: ctx.workspaceId };
     if (type) where.type = type;
     if (accountId) where.accountId = accountId;
     if (cardId) where.cardId = cardId;
     if (beneficiaryContactId) where.beneficiaryContactId = beneficiaryContactId;
+    // Date-range filter — both bounds inclusive, applied at the SQL
+    // layer. `from` defaults to epoch start, `to` defaults to "now".
+    // Skipped entirely when neither is set so an unfiltered listing
+    // doesn't pay the cost of a redundant condition.
+    if (from || to) {
+      const range: { gte?: Date; lte?: Date } = {};
+      if (from) range.gte = new Date(from);
+      if (to) {
+        // Inclusive of the entire end day.
+        const end = new Date(to);
+        end.setUTCHours(23, 59, 59, 999);
+        range.lte = end;
+      }
+      where.date = range;
+    }
 
     if (ctx.ownOnly) {
       const ownAccountIds = await prisma.account
@@ -50,10 +69,14 @@ export async function GET(request: Request) {
       where.OR = [{ userId: ctx.userId }, { accountId: { in: ownAccountIds } }];
     }
 
-    const transactions = await prisma.transaction.findMany({
-      where,
-      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-      take: limit,
+    // Total count (for pagination footer) runs in parallel with the
+    // page fetch so the round-trip is single-RTT.
+    const [transactions, totalCount] = await Promise.all([
+      prisma.transaction.findMany({
+        where,
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+        skip: offset,
+        take: limit,
       include: {
         category: {
           select: {
@@ -85,7 +108,29 @@ export async function GET(request: Request) {
           },
         },
       },
-    });
+      }),
+      prisma.transaction.count({ where }),
+    ]);
+
+    // Count active TRANSACTION_RECEIPT attachments per row so the list
+    // can render a download icon when at least one exists. Single
+    // groupBy keeps it cheap regardless of page size.
+    const txnIds = transactions.map((t) => t.id);
+    const attachmentCounts = txnIds.length
+      ? await prisma.attachment.groupBy({
+          by: ["ownerId"],
+          where: {
+            workspaceId: ctx.workspaceId,
+            ownerKind: "TRANSACTION_RECEIPT",
+            ownerId: { in: txnIds },
+            archivedAt: null,
+          },
+          _count: true,
+        })
+      : [];
+    const attachmentCountMap = new Map(
+      attachmentCounts.map((a) => [a.ownerId, a._count]),
+    );
 
     return NextResponse.json({
       transactions: transactions.map((t) => {
@@ -128,11 +173,18 @@ export async function GET(request: Request) {
           transferCounterparty,
           refundForTransactionId: t.refundForTransactionId,
           eventId: t.eventId,
+          vehicleId: t.vehicleId,
           fuelQuantity: t.fuelQuantity == null ? null : Number(t.fuelQuantity),
           fuelUnit: t.fuelUnit,
           fuelOdometer: t.fuelOdometer,
+          attachmentCount: attachmentCountMap.get(t.id) ?? 0,
         };
       }),
+      pagination: {
+        total: totalCount,
+        offset,
+        limit,
+      },
     });
   } catch (e) {
     return err(e);

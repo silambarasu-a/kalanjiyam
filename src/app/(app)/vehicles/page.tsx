@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Car, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
@@ -127,9 +128,10 @@ export default function VehiclesPage() {
 
 function VehicleRow({ vehicle }: { vehicle: Vehicle }) {
   return (
-    <Link
+    <NavigatingCard
       href={`/vehicles/${vehicle.id}`}
       className="flex items-start justify-between gap-3 p-4 hover:bg-muted/40"
+      ariaLabel={`Open ${vehicle.name}`}
     >
       <div className="flex items-start gap-3">
         <Car className="mt-0.5 h-4 w-4 text-muted-foreground" />
@@ -177,7 +179,7 @@ function VehicleRow({ vehicle }: { vehicle: Vehicle }) {
           </div>
         )}
       </div>
-    </Link>
+    </NavigatingCard>
   );
 }
 

@@ -168,7 +168,18 @@ export async function PATCH(
     const updated = await prisma.vehicle.update({
       where: { id },
       data: {
-        ownerContactId: data.ownerContactId ?? existing.ownerContactId,
+        // Prisma 7's update types no longer accept the scalar FK
+        // directly for required relations — route through the
+        // relation field. Only included when the client actually sent
+        // a (possibly unchanged) ownerContactId so we don't fire an
+        // unnecessary connect on every edit.
+        ...(data.ownerContactId
+          ? {
+              ownerContact: {
+                connect: { id: data.ownerContactId },
+              },
+            }
+          : {}),
         kind: (data.kind as VehicleKind | undefined) ?? existing.kind,
         name: data.name ?? existing.name,
         make: data.make ?? existing.make,

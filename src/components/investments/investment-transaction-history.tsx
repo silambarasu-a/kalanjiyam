@@ -124,6 +124,10 @@ export function InvestmentTransactionHistory({
                           onClick={() => {
                             setEditing({
                               id: t.id,
+                              // Investment transactions are always
+                              // INVESTMENT rows; the picker will load
+                              // investment-categories only.
+                              type: "INVESTMENT",
                               amount: t.amount,
                               date: t.date,
                               description: t.description,

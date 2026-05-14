@@ -1,15 +1,22 @@
 "use client";
 import { toast } from "sonner";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Plus, Pencil, Trash2, ArrowLeftRight, ArrowDownLeft, ArrowUpRight, RotateCcw } from "lucide-react";
+import { Plus, Pencil, Trash2, ArrowLeftRight, ArrowDownLeft, ArrowUpRight, RotateCcw, Eye, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import {
   EditTransactionDialog,
   type EditableTransaction,
 } from "@/components/transactions/edit-transaction-dialog";
+import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
+import {
+  ListFilterBar,
+  PaginationFooter,
+  periodToRange,
+  type PeriodValue,
+} from "@/components/transactions/list-filter-bar";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
@@ -37,21 +44,87 @@ type Txn = {
   transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
   refundForTransactionId: string | null;
   eventId: string | null;
+  vehicleId: string | null;
   fuelQuantity: number | null;
   fuelUnit: string | null;
   fuelOdometer: number | null;
+  attachmentCount: number;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
+/**
+ * Fetch the transaction's detail (which includes presigned attachment
+ * URLs) and trigger a direct download of the most recent attachment.
+ * Single-click path for "Download" on rows with exactly one
+ * attachment — multi-attachment rows route to the detail dialog
+ * instead so the user can pick.
+ */
+async function downloadFirstAttachment(txnId: string) {
+  try {
+    const res = await fetch(`/api/transactions/${txnId}`);
+    if (!res.ok) {
+      toast.error("Could not fetch attachment");
+      return;
+    }
+    const body: {
+      attachments?: { url: string | null; filename: string }[];
+    } = await res.json();
+    const first = body.attachments?.[0];
+    if (!first?.url) {
+      toast.error("Attachment URL unavailable");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = first.url;
+    a.download = first.filename;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch {
+    toast.error("Network error");
+  }
+}
+
+const PAGE_SIZE = 50;
+
 export default function TransactionsPage() {
   const [filter, setFilter] = useState<"ALL" | "INCOME" | "EXPENSE" | "TRANSFER">("ALL");
-  const url =
-    filter === "ALL" ? "/api/transactions?limit=100" : `/api/transactions?limit=100&type=${filter}`;
-  const { data, isLoading, mutate: mutateList } = useSWR<{ transactions: Txn[] }>(url, fetcher);
+  const [period, setPeriod] = useState<PeriodValue>({ kind: "all" });
+  const [offset, setOffset] = useState(0);
+  const url = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(offset));
+    if (filter !== "ALL") params.set("type", filter);
+    const { from, to } = periodToRange(period);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return `/api/transactions?${params.toString()}`;
+  }, [filter, period, offset]);
+  const { data, isLoading, mutate: mutateList } = useSWR<{
+    transactions: Txn[];
+    pagination: { total: number; offset: number; limit: number };
+  }>(url, fetcher);
   const { openDialog } = useTransactionDialog();
   const [editingTxn, setEditingTxn] = useState<EditableTransaction | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  // Detail (read-only) view — separate state from edit so we can hand
+  // off "Edit" from inside the detail dialog without races.
+  const [viewingTxnId, setViewingTxnId] = useState<string | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+
+  // Reset to page 1 when filters change.
+  function setFilterReset(next: typeof filter) {
+    setFilter(next);
+    setOffset(0);
+  }
+  function setPeriodReset(next: PeriodValue) {
+    setPeriod(next);
+    setOffset(0);
+  }
 
   return (
     <div className="space-y-6">
@@ -67,17 +140,22 @@ export default function TransactionsPage() {
         </Button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {(["ALL", "INCOME", "EXPENSE", "TRANSFER"] as const).map((k) => (
-          <Button
-            key={k}
-            size="sm"
-            variant={filter === k ? "default" : "outline"}
-            onClick={() => setFilter(k)}
-          >
-            {k.charAt(0) + k.slice(1).toLowerCase()}
-          </Button>
-        ))}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(["ALL", "INCOME", "EXPENSE", "TRANSFER"] as const).map((k) => (
+            <Button
+              key={k}
+              size="sm"
+              variant={filter === k ? "default" : "outline"}
+              onClick={() => setFilterReset(k)}
+            >
+              {k.charAt(0) + k.slice(1).toLowerCase()}
+            </Button>
+          ))}
+        </div>
+        <div className="sm:ml-auto">
+          <ListFilterBar value={period} onChange={setPeriodReset} />
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -210,13 +288,57 @@ export default function TransactionsPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              aria-label="View details"
+                              title="View details"
+                              onClick={() => {
+                                setViewingTxnId(t.id);
+                                setViewOpen(true);
+                              }}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            {t.attachmentCount > 0 && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={`Download attachment${t.attachmentCount > 1 ? "s" : ""}`}
+                                title={
+                                  t.attachmentCount === 1
+                                    ? "Download attachment"
+                                    : `${t.attachmentCount} attachments — open details to pick`
+                                }
+                                onClick={async () => {
+                                  if (t.attachmentCount > 1) {
+                                    // Multiple files — open the detail
+                                    // dialog so the user can pick which
+                                    // one to download.
+                                    setViewingTxnId(t.id);
+                                    setViewOpen(true);
+                                    return;
+                                  }
+                                  // Single attachment — fetch detail
+                                  // (gives us the presigned URL) and
+                                  // trigger an immediate download.
+                                  await downloadFirstAttachment(t.id);
+                                }}
+                              >
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               aria-label="Edit"
+                              title="Edit"
                               onClick={() => {
                                 setEditingTxn({
                                   id: t.id,
+                                  type: t.type,
                                   amount: t.amount,
                                   date: t.date,
                                   description: t.description,
+                                  categoryId: t.category?.id ?? null,
+                                  vehicleId: t.vehicleId,
                                   eventId: t.eventId ?? null,
                                   fuelQuantity: t.fuelQuantity,
                                   fuelUnit: t.fuelUnit,
@@ -270,6 +392,15 @@ export default function TransactionsPage() {
         )}
       </div>
 
+      {data?.pagination && (
+        <PaginationFooter
+          total={data.pagination.total}
+          offset={data.pagination.offset}
+          limit={data.pagination.limit}
+          onChange={setOffset}
+        />
+      )}
+
       <EditTransactionDialog
         transaction={editingTxn}
         open={editOpen}
@@ -286,6 +417,37 @@ export default function TransactionsPage() {
               typeof k === "string" &&
               (k.startsWith("/api/loans") || k.startsWith("/api/investments")),
           );
+        }}
+      />
+
+      <TransactionDetailDialog
+        transactionId={viewingTxnId}
+        open={viewOpen}
+        onOpenChange={(o) => {
+          setViewOpen(o);
+          if (!o) setViewingTxnId(null);
+        }}
+        onEdit={() => {
+          // Find the full row from the cached list and hand off to the
+          // edit dialog. No extra round trip — the list already has
+          // every field the edit dialog needs.
+          const row = data?.transactions.find((x) => x.id === viewingTxnId);
+          if (!row) return;
+          setEditingTxn({
+            id: row.id,
+            type: row.type,
+            amount: row.amount,
+            date: row.date,
+            description: row.description,
+            categoryId: row.category?.id ?? null,
+            vehicleId: row.vehicleId,
+            eventId: row.eventId ?? null,
+            fuelQuantity: row.fuelQuantity,
+            fuelUnit: row.fuelUnit,
+            fuelOdometer: row.fuelOdometer,
+          });
+          setViewOpen(false);
+          setEditOpen(true);
         }}
       />
     </div>

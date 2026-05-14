@@ -13,7 +13,33 @@ import {
   Trash2,
   PackageX,
   Plus,
+  FileText,
+  Gauge,
+  Wallet,
+  ShieldCheck,
+  Landmark,
+  Activity,
+  ArrowRight,
 } from "lucide-react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  Bar,
+  BarChart,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,28 +186,44 @@ export default function VehicleDetailPage({
       </p>
     );
 
+  const purchaseAmount = totals.purchase || vehicle.purchasePrice || 0;
+  const totalSpend = purchaseAmount + totals.service + totals.fuel;
+  const activeInsurance = vehicle.insurances.length;
+  const activeLoan = vehicle.loans.filter((l) => l.active).length;
+  const openClaims = vehicle.claims.filter(
+    (c) => !["PAID", "CLOSED", "REJECTED"].includes(c.status),
+  ).length;
+
   return (
     <div className="space-y-6">
-      <div>
+      {/* Sticky page header — primary identifiers + action buttons. */}
+      <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 lg:-mx-8 border-b bg-background/95 px-4 py-3 backdrop-blur-sm sm:px-6 lg:px-8">
         <Link
           href="/vehicles"
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" /> All vehicles
         </Link>
-        <div className="mt-1 flex items-start justify-between gap-3">
+        <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-semibold tracking-tight truncate">
-              {vehicle.name}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {vehicle.kind} ·{" "}
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight truncate">
+                {vehicle.name}
+              </h1>
+              <Badge tone="default">{vehicle.kind}</Badge>
+              {vehicle.fuelType && (
+                <Badge tone="fuel">{vehicle.fuelType}</Badge>
+              )}
+              {!vehicle.active && <Badge tone="muted">Archived</Badge>}
+              {vehicle.disposedAt && (
+                <Badge tone="warn">Disposed · {vehicle.disposalKind}</Badge>
+              )}
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
               {[vehicle.make, vehicle.model, vehicle.year].filter(Boolean).join(" ") ||
                 "—"}
               {vehicle.registrationNo ? ` · ${vehicle.registrationNo}` : ""}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Owner: {vehicle.ownerContact.name}
+              {` · Owner: ${vehicle.ownerContact.name}`}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -219,157 +261,285 @@ export default function VehicleDetailPage({
         </div>
       </div>
 
-      {vehicle.disposedAt && (
-        <DisposedBanner vehicle={vehicle} />
-      )}
+      {vehicle.disposedAt && <DisposedBanner vehicle={vehicle} />}
 
-      {/* Running cost summary */}
+      {/* Always-visible KPI strip — the four numbers we want at-a-glance
+          regardless of which tab the user is on. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          label="Purchase"
-          value={formatINR(totals.purchase || vehicle.purchasePrice || 0)}
-          icon={<ShoppingCart className="h-3.5 w-3.5" />}
+        <KpiTile
+          label="Total spend"
+          value={formatINR(totalSpend)}
+          hint="Purchase + service + fuel"
+          icon={<Wallet className="h-4 w-4" />}
+          tone="primary"
         />
-        <StatCard
-          label="Service"
-          value={formatINR(totals.service)}
-          icon={<Wrench className="h-3.5 w-3.5" />}
+        <KpiTile
+          label="Purchase price"
+          value={formatINR(purchaseAmount)}
+          hint={
+            vehicle.purchaseDate ? formatDate(vehicle.purchaseDate) : undefined
+          }
+          icon={<ShoppingCart className="h-4 w-4" />}
         />
-        <StatCard
-          label="Fuel"
-          value={formatINR(totals.fuel)}
-          icon={<Fuel className="h-3.5 w-3.5" />}
+        <FuelKpiTile vehicleId={id} />
+        <KpiTile
+          label="Status"
+          value={statusLabel(vehicle)}
+          hint={statusHint({ activeInsurance, activeLoan, openClaims })}
+          icon={<Activity className="h-4 w-4" />}
         />
-        <StatCard label="Service + Fuel" value={formatINR(totals.service + totals.fuel)} />
       </div>
 
-      {/* Fuel & mileage — aggregated from fuel-tagged transactions */}
-      <FuelMileageSection vehicleId={id} />
+      <Tabs defaultValue="overview" className="gap-4">
+        <TabsList variant="line" className="overflow-x-auto">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="fuel">Fuel &amp; Mileage</TabsTrigger>
+          <TabsTrigger value="documents">Documents</TabsTrigger>
+          <TabsTrigger value="insurance">
+            Insurance{vehicle.insurances.length ? ` (${vehicle.insurances.length})` : ""}
+          </TabsTrigger>
+          <TabsTrigger value="loans">
+            Loans{vehicle.loans.length ? ` (${vehicle.loans.length})` : ""}
+          </TabsTrigger>
+          <TabsTrigger value="claims">
+            Claims{vehicle.claims.length ? ` (${vehicle.claims.length})` : ""}
+          </TabsTrigger>
+          <TabsTrigger value="transactions">
+            Transactions{vehicle.transactions.length ? ` (${vehicle.transactions.length})` : ""}
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Documents (RC / FC / PUC / Road tax / Insurance copy / Other) */}
-      <DocumentsSection vehicleId={id} />
+        {/* ─── Overview ──────────────────────────────────────────────── */}
+        <TabsContent value="overview" className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
+            <CostMixCard
+              purchase={purchaseAmount}
+              service={totals.service}
+              fuel={totals.fuel}
+            />
+            <div className="space-y-3">
+              <SnapshotRow
+                icon={<ShieldCheck className="h-4 w-4 text-emerald-600" />}
+                label="Insurance"
+                value={
+                  activeInsurance > 0
+                    ? `${activeInsurance} active`
+                    : "None linked"
+                }
+                href={
+                  vehicle.insurances[0]
+                    ? `/insurance/${vehicle.insurances[0].id}`
+                    : "/insurance"
+                }
+              />
+              <SnapshotRow
+                icon={<Landmark className="h-4 w-4 text-sky-600" />}
+                label="Loans"
+                value={
+                  activeLoan > 0
+                    ? `${activeLoan} active · ${formatINR(
+                        vehicle.loans.reduce((s, l) => s + l.outstanding, 0),
+                      )} outstanding`
+                    : "None"
+                }
+                href={vehicle.loans[0] ? `/loans/${vehicle.loans[0].id}` : "/loans/bank"}
+              />
+              <SnapshotRow
+                icon={<Activity className="h-4 w-4 text-amber-600" />}
+                label="Open claims"
+                value={openClaims > 0 ? `${openClaims} open` : "None"}
+              />
+              <SnapshotRow
+                icon={<Wrench className="h-4 w-4 text-violet-600" />}
+                label="Service spend"
+                value={formatINR(totals.service)}
+              />
+              <SnapshotRow
+                icon={<Fuel className="h-4 w-4 text-orange-600" />}
+                label="Fuel spend"
+                value={formatINR(totals.fuel)}
+              />
+            </div>
+          </div>
 
-      {/* Linked insurance */}
-      <Section title={`Insurance (${vehicle.insurances.length})`}>
-        {vehicle.insurances.length === 0 ? (
-          <Empty msg="No vehicle insurance linked yet. Add a VEHICLE policy on /insurance and link it to this vehicle." />
-        ) : (
-          <div className="rounded-lg border bg-card divide-y">
-            {vehicle.insurances.map((p) => (
-              <Link
-                key={p.id}
-                href={`/insurance/${p.id}`}
-                className="flex items-start justify-between gap-3 p-3 text-sm hover:bg-muted/40"
-              >
-                <div>
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {p.institution ?? "—"}
-                    {p.policyNumber ? ` · ${p.policyNumber}` : ""}
+          <Section
+            title={
+              <span className="flex items-center justify-between">
+                <span>Recent activity</span>
+                {vehicle.transactions.length > 5 && (
+                  <span className="text-[10px] font-normal text-muted-foreground uppercase tracking-wide">
+                    Showing 5 of {vehicle.transactions.length}
+                  </span>
+                )}
+              </span>
+            }
+          >
+            {vehicle.transactions.length === 0 ? (
+              <Empty msg="No transactions tagged yet. Log a Vehicle Purchase / Service / Fuel expense and pick this vehicle to attribute it here." />
+            ) : (
+              <div className="rounded-xl border bg-card divide-y">
+                {vehicle.transactions.slice(0, 5).map((t) => (
+                  <TransactionRow key={t.id} t={t} />
+                ))}
+              </div>
+            )}
+          </Section>
+        </TabsContent>
+
+        {/* ─── Fuel & Mileage ─────────────────────────────────────────── */}
+        <TabsContent value="fuel" className="space-y-4">
+          <FuelMileageSection vehicleId={id} />
+        </TabsContent>
+
+        {/* ─── Documents ──────────────────────────────────────────────── */}
+        <TabsContent value="documents" className="space-y-4">
+          <DocumentsSection vehicleId={id} />
+        </TabsContent>
+
+        {/* ─── Insurance ──────────────────────────────────────────────── */}
+        <TabsContent value="insurance" className="space-y-4">
+          {vehicle.insurances.length === 0 ? (
+            <Empty msg="No vehicle insurance linked yet. Add a VEHICLE policy on /insurance and link it to this vehicle." />
+          ) : (
+            <div className="rounded-xl border bg-card divide-y">
+              {vehicle.insurances.map((p) => (
+                <Link
+                  key={p.id}
+                  href={`/insurance/${p.id}`}
+                  className="flex items-start justify-between gap-3 p-4 text-sm hover:bg-muted/40 transition-colors"
+                >
+                  <div>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {p.institution ?? "—"}
+                      {p.policyNumber ? ` · ${p.policyNumber}` : ""}
+                    </div>
+                    {p.insuranceStatus && (
+                      <div className="mt-1 inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                        {p.insuranceStatus}
+                      </div>
+                    )}
                   </div>
-                </div>
-                <div className="text-right">
-                  {p.premiumAmount != null && (
+                  <div className="text-right">
+                    {p.premiumAmount != null && (
+                      <div className="font-medium tabular-nums">
+                        {formatINR(p.premiumAmount)}
+                        <span className="text-xs text-muted-foreground">
+                          {p.premiumFrequency ? ` · ${p.premiumFrequency.toLowerCase()}` : ""}
+                        </span>
+                      </div>
+                    )}
+                    {p.nextDueDate && (
+                      <div className="text-xs text-muted-foreground">
+                        Due {formatDate(p.nextDueDate)}
+                      </div>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ─── Loans ──────────────────────────────────────────────────── */}
+        <TabsContent value="loans" className="space-y-4">
+          {vehicle.loans.length === 0 ? (
+            <Empty msg="No loan linked to this vehicle." />
+          ) : (
+            <div className="rounded-xl border bg-card divide-y">
+              {vehicle.loans.map((l) => {
+                const pct =
+                  l.principal > 0
+                    ? Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          ((l.principal - l.outstanding) / l.principal) * 100,
+                        ),
+                      )
+                    : 0;
+                return (
+                  <div key={l.id} className="p-4 text-sm space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium">{l.lender}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {l.kind}
+                          {l.nextDueDate ? ` · next due ${formatDate(l.nextDueDate)}` : ""}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-medium tabular-nums">
+                          {formatINR(l.outstanding)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          of {formatINR(l.principal)} · {Math.round(pct)}% paid
+                        </div>
+                      </div>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full bg-emerald-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ─── Claims ─────────────────────────────────────────────────── */}
+        <TabsContent value="claims" className="space-y-4">
+          {vehicle.claims.length === 0 ? (
+            <Empty msg="No vehicle claims filed." />
+          ) : (
+            <div className="rounded-xl border bg-card divide-y">
+              {vehicle.claims.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-start justify-between gap-3 p-4 text-sm"
+                >
+                  <div>
                     <div className="font-medium">
-                      {formatINR(p.premiumAmount)}
-                      <span className="text-xs text-muted-foreground">
-                        {p.premiumFrequency
-                          ? ` · ${p.premiumFrequency.toLowerCase()}`
-                          : ""}
-                      </span>
+                      {c.claimNumber ?? `Incident ${formatDate(c.incidentDate)}`}
                     </div>
-                  )}
-                  {p.nextDueDate && (
-                    <div className="text-xs text-muted-foreground">
-                      Due {formatDate(p.nextDueDate)}
+                    <div className="mt-1 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                      {c.status.replace(/_/g, " ")}
                     </div>
-                  )}
+                  </div>
+                  <div className="text-right tabular-nums">
+                    {c.claimedAmount != null && (
+                      <div className="text-xs text-muted-foreground">
+                        Claimed {formatINR(c.claimedAmount)}
+                      </div>
+                    )}
+                    {c.receivedAmount != null && (
+                      <div className="font-medium">
+                        Received {formatINR(c.receivedAmount)}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </Section>
+              ))}
+            </div>
+          )}
+        </TabsContent>
 
-      {/* Linked loans */}
-      <Section title={`Loans (${vehicle.loans.length})`}>
-        {vehicle.loans.length === 0 ? (
-          <Empty msg="No loan linked to this vehicle." />
-        ) : (
-          <div className="rounded-lg border bg-card divide-y">
-            {vehicle.loans.map((l) => (
-              <div key={l.id} className="flex items-start justify-between gap-3 p-3 text-sm">
-                <div>
-                  <div className="font-medium">{l.lender}</div>
-                  <div className="text-xs text-muted-foreground">{l.kind}</div>
-                </div>
-                <div className="text-right">
-                  <div className="font-medium">{formatINR(l.outstanding)}</div>
-                  <div className="text-xs text-muted-foreground">
-                    of {formatINR(l.principal)}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {/* Claims */}
-      <Section title={`Claims (${vehicle.claims.length})`}>
-        {vehicle.claims.length === 0 ? (
-          <Empty msg="No vehicle claims filed." />
-        ) : (
-          <div className="rounded-lg border bg-card divide-y">
-            {vehicle.claims.map((c) => (
-              <div key={c.id} className="flex items-start justify-between gap-3 p-3 text-sm">
-                <div>
-                  <div className="font-medium">
-                    {c.claimNumber ?? `Incident ${formatDate(c.incidentDate)}`}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {c.status.replace("_", " ")}
-                  </div>
-                </div>
-                <div className="text-right">
-                  {c.claimedAmount != null && (
-                    <div className="text-xs text-muted-foreground">
-                      Claimed {formatINR(c.claimedAmount)}
-                    </div>
-                  )}
-                  {c.receivedAmount != null && (
-                    <div className="font-medium">{formatINR(c.receivedAmount)}</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {/* Transactions */}
-      <Section title={`Transactions (${vehicle.transactions.length})`}>
-        {vehicle.transactions.length === 0 ? (
-          <Empty msg="No transactions tagged to this vehicle yet. When you log a Vehicle Purchase / Vehicle Service / Fuel expense, pick this vehicle to attribute it here." />
-        ) : (
-          <div className="rounded-lg border bg-card divide-y">
-            {vehicle.transactions.map((t) => (
-              <div key={t.id} className="flex items-start justify-between gap-3 p-3 text-sm">
-                <div>
-                  <div>{t.description}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(t.date)}
-                    {t.category
-                      ? ` · ${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`
-                      : ""}
-                  </div>
-                </div>
-                <div className="font-medium">{formatINR(t.amount)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+        {/* ─── All Transactions ───────────────────────────────────────── */}
+        <TabsContent value="transactions" className="space-y-4">
+          {vehicle.transactions.length === 0 ? (
+            <Empty msg="No transactions tagged to this vehicle yet. When you log a Vehicle Purchase / Vehicle Service / Fuel expense, pick this vehicle to attribute it here." />
+          ) : (
+            <div className="rounded-xl border bg-card divide-y">
+              {vehicle.transactions.map((t) => (
+                <TransactionRow key={t.id} t={t} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
       <EditVehicleDialog
         open={editOpen}
@@ -381,26 +551,6 @@ export default function VehicleDetailPage({
         onClose={() => setDisposeOpen(false)}
         vehicle={vehicle}
       />
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: string;
-  icon?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border bg-card p-3">
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-1 text-base font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
@@ -424,6 +574,261 @@ function Empty({ msg }: { msg: string }) {
   return (
     <div className="rounded-lg border bg-card p-4 text-xs text-muted-foreground">
       {msg}
+    </div>
+  );
+}
+
+/* ---------------- Tile + small UI primitives ---------------- */
+
+function Badge({
+  children,
+  tone = "default",
+}: {
+  children: React.ReactNode;
+  tone?: "default" | "muted" | "warn" | "fuel";
+}) {
+  const cls =
+    tone === "muted"
+      ? "bg-muted text-muted-foreground"
+      : tone === "warn"
+        ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+        : tone === "fuel"
+          ? "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+          : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function KpiTile({
+  label,
+  value,
+  hint,
+  icon,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  icon?: React.ReactNode;
+  tone?: "default" | "primary";
+}) {
+  const accent =
+    tone === "primary"
+      ? "border-primary/30 bg-primary/5"
+      : "border-border bg-card";
+  return (
+    <div className={`rounded-xl border ${accent} p-4`}>
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1.5 text-xl font-semibold tabular-nums">{value}</div>
+      {hint && (
+        <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FuelKpiTile({ vehicleId }: { vehicleId: string }) {
+  const { data } = useSWR<FuelSummary>(
+    `/api/vehicles/${vehicleId}/fuel-summary`,
+    fetcher,
+  );
+  const mileage = data?.averageMileage;
+  const km = data?.kmDriven;
+  const unit = data?.totals?.unit ?? "L";
+  return (
+    <KpiTile
+      label="Mileage"
+      value={mileage != null ? `${mileage.toFixed(1)}` : "—"}
+      hint={
+        mileage != null
+          ? `km/${unit} · ${km != null ? km.toLocaleString() + " km driven" : "drive log"}`
+          : km != null
+            ? `${km.toLocaleString()} km driven`
+            : "Add fuel fills with odometer"
+      }
+      icon={<Gauge className="h-4 w-4" />}
+    />
+  );
+}
+
+function statusLabel(v: {
+  active: boolean;
+  disposedAt: string | null;
+  disposalKind: string | null;
+}): string {
+  if (v.disposedAt) {
+    return v.disposalKind
+      ? v.disposalKind.replace(/_/g, " ").toLowerCase()
+      : "Disposed";
+  }
+  return v.active ? "Active" : "Archived";
+}
+
+function statusHint(args: {
+  activeInsurance: number;
+  activeLoan: number;
+  openClaims: number;
+}): string {
+  const parts: string[] = [];
+  if (args.activeInsurance > 0) parts.push(`${args.activeInsurance} insurance`);
+  if (args.activeLoan > 0) parts.push(`${args.activeLoan} loan`);
+  if (args.openClaims > 0) parts.push(`${args.openClaims} open claim`);
+  return parts.length ? parts.join(" · ") : "No active obligations";
+}
+
+function CostMixCard({
+  purchase,
+  service,
+  fuel,
+}: {
+  purchase: number;
+  service: number;
+  fuel: number;
+}) {
+  const total = purchase + service + fuel;
+  const segments = [
+    { name: "Purchase", value: purchase, color: "#0ea5e9" },
+    { name: "Service", value: service, color: "#a855f7" },
+    { name: "Fuel", value: fuel, color: "#f59e0b" },
+  ].filter((s) => s.value > 0);
+  return (
+    <div className="rounded-xl border bg-card p-5">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold">Lifetime spend</h3>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {formatINR(total)}
+        </span>
+      </div>
+      {total === 0 ? (
+        <p className="mt-4 text-xs text-muted-foreground">
+          No spend recorded yet. Log a Vehicle Purchase / Service / Fuel expense
+          tagged to this vehicle to populate this chart.
+        </p>
+      ) : (
+        <div className="mt-3 grid grid-cols-[160px_1fr] gap-4 items-center">
+          <div className="h-[160px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={segments}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={45}
+                  outerRadius={70}
+                  paddingAngle={2}
+                  stroke="none"
+                >
+                  {segments.map((s) => (
+                    <Cell key={s.name} fill={s.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(v) => formatINR(Number(v))}
+                  contentStyle={{
+                    fontSize: "12px",
+                    borderRadius: "8px",
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <ul className="space-y-2 text-sm">
+            {segments.map((s) => {
+              const pct = total > 0 ? (s.value / total) * 100 : 0;
+              return (
+                <li key={s.name} className="flex items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: s.color }}
+                  />
+                  <span className="flex-1">{s.name}</span>
+                  <span className="font-medium tabular-nums">
+                    {formatINR(s.value)}
+                  </span>
+                  <span className="w-12 text-right text-xs text-muted-foreground tabular-nums">
+                    {pct.toFixed(0)}%
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SnapshotRow({
+  icon,
+  label,
+  value,
+  href,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  href?: string;
+}) {
+  const content = (
+    <div className="flex items-center gap-3 rounded-lg border bg-card p-3 text-sm">
+      <div className="shrink-0">{icon}</div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
+        <div className="font-medium truncate">{value}</div>
+      </div>
+      {href && <ArrowRight className="h-4 w-4 text-muted-foreground" />}
+    </div>
+  );
+  return href ? (
+    <Link href={href} className="block hover:opacity-90 transition-opacity">
+      {content}
+    </Link>
+  ) : (
+    content
+  );
+}
+
+function TransactionRow({
+  t,
+}: {
+  t: {
+    id: string;
+    description: string;
+    date: string;
+    amount: number;
+    category: {
+      id: string;
+      name: string;
+      parent: { id: string; name: string } | null;
+    } | null;
+  };
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 px-4 py-2.5 text-sm">
+      <div className="min-w-0 flex-1">
+        <div className="truncate">{t.description}</div>
+        <div className="text-xs text-muted-foreground">
+          {formatDate(t.date)}
+          {t.category
+            ? ` · ${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`
+            : ""}
+        </div>
+      </div>
+      <div className="font-medium tabular-nums shrink-0">
+        {formatINR(t.amount)}
+      </div>
     </div>
   );
 }
@@ -1430,6 +1835,13 @@ type FuelSummary = {
     odometer: number | null;
     kmSincePrev: number | null;
     mileage: number | null;
+    attachments: {
+      id: string;
+      filename: string;
+      mimeType: string;
+      /** Short-lived presigned GET URL — null when S3 isn't configured. */
+      url: string | null;
+    }[];
   }[];
 };
 
@@ -1441,14 +1853,15 @@ function FuelMileageSection({ vehicleId }: { vehicleId: string }) {
 
   if (isLoading) {
     return (
-      <Section title="Fuel & mileage">
-        <div className="rounded-lg border bg-card p-4 text-xs text-muted-foreground">
-          Loading…
-        </div>
-      </Section>
+      <div className="rounded-xl border bg-card p-4 text-xs text-muted-foreground">
+        Loading…
+      </div>
     );
   }
-  if (!data) return null;
+  // Guard against the API's error-response shape (`{ error: string }`)
+  // which the SWR fetcher returns as-is — TypeScript thinks `data` is
+  // FuelSummary but at runtime an error JSON has no `totals` field.
+  if (!data || !data.vehicle || !data.totals) return null;
 
   const { vehicle: v, totals, kmDriven, averageMileage, fills } = data;
   const unit = totals.unit ?? "L";
@@ -1456,103 +1869,276 @@ function FuelMileageSection({ vehicleId }: { vehicleId: string }) {
 
   if (!v.fuelType) {
     return (
-      <Section title="Fuel & mileage">
-        <Empty msg="Set a fuel type on this vehicle (Edit → Fuel type) to enable fuel-fill tracking with the right unit." />
-      </Section>
+      <Empty msg="Set a fuel type on this vehicle (Edit → Fuel type) to enable fuel-fill tracking with the right unit." />
     );
   }
 
   if (fills.length === 0) {
     return (
-      <Section title="Fuel & mileage">
-        <Empty msg="No fuel fills tagged yet. Add an Expense with category 'Fuel' tagged to this vehicle, with quantity + odometer reading, to start tracking mileage." />
-      </Section>
+      <Empty msg="No fuel fills tagged yet. Add an Expense with category 'Fuel' tagged to this vehicle, with quantity + odometer reading, to start tracking mileage." />
     );
   }
 
+  // Charts data — most-recent first in the API, reverse to chronological.
+  const chronological = [...fills].reverse();
+  const mileageSeries = chronological
+    .filter((f) => f.mileage != null)
+    .map((f) => ({
+      date: new Date(f.date).toLocaleDateString("en-IN", {
+        month: "short",
+        day: "numeric",
+      }),
+      mileage: Number((f.mileage as number).toFixed(2)),
+    }));
+  // Group spend + qty by month.
+  const monthlyMap = new Map<
+    string,
+    { month: string; spent: number; quantity: number }
+  >();
+  for (const f of chronological) {
+    const d = new Date(f.date);
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    const label = d.toLocaleDateString("en-IN", {
+      month: "short",
+      year: "2-digit",
+    });
+    const row = monthlyMap.get(key) ?? {
+      month: label,
+      spent: 0,
+      quantity: 0,
+    };
+    row.spent += f.amount;
+    row.quantity += f.quantity;
+    monthlyMap.set(key, row);
+  }
+  const monthlySeries = [...monthlyMap.values()];
+
   return (
-    <Section
-      title={
-        <span className="flex items-center justify-between gap-2">
-          <span>Fuel &amp; mileage</span>
-          <span className="text-[10px] font-normal text-muted-foreground uppercase tracking-wide">
-            {v.fuelType}
-          </span>
-        </span>
-      }
-    >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-3">
-        <StatCard
+    <div className="space-y-4">
+      {/* Stat row — corporate-grade KPI tiles for fuel domain */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <KpiTile
           label="Total fills"
           value={String(totals.fills)}
+          icon={<Fuel className="h-4 w-4" />}
         />
-        <StatCard
+        <KpiTile
           label="Total fuel"
           value={`${totals.quantity.toFixed(2)} ${unit}`}
         />
-        <StatCard
-          label="Total spent"
-          value={formatINR(totals.spent)}
-        />
-        <StatCard
+        <KpiTile label="Total spent" value={formatINR(totals.spent)} />
+        <KpiTile
           label="Km driven"
           value={kmDriven != null ? `${kmDriven.toLocaleString()} km` : "—"}
+          icon={<Gauge className="h-4 w-4" />}
         />
       </div>
       {averageMileage != null && (
-        <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 p-3 mb-3 text-sm">
-          <span className="font-medium">
-            Average mileage:{" "}
-            <span className="tabular-nums">
-              {averageMileage.toFixed(2)} {mileageUnit}
-            </span>
-          </span>
-          <span className="ml-2 text-xs text-muted-foreground">
-            (fill-to-fill: km between fills ÷ fuel filled)
-          </span>
+        <div className="rounded-xl border bg-emerald-50 dark:bg-emerald-950/30 p-4 flex items-baseline justify-between gap-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+              Average mileage
+            </div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
+              {averageMileage.toFixed(2)}{" "}
+              <span className="text-base font-normal text-emerald-700/70 dark:text-emerald-300/70">
+                {mileageUnit}
+              </span>
+            </div>
+          </div>
+          <div className="text-right text-xs text-muted-foreground max-w-[200px]">
+            Fill-to-fill: km between earliest and latest odometer ÷ fuel
+            filled between them.
+          </div>
         </div>
       )}
-      <div className="rounded-lg border bg-card divide-y">
+
+      {/* Side-by-side charts — mileage trend (line) + monthly spend (bar) */}
+      {(mileageSeries.length >= 2 || monthlySeries.length >= 2) && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {mileageSeries.length >= 2 && (
+            <div className="rounded-xl border bg-card p-4">
+              <div className="flex items-baseline justify-between mb-2">
+                <h4 className="text-sm font-semibold">Mileage trend</h4>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                  {mileageUnit}
+                </span>
+              </div>
+              <div className="h-[180px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={mileageSeries}
+                    margin={{ top: 5, right: 10, bottom: 0, left: -20 }}
+                  >
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10 }}
+                      stroke="currentColor"
+                      className="text-muted-foreground"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      stroke="currentColor"
+                      className="text-muted-foreground"
+                    />
+                    <Tooltip
+                      formatter={(v) => `${Number(v).toFixed(2)} ${mileageUnit}`}
+                      contentStyle={{ fontSize: "12px", borderRadius: "8px" }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="mileage"
+                      stroke="#10b981"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: "#10b981" }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+          {monthlySeries.length >= 2 && (
+            <div className="rounded-xl border bg-card p-4">
+              <div className="flex items-baseline justify-between mb-2">
+                <h4 className="text-sm font-semibold">Monthly fuel spend</h4>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                  ₹
+                </span>
+              </div>
+              <div className="h-[180px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={monthlySeries}
+                    margin={{ top: 5, right: 10, bottom: 0, left: -10 }}
+                  >
+                    <XAxis
+                      dataKey="month"
+                      tick={{ fontSize: 10 }}
+                      stroke="currentColor"
+                      className="text-muted-foreground"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      stroke="currentColor"
+                      className="text-muted-foreground"
+                    />
+                    <Tooltip
+                      formatter={(v) => formatINR(Number(v))}
+                      contentStyle={{ fontSize: "12px", borderRadius: "8px" }}
+                    />
+                    <Bar dataKey="spent" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-xl border bg-card divide-y">
+        <div className="px-4 py-2.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground bg-muted/30 grid grid-cols-[1fr_auto_auto] gap-3">
+          <span>Fill</span>
+          <span className="text-right">Qty · Spend</span>
+          <span className="text-right w-20">Mileage</span>
+        </div>
         {fills.map((f) => (
-          <div
-            key={f.id}
-            className="grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2.5 text-sm"
-          >
-            <div className="min-w-0">
-              <div className="font-medium truncate">{f.description}</div>
-              <div className="text-xs text-muted-foreground">
-                {formatDate(f.date)}
-                {f.odometer != null && ` · ${f.odometer.toLocaleString()} km`}
-                {f.kmSincePrev != null &&
-                  ` · +${f.kmSincePrev.toLocaleString()} km since last`}
+          <div key={f.id} className="px-3 py-2.5 text-sm space-y-2">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-3 items-center">
+              <div className="min-w-0">
+                <div className="font-medium truncate">{f.description}</div>
+                <div className="text-xs text-muted-foreground">
+                  {formatDate(f.date)}
+                  {f.odometer != null && ` · ${f.odometer.toLocaleString()} km`}
+                  {f.kmSincePrev != null &&
+                    ` · +${f.kmSincePrev.toLocaleString()} km since last`}
+                </div>
+              </div>
+              <div className="text-right tabular-nums">
+                <div className="text-sm">
+                  {f.quantity.toFixed(2)}{" "}
+                  <span className="text-xs text-muted-foreground">
+                    {f.unit ?? unit}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {formatINR(f.amount)}
+                </div>
+              </div>
+              <div className="text-right tabular-nums w-20">
+                {f.mileage != null ? (
+                  <span className="text-emerald-700 dark:text-emerald-400 text-sm font-medium">
+                    {f.mileage.toFixed(1)}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
+                )}
+                <div className="text-[10px] text-muted-foreground">
+                  {mileageUnit}
+                </div>
               </div>
             </div>
-            <div className="text-right tabular-nums">
-              <div className="text-sm">
-                {f.quantity.toFixed(2)}{" "}
-                <span className="text-xs text-muted-foreground">
-                  {f.unit ?? unit}
-                </span>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {formatINR(f.amount)}
-              </div>
-            </div>
-            <div className="text-right tabular-nums w-20">
-              {f.mileage != null ? (
-                <span className="text-emerald-700 dark:text-emerald-400 text-sm font-medium">
-                  {f.mileage.toFixed(1)}
-                </span>
-              ) : (
-                <span className="text-muted-foreground text-xs">—</span>
-              )}
-              <div className="text-[10px] text-muted-foreground">
-                {mileageUnit}
-              </div>
-            </div>
+            {/* Receipt previews — image thumbnails render inline; PDFs
+                and other types show a clickable file pill. Both open in
+                a new tab using the short-lived presigned URL signed
+                server-side on the same response. */}
+            {f.attachments.length > 0 && (
+              <FuelReceiptStrip attachments={f.attachments} />
+            )}
           </div>
         ))}
       </div>
-    </Section>
+    </div>
+  );
+}
+
+function FuelReceiptStrip({
+  attachments,
+}: {
+  attachments: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    url: string | null;
+  }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {attachments.map((a) => {
+        const isImage = a.mimeType.startsWith("image/");
+        if (isImage && a.url) {
+          return (
+            <a
+              key={a.id}
+              href={a.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-md border bg-background overflow-hidden hover:ring-2 hover:ring-primary/30 transition"
+              title={a.filename}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element -- presigned URL, can't go through Next/Image */}
+              <img
+                src={a.url}
+                alt={a.filename}
+                className="block h-20 w-20 object-cover"
+                loading="lazy"
+              />
+            </a>
+          );
+        }
+        return (
+          <a
+            key={a.id}
+            href={a.url ?? "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted/40 transition"
+            title={a.filename}
+          >
+            <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="max-w-[14rem] truncate">{a.filename}</span>
+          </a>
+        );
+      })}
+    </div>
   );
 }

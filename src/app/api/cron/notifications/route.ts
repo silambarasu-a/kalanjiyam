@@ -169,6 +169,71 @@ async function run() {
     else skipped++;
   }
 
+  // ── Maturing-policy sweep ─────────────────────────────────────────
+  // Life-family insurance policies (LIFE / TERM / ULIP / ENDOWMENT)
+  // approaching their maturityAt date. Wider trigger windows than
+  // premium dues because maturity events are typically planned for
+  // months in advance. Dedup is title-based (no reminder row exists
+  // for maturity, so the standard reminderId-keyed dedup doesn't
+  // apply).
+  const MATURITY_TRIGGER_DAYS = [90, 30, 7, 0] as const;
+  const maturityHorizon = new Date(today);
+  maturityHorizon.setUTCDate(
+    maturityHorizon.getUTCDate() + Math.max(...MATURITY_TRIGGER_DAYS) + 1,
+  );
+  const maturingPolicies = await prisma.investment.findMany({
+    where: {
+      kind: "INSURANCE",
+      active: true,
+      maturityAt: { not: null, gte: today, lt: maturityHorizon },
+      policyType: { in: ["LIFE", "TERM", "ULIP", "ENDOWMENT"] },
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      name: true,
+      maturityAt: true,
+      policyType: true,
+    },
+  });
+  let maturityCreated = 0;
+  let maturitySkipped = 0;
+  for (const p of maturingPolicies) {
+    if (!p.maturityAt) continue;
+    const daysOut = Math.round(
+      (p.maturityAt.getTime() - today.getTime()) / 86_400_000,
+    );
+    if (!(MATURITY_TRIGGER_DAYS as readonly number[]).includes(daysOut)) {
+      maturitySkipped++;
+      continue;
+    }
+    const title =
+      daysOut === 0
+        ? `${p.name} matures today`
+        : `${p.name} matures in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
+    // Title-based dedup since no reminderId exists for maturity events.
+    const existing = await prisma.notification.findFirst({
+      where: {
+        workspaceId: p.workspaceId,
+        kind: NotificationKind.POLICY_RENEWING,
+        title,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      maturitySkipped++;
+      continue;
+    }
+    await createNotification({
+      workspaceId: p.workspaceId,
+      kind: NotificationKind.POLICY_RENEWING,
+      title,
+      body: `Maturity date: ${p.maturityAt.toISOString().slice(0, 10)}`,
+      link: `/insurance/${p.id}`,
+    });
+    maturityCreated++;
+  }
+
   return NextResponse.json({
     ok: true,
     startedAt: startedAt.toISOString(),
@@ -176,5 +241,10 @@ async function run() {
     scanned: reminders.length,
     created,
     skipped,
+    maturity: {
+      scanned: maturingPolicies.length,
+      created: maturityCreated,
+      skipped: maturitySkipped,
+    },
   });
 }
