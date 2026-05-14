@@ -44,7 +44,14 @@ export async function GET(request: Request) {
         amount: true,
         type: true,
         date: true,
-        category: { select: { id: true, name: true, group: true } },
+        category: {
+          select: {
+            id: true,
+            name: true,
+            group: true,
+            parent: { select: { name: true } },
+          },
+        },
       },
     });
 
@@ -58,7 +65,14 @@ export async function GET(request: Request) {
     }
     const categoryAgg = new Map<
       string,
-      { id: string; name: string; group: string | null; income: number; expense: number }
+      {
+        id: string;
+        name: string;
+        parentName: string | null;
+        group: string | null;
+        income: number;
+        expense: number;
+      }
     >();
 
     for (const t of txns) {
@@ -73,6 +87,7 @@ export async function GET(request: Request) {
         const existing = categoryAgg.get(t.category.id) ?? {
           id: t.category.id,
           name: t.category.name,
+          parentName: t.category.parent?.name ?? null,
           group: t.category.group,
           income: 0,
           expense: 0,

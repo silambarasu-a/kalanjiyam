@@ -37,6 +37,9 @@ type Txn = {
   transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
   refundForTransactionId: string | null;
   eventId: string | null;
+  fuelQuantity: number | null;
+  fuelUnit: string | null;
+  fuelOdometer: number | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -215,6 +218,9 @@ export default function TransactionsPage() {
                                   date: t.date,
                                   description: t.description,
                                   eventId: t.eventId ?? null,
+                                  fuelQuantity: t.fuelQuantity,
+                                  fuelUnit: t.fuelUnit,
+                                  fuelOdometer: t.fuelOdometer,
                                 });
                                 setEditOpen(true);
                               }}

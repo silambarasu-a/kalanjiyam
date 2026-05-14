@@ -91,12 +91,27 @@ async function aggregateByCategory(
     select: {
       amount: true,
       type: true,
-      category: { select: { id: true, name: true, group: true } },
+      category: {
+        select: {
+          id: true,
+          name: true,
+          group: true,
+          parent: { select: { name: true } },
+        },
+      },
     },
   });
   const map = new Map<
     string,
-    { id: string; name: string; group: string | null; type: string; amount: number; count: number }
+    {
+      id: string;
+      name: string;
+      parentName: string | null;
+      group: string | null;
+      type: string;
+      amount: number;
+      count: number;
+    }
   >();
   for (const r of rows) {
     const cid = r.category?.id ?? "uncategorized";
@@ -110,6 +125,7 @@ async function aggregateByCategory(
       map.set(key, {
         id: cid,
         name: r.category?.name ?? "Uncategorized",
+        parentName: r.category?.parent?.name ?? null,
         group: r.category?.group ?? null,
         type: r.type,
         amount: amt,
