@@ -18,7 +18,7 @@ import {
  *   curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
  *     http://localhost:3003/api/cron/notifications
  */
-const TRIGGER_DAYS = [7, 3, 0] as const;
+const TRIGGER_DAYS = [5, 3, 1, 0] as const;
 
 const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   INSURANCE_PREMIUM: NotificationKind.PREMIUM_DUE_SOON,
