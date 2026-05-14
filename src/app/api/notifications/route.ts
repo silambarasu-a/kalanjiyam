@@ -178,7 +178,17 @@ export async function GET(request: Request) {
     for (const l of loans) {
       if (!l.nextDueDate) continue;
       const emi = l.emiAmount == null ? null : Number(l.emiAmount);
-      const paidThisMonth = loanPaidByLoanId.get(l.id) ?? 0;
+      // Only credit a current-month LOAN_PAYMENT against an EMI when the
+      // EMI's own due date is in the current month OR overdue. After
+      // last month's EMI was paid, the loan's `nextDueDate` auto-rolls
+      // forward into next month — without this gate the just-paid
+      // current-month payment was being subtracted from the next-month
+      // EMI, making the upcoming due look already-paid. Overdue EMIs
+      // are still allowed to show partial-payment progress.
+      const dueNotInFutureMonth = l.nextDueDate < nextMonthStart;
+      const paidThisMonth = dueNotInFutureMonth
+        ? loanPaidByLoanId.get(l.id) ?? 0
+        : 0;
       const outstanding =
         emi == null ? null : Math.max(0, emi - paidThisMonth);
       items.push({
@@ -271,15 +281,28 @@ export async function GET(request: Request) {
       });
     }
 
-    items.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    // Visibility window: current-month + overdue items always show.
+    // Next-month items only surface during the last week of the current
+    // calendar month (matches `isNearMonthEnd` on the dashboard tile —
+    // both surfaces flip together so the popover and dashboard agree).
+    const daysInThisMonth = new Date(
+      today.getFullYear(),
+      today.getMonth() + 1,
+      0,
+    ).getDate();
+    const isNearMonthEnd = today.getDate() > daysInThisMonth - 7;
+    const visibleItems = isNearMonthEnd
+      ? items
+      : items.filter((i) => new Date(i.dueDate) < nextMonthStart);
+    visibleItems.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
-    const overdueCount = items.filter((i) => i.overdue).length;
+    const overdueCount = visibleItems.filter((i) => i.overdue).length;
     return NextResponse.json({
-      items,
+      items: visibleItems,
       counts: {
-        total: items.length,
+        total: visibleItems.length,
         overdue: overdueCount,
-        dueSoon: items.length - overdueCount,
+        dueSoon: visibleItems.length - overdueCount,
       },
     });
   } catch (e) {

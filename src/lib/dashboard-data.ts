@@ -528,7 +528,17 @@ export async function getDashboardCashflow(args: {
   for (const l of upcomingLoanDues) {
     if (!l.nextDueDate) continue;
     const emi = l.emiAmount == null ? null : Number(l.emiAmount);
-    const paidThisMonth = loanPaidByLoanId.get(l.id) ?? 0;
+    // Only credit a current-month LOAN_PAYMENT against an EMI when the
+    // EMI's own due date is in the current month OR overdue. After
+    // last month's EMI was paid, the loan's `nextDueDate` auto-rolls
+    // forward into next month — without this gate the just-paid
+    // current-month payment was being subtracted from the next-month
+    // EMI, making the upcoming due look already-paid on the dashboard.
+    // Overdue EMIs still show partial-payment progress correctly.
+    const dueNotInFutureMonth = l.nextDueDate < nextMonthBegin;
+    const paidThisMonth = dueNotInFutureMonth
+      ? loanPaidByLoanId.get(l.id) ?? 0
+      : 0;
     const outstanding =
       emi == null ? null : Math.max(0, emi - paidThisMonth);
     dues.push({
