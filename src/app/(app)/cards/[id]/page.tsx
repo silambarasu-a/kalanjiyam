@@ -19,9 +19,9 @@ import {
 } from "@/lib/statement-period";
 import { PeriodFilter } from "@/components/transactions/period-filter";
 import {
-  CardSpendChart,
-  type CardSpendBucket,
-} from "@/components/cards/card-spend-chart";
+  AccountFlowChart,
+  type AccountFlowBucket,
+} from "@/components/accounts/account-flow-chart";
 import {
   CategoryBreakdown,
   type CategorySlice,
@@ -148,17 +148,22 @@ export default async function CardDetailPage({
     card.account?.nextBillAmount != null
       ? Number(card.account.nextBillAmount)
       : null;
-  if (manualBillDue && manualBillAmount != null && manualBillAmount > 0) {
-    paymentDueBy = manualBillDue;
-    // Subtract untagged transfers landing on this card account up to the
-    // manual due date — there's no CardStatement row to tag against, so
-    // payments toward the override are tracked via this fallback.
-    const paidUntagged = card.accountId
+  // Subtract untagged transfers landing on this card account up to the
+  // manual due date — there's no CardStatement row to tag against, so
+  // payments toward the override are tracked via this fallback.
+  const manualPaidUntagged =
+    manualBillDue && card.accountId
       ? await untaggedPaymentsToCard(card.accountId, manualBillDue)
       : 0;
+  const manualRemaining =
+    manualBillAmount != null
+      ? Math.max(0, manualBillAmount - manualPaidUntagged)
+      : 0;
+  if (manualBillDue && manualBillAmount != null && manualRemaining > 0) {
+    paymentDueBy = manualBillDue;
     billTotal = manualBillAmount;
-    billPaidSoFar = Math.min(manualBillAmount, paidUntagged);
-    amountDueNow = Math.max(0, manualBillAmount - paidUntagged);
+    billPaidSoFar = Math.min(manualBillAmount, manualPaidUntagged);
+    amountDueNow = manualRemaining;
   } else if (upcomingStatement) {
     paymentDueBy = upcomingStatement.dueDate;
     const total = Number(upcomingStatement.totalDue);
@@ -288,7 +293,21 @@ export default async function CardDetailPage({
   const periods: Period[] =
     isCredit && statementDay ? cardStatementPeriods(statementDay) : calendarMonthPeriods();
 
-  let activeId = sp.period ?? periods[0]?.id ?? "";
+  // When the user hasn't picked a period, default to the cycle of the
+  // oldest unpaid statement (the bill they're about to pay), so spend +
+  // categories on the page match the unpaid amount the rest of the UI is
+  // showing. Falls back to the current cycle when nothing is unpaid.
+  const oldestUnpaid = isCredit
+    ? statements
+        .filter((s) => !s.paidAt && Number(s.totalDue) > 0)
+        .sort((a, b) => a.periodEnd.getTime() - b.periodEnd.getTime())[0]
+    : undefined;
+  const defaultPeriodId =
+    oldestUnpaid &&
+    periods.find((p) => p.start.getTime() === oldestUnpaid.periodStart.getTime())?.id
+      ? periods.find((p) => p.start.getTime() === oldestUnpaid.periodStart.getTime())!.id
+      : periods[0]?.id ?? "";
+  let activeId = sp.period ?? defaultPeriodId;
   let activeRange: { start: Date; end: Date } | null = null;
   if (activeId === "custom") {
     if (sp.from && sp.to) {
@@ -347,8 +366,11 @@ export default async function CardDetailPage({
   }, 0);
 
   // ── Chart data ───────────────────────────────────────────────────────
+  // Per-period income (refunds on the card) vs expense (spend, including
+  // INVESTMENT BUY swiped on the card), so the chart matches the
+  // accounts-detail visual language.
   const trendPeriods = periods.slice(0, 6);
-  const trendBuckets: CardSpendBucket[] = [];
+  const trendBuckets: AccountFlowBucket[] = [];
   if (trendPeriods.length > 0) {
     const earliest = trendPeriods[trendPeriods.length - 1].start;
     const latest = trendPeriods[0].end;
@@ -360,20 +382,31 @@ export default async function CardDetailPage({
         OR: [
           { type: "EXPENSE" },
           { type: "INVESTMENT", investmentAction: "BUY" },
+          { type: "INCOME" },
         ],
       },
-      select: { amount: true, date: true },
+      select: { type: true, investmentAction: true, amount: true, date: true },
     });
     for (const p of trendPeriods.slice().reverse()) {
-      const sum = txInRange
-        .filter((t) => t.date >= p.start && t.date < new Date(p.end.getTime() + 86400000))
-        .reduce((s, t) => s + Number(t.amount), 0);
+      const lt = new Date(p.end.getTime() + 86400000);
+      let income = 0;
+      let expense = 0;
+      for (const t of txInRange) {
+        if (t.date < p.start || t.date >= lt) continue;
+        if (t.type === "INCOME") income += Number(t.amount);
+        else if (
+          t.type === "EXPENSE" ||
+          (t.type === "INVESTMENT" && t.investmentAction === "BUY")
+        ) {
+          expense += Number(t.amount);
+        }
+      }
       trendBuckets.push({
         id: p.id,
         label: p.start.toLocaleDateString("en-IN", { month: "short", timeZone: "UTC" }),
         rangeLabel: p.label,
-        spend: sum,
-        isActive: p.id === activeId,
+        income,
+        expense,
       });
     }
   }
@@ -885,7 +918,7 @@ export default async function CardDetailPage({
             </p>
           </div>
           <div className="mt-3 min-w-0">
-            <CardSpendChart data={trendBuckets} />
+            <AccountFlowChart data={trendBuckets} />
           </div>
         </section>
         <section className="rounded-lg border bg-card p-4 min-w-0">
