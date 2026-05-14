@@ -46,7 +46,13 @@ export async function GET(
             description: true,
             hospitalizationStage: true,
             categoryId: true,
-            category: { select: { id: true, name: true } },
+            category: {
+              select: {
+                id: true,
+                name: true,
+                parent: { select: { id: true, name: true } },
+              },
+            },
             account: { select: { id: true, name: true } },
             card: { select: { id: true, name: true } },
           },

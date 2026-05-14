@@ -25,8 +25,24 @@ export async function GET(request: Request) {
     const session = await auth();
     const url = new URL(request.url);
     const contactId = url.searchParams.get("contact");
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const limitParam = Number(url.searchParams.get("limit") ?? "50");
+    const limit = Math.min(Math.max(limitParam, 1), 200);
+    const offsetParam = Number(url.searchParams.get("offset") ?? "0");
+    const offset = Math.max(0, Number.isFinite(offsetParam) ? offsetParam : 0);
 
     const where: Record<string, unknown> = { workspaceId: ctx.workspaceId };
+    if (from || to) {
+      const range: { gte?: Date; lte?: Date } = {};
+      if (from) range.gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setUTCHours(23, 59, 59, 999);
+        range.lte = end;
+      }
+      where.date = range;
+    }
     const andClauses: Record<string, unknown>[] = [];
     if (ctx.ownOnly) {
       const ownAccountIds = await prisma.account
@@ -62,17 +78,21 @@ export async function GET(request: Request) {
     }
     if (andClauses.length > 0) where.AND = andClauses;
 
-    const transfers = await prisma.transfer.findMany({
-      where,
-      orderBy: { date: "desc" },
-      take: 100,
-      include: {
-        fromAccount: { select: { id: true, name: true, kind: true } },
-        fromContact: { select: { id: true, name: true } },
-        toAccount: { select: { id: true, name: true, kind: true } },
-        toContact: { select: { id: true, name: true } },
-      },
-    });
+    const [transfers, totalCount] = await Promise.all([
+      prisma.transfer.findMany({
+        where,
+        orderBy: { date: "desc" },
+        skip: offset,
+        take: limit,
+        include: {
+          fromAccount: { select: { id: true, name: true, kind: true } },
+          fromContact: { select: { id: true, name: true } },
+          toAccount: { select: { id: true, name: true, kind: true } },
+          toContact: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.transfer.count({ where }),
+    ]);
 
     return NextResponse.json({
       transfers: transfers.map((t) => ({
@@ -87,6 +107,7 @@ export async function GET(request: Request) {
         toAccount: t.toAccount,
         toContact: t.toContact,
       })),
+      pagination: { total: totalCount, offset, limit },
     });
   } catch (e) {
     return err(e);

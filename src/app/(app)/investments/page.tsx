@@ -11,6 +11,7 @@ import {
   ArrowDownRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { formatINR, formatDate, cn } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
@@ -223,10 +224,11 @@ export default function InvestmentsPage() {
               : null;
           const showGain = row.investedInr > 0 && row.gain !== 0 && (isStock ? row.isLive : true);
           return (
-            <Link
+            <NavigatingCard
               key={i.id}
               href={`/investments/${i.id}`}
               className="rounded-xl border bg-card p-5 hover:bg-accent/40 transition"
+              ariaLabel={`Open ${i.name}`}
             >
               <div className="flex items-start gap-3">
                 <LineChart className="h-5 w-5 mt-0.5 text-sky-600 dark:text-sky-400 shrink-0" />
@@ -302,7 +304,7 @@ export default function InvestmentsPage() {
                   {i.premiumAmount ? ` · ${formatINR(i.premiumAmount)}` : ""}
                 </div>
               )}
-            </Link>
+            </NavigatingCard>
           );
         })}
         {rows.length === 0 && !isLoading && (

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type {
   NotificationKind,
   WorkspaceMember,
+  WorkspaceRole,
 } from "@/generated/prisma/client";
 import { sendEmail } from "@/lib/email/send";
 import { getAppUrl } from "@/lib/email/mailer";
@@ -10,6 +11,11 @@ import {
   notificationTemplate,
 } from "@/lib/email/templates/notification";
 import { signUnsubscribeToken } from "@/lib/email/unsubscribe-token";
+import {
+  hasPermission,
+  mergeWithDefaults,
+  type Feature,
+} from "@/lib/permissions";
 
 export type CreateNotificationInput = {
   workspaceId: string;
@@ -27,6 +33,39 @@ type EmailPrefs = {
   enabled?: boolean;
   kinds?: NotificationKind[];
 };
+
+/**
+ * Which workspace feature a NotificationKind belongs to. Recipients are
+ * filtered down to only those with at least `view` permission on one of
+ * the mapped features — e.g. a CARD_STATEMENT_DUE email only goes to
+ * members with `cards` access. `null` = no feature gate (broadcast to
+ * anyone with email opt-in).
+ */
+const KIND_FEATURES: Record<NotificationKind, Feature[] | null> = {
+  PREMIUM_DUE_SOON: ["insurance"],
+  PREMIUM_OVERDUE: ["insurance"],
+  POLICY_RENEWING: ["insurance"],
+  CLAIM_STATUS_CHANGED: ["insurance"],
+  CARD_STATEMENT_DUE: ["cards"],
+  LOAN_EMI_DUE: ["bank_loans", "hand_loans", "card_emi"],
+  GENERIC: null,
+};
+
+function memberHasFeatureAccess(
+  m: { role: WorkspaceRole; permissions: unknown },
+  kind: NotificationKind,
+): boolean {
+  const features = KIND_FEATURES[kind];
+  if (!features || features.length === 0) return true;
+  const fakeSession = {
+    user: {
+      id: "notification-dispatch",
+      role: m.role,
+      permissions: mergeWithDefaults(m.permissions),
+    },
+  } as Parameters<typeof hasPermission>[0];
+  return features.some((f) => hasPermission(fakeSession, f, "view"));
+}
 
 /**
  * Persist a Notification row. Idempotent on `(reminderId, kind)` when
@@ -96,12 +135,18 @@ async function dispatchEmail(
     where: memberWhere,
     select: {
       id: true,
+      role: true,
+      permissions: true,
       emailPrefs: true,
       user: { select: { email: true, name: true } },
     },
   });
-  const recipients = members.filter((m) =>
-    shouldEmail(m as { emailPrefs: WorkspaceMember["emailPrefs"] }, input.kind),
+  const recipients = members.filter(
+    (m) =>
+      shouldEmail(
+        m as { emailPrefs: WorkspaceMember["emailPrefs"] },
+        input.kind,
+      ) && memberHasFeatureAccess(m, input.kind),
   );
   if (recipients.length === 0) return;
 

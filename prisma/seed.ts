@@ -8,64 +8,164 @@ const adapter = new PrismaPg({
 });
 const prisma = new PrismaClient({ adapter });
 
-type CategoryDef = {
-  name: string;
-  types: TransactionType[];
-  group?: string;
-  icon?: string;
+// Two-level default category tree. Top-level keys = parent names;
+// values = list of child category names. Empty array = parent with no
+// children. The same shape lives in
+// prisma/scripts/backfill-categories-tree.ts; keep them in sync.
+const TREE: Record<TransactionType, Record<string, string[]>> = {
+  EXPENSE: {
+    Vehicle: [
+      "Vehicle Purchase",
+      "Vehicle Service",
+      "Fuel",
+      "Vehicle Insurance Premium",
+      "Road Tax / FC / PUC",
+      "Toll / Parking",
+    ],
+    Medical: [
+      "Hospital",
+      "Doctor consultation",
+      "Medicines / Pharmacy",
+      "Diagnostic / Lab",
+      "Dental",
+      "Vision / Eyewear",
+    ],
+    Household: ["Grocery", "Maid / Help", "Cooking gas (LPG)", "Repairs / Maintenance"],
+    Utilities: [
+      "Electricity",
+      "Water",
+      "Internet / Broadband",
+      "Mobile / Phone",
+      "DTH / Cable",
+    ],
+    Education: ["Fees", "Books / Stationery", "Coaching / Tuition", "Online courses"],
+    "Food & Dining": ["Restaurant", "Takeaway / Delivery", "Cafe / Snacks"],
+    Shopping: [
+      "Clothing",
+      "Electronics / Gadgets",
+      "Furniture / Home",
+      "Personal care",
+    ],
+    Travel: ["Flights", "Train", "Hotel / Stay", "Cab / Taxi", "Visa / Passport"],
+    Entertainment: ["Movies", "Streaming", "Games", "Events / Concerts"],
+    "Insurance Premium": ["Life", "Health", "Other"],
+    Tax: ["Income tax", "GST", "Property tax", "Other"],
+    "Religious & Charity": ["Temple / Hundi", "Donation", "Festival expense"],
+    "Personal Care": ["Salon / Beauty", "Gym / Fitness"],
+    "Farm Operations": [
+      "Farm Development",
+      "Wage",
+      "Feed",
+      "Vaccination",
+      "Seeds / Planting",
+    ],
+    "Family Events": ["Wedding", "Birthday", "Anniversary"],
+    "Loan Payment": [],
+    Pet: [],
+    "Subscription / Membership": [],
+    "Bank charges": [],
+    "Gold/Jewellery": [],
+    "Other Expense": [],
+  },
+  INCOME: {
+    Salary: ["Base salary", "Bonus", "Allowances", "Reimbursement"],
+    Business: ["Service revenue", "Product sale"],
+    "Investment Income": ["Interest", "Dividends", "Capital gains", "Rent"],
+    Agricultural: ["Crop sale", "Livestock sale", "Lease income"],
+    "Asset Sale": ["Vehicle sale", "Property sale", "Gold/Jewellery sale"],
+    "Gifts received": [],
+    "Other income": [],
+  },
+  INVESTMENT: {
+    Equity: ["Stock", "Mutual Fund", "SIP"],
+    Debt: ["FD", "RD", "Bond"],
+    "Insurance (as savings)": [],
+    "Gold / Precious metal": [],
+    "Real Estate": [],
+    Crypto: [],
+    "Other Investment": [],
+  },
+  HAND_LOAN: {},
+  TRANSFER: {},
 };
 
-const DEFAULT_CATEGORIES: CategoryDef[] = [
-  // Income
-  { name: "Salary", types: [TransactionType.INCOME], group: "Income" },
-  { name: "Interest", types: [TransactionType.INCOME], group: "Income" },
-  { name: "Agri Income", types: [TransactionType.INCOME], group: "Income" },
-  { name: "Lease Income", types: [TransactionType.INCOME], group: "Income" },
-  { name: "Vehicle Sale", types: [TransactionType.INCOME], group: "Income" },
-  { name: "Other Income", types: [TransactionType.INCOME], group: "Income" },
-
-  // Expense
-  { name: "Household", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Grocery", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Farm Development", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Wage", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Feed", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Vaccination", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Loan Payment", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Vehicle Purchase", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Vehicle Service", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Fuel", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Hospital", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Gold/Jewellery", types: [TransactionType.EXPENSE], group: "Expense" },
-  { name: "Other Expense", types: [TransactionType.EXPENSE], group: "Expense" },
-
-  // Investment
-  { name: "SIP", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "FD", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "RD", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "Insurance", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "Stock", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "Mutual Fund", types: [TransactionType.INVESTMENT], group: "Investment" },
-  { name: "Gold", types: [TransactionType.INVESTMENT], group: "Investment" },
-];
-
 async function seedDefaultCategories() {
-  for (const def of DEFAULT_CATEGORIES) {
-    const existing = await prisma.category.findFirst({
-      where: { name: def.name, workspaceId: null, isDefault: true },
-    });
-    if (existing) continue;
-    await prisma.category.create({
-      data: {
-        name: def.name,
-        types: def.types,
-        group: def.group,
-        icon: def.icon,
-        isDefault: true,
-      },
-    });
-    console.log(`  + default category: ${def.name}`);
+  let createdParents = 0;
+  let createdChildren = 0;
+  let parentedExisting = 0;
+  for (const [type, parents] of Object.entries(TREE) as [
+    TransactionType,
+    Record<string, string[]>,
+  ][]) {
+    for (const [parentName, childNames] of Object.entries(parents)) {
+      // Find or create parent (workspaceId=null, isDefault=true, top-level).
+      let parent = await prisma.category.findFirst({
+        where: {
+          name: parentName,
+          isDefault: true,
+          workspaceId: null,
+          types: { has: type },
+        },
+      });
+      if (!parent) {
+        parent = await prisma.category.create({
+          data: {
+            name: parentName,
+            isDefault: true,
+            types: [type],
+            group:
+              type === "EXPENSE"
+                ? "Expense"
+                : type === "INCOME"
+                  ? "Income"
+                  : "Investment",
+            parentCategoryId: null,
+          },
+        });
+        createdParents++;
+        console.log(`  + parent: ${parentName} (${type})`);
+      }
+      for (const childName of childNames) {
+        const existing = await prisma.category.findFirst({
+          where: {
+            name: childName,
+            isDefault: true,
+            workspaceId: null,
+            types: { has: type },
+          },
+        });
+        if (existing) {
+          if (existing.parentCategoryId == null) {
+            await prisma.category.update({
+              where: { id: existing.id },
+              data: { parentCategoryId: parent.id },
+            });
+            parentedExisting++;
+          }
+        } else {
+          await prisma.category.create({
+            data: {
+              name: childName,
+              isDefault: true,
+              types: [type],
+              group:
+                type === "EXPENSE"
+                  ? "Expense"
+                  : type === "INCOME"
+                    ? "Income"
+                    : "Investment",
+              parentCategoryId: parent.id,
+            },
+          });
+          createdChildren++;
+          console.log(`    + child: ${childName} (under ${parentName})`);
+        }
+      }
+    }
   }
+  console.log(
+    `  Done. Parents created: ${createdParents}, children created: ${createdChildren}, existing children re-parented: ${parentedExisting}.`,
+  );
 }
 
 async function seedDevUser() {

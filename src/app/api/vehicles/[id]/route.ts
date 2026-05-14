@@ -6,7 +6,7 @@ import {
   assertWorkspaceContact,
 } from "@/lib/workspace";
 import { vehicleUpdateSchema } from "@/lib/validators-domain";
-import { VehicleKind } from "@/generated/prisma/client";
+import { VehicleKind, VehicleFuelType } from "@/generated/prisma/client";
 import { archiveAttachmentsForOwners } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
@@ -75,7 +75,13 @@ export async function GET(
             date: true,
             description: true,
             categoryId: true,
-            category: { select: { id: true, name: true } },
+            category: {
+              select: {
+                id: true,
+                name: true,
+                parent: { select: { id: true, name: true } },
+              },
+            },
           },
         },
       },
@@ -92,6 +98,7 @@ export async function GET(
         model: vehicle.model,
         year: vehicle.year,
         registrationNo: vehicle.registrationNo,
+        fuelType: vehicle.fuelType,
         purchaseDate: vehicle.purchaseDate?.toISOString() ?? null,
         purchasePrice:
           vehicle.purchasePrice == null ? null : Number(vehicle.purchasePrice),
@@ -161,7 +168,18 @@ export async function PATCH(
     const updated = await prisma.vehicle.update({
       where: { id },
       data: {
-        ownerContactId: data.ownerContactId ?? existing.ownerContactId,
+        // Prisma 7's update types no longer accept the scalar FK
+        // directly for required relations — route through the
+        // relation field. Only included when the client actually sent
+        // a (possibly unchanged) ownerContactId so we don't fire an
+        // unnecessary connect on every edit.
+        ...(data.ownerContactId
+          ? {
+              ownerContact: {
+                connect: { id: data.ownerContactId },
+              },
+            }
+          : {}),
         kind: (data.kind as VehicleKind | undefined) ?? existing.kind,
         name: data.name ?? existing.name,
         make: data.make ?? existing.make,
@@ -171,6 +189,10 @@ export async function PATCH(
           data.registrationNo !== undefined
             ? data.registrationNo?.trim() || null
             : existing.registrationNo,
+        fuelType:
+          data.fuelType === undefined
+            ? existing.fuelType
+            : (data.fuelType as VehicleFuelType | null),
         purchaseDate:
           data.purchaseDate !== undefined
             ? data.purchaseDate

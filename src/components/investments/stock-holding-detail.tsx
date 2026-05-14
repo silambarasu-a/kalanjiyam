@@ -412,6 +412,7 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
                               onClick={() => {
                                 setEditingTxn({
                                   id: t.id,
+                                  type: "INVESTMENT",
                                   amount: t.amount,
                                   date: t.date,
                                   description: t.description,

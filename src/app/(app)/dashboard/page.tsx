@@ -111,6 +111,32 @@ const VEHICLE_DOC_KIND_LABEL: Record<ExpiringDocument["kind"], string> = {
   OTHER: "Document",
 };
 
+type MaturingPolicy = {
+  id: string;
+  name: string;
+  policyType: string | null;
+  institution: string | null;
+  policyNumber: string | null;
+  maturityAt: string;
+  daysLeft: number;
+  maturityValue: number | null;
+  sumAssured: number | null;
+};
+
+type RecentTxn = {
+  id: string;
+  type: "INCOME" | "EXPENSE" | "INVESTMENT" | "HAND_LOAN" | "TRANSFER";
+  amount: number;
+  description: string;
+  date: string;
+  category: {
+    id: string;
+    name: string;
+    parent: { id: string; name: string } | null;
+  } | null;
+  transferDirection: "OUT" | "IN" | null;
+};
+
 const fetcher = async (url: string) => {
   const r = await fetch(url);
   if (!r.ok) throw new Error(String(r.status));
@@ -140,6 +166,16 @@ export default function DashboardPage() {
     fetcher,
   );
   const expiringDocs = expiringDocsData?.documents ?? [];
+  const { data: maturingPoliciesData } = useSWR<{ policies: MaturingPolicy[] }>(
+    "/api/dashboard/maturing-policies",
+    fetcher,
+  );
+  const maturingPolicies = maturingPoliciesData?.policies ?? [];
+  const { data: recentTxnsData } = useSWR<{ transactions: RecentTxn[] }>(
+    "/api/transactions?limit=10",
+    fetcher,
+  );
+  const recentTxns = recentTxnsData?.transactions ?? [];
 
   // Live stock marking — overrides stats.investedCurrent for stocks so
   // the Invested tile reflects today's market price + USD/INR rate
@@ -301,6 +337,10 @@ export default function DashboardPage() {
           {expiringDocs.length > 0 && (
             <ExpiringDocsSection documents={expiringDocs} />
           )}
+          {maturingPolicies.length > 0 && (
+            <MaturingPoliciesSection policies={maturingPolicies} />
+          )}
+          <RecentTransactionsSection transactions={recentTxns} />
           <SettledThisMonth settled={cashflow?.settled ?? null} />
         </div>
 
@@ -530,6 +570,158 @@ function ExpiringDocsSection({
           );
         })}
       </ul>
+    </section>
+  );
+}
+
+function MaturingPoliciesSection({
+  policies,
+}: {
+  policies: MaturingPolicy[];
+}) {
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-base font-semibold">Policies maturing soon</h2>
+          <p className="text-xs text-muted-foreground">
+            Life / Term / ULIP / Endowment policies maturing in next 90 days
+          </p>
+        </div>
+        <Link
+          href="/insurance"
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          All policies →
+        </Link>
+      </div>
+      <ul className="divide-y">
+        {policies.map((p) => {
+          const tone =
+            p.daysLeft < 0
+              ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+              : p.daysLeft <= 7
+                ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                : p.daysLeft <= 30
+                  ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
+          const toneLabel =
+            p.daysLeft < 0
+              ? `Matured ${Math.abs(p.daysLeft)}d ago`
+              : p.daysLeft === 0
+                ? "Matures today"
+                : `${p.daysLeft}d left`;
+          return (
+            <li key={p.id}>
+              <Link
+                href={`/insurance/${p.id}`}
+                className="flex items-center justify-between gap-3 py-2.5 hover:bg-muted/40 -mx-2 px-2 rounded-md"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium truncate">
+                    {p.name}
+                    {p.policyType ? (
+                      <span className="ml-2 text-[10px] text-muted-foreground uppercase tracking-wide">
+                        {p.policyType}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {p.institution ?? "—"}
+                    {p.policyNumber ? ` · ${p.policyNumber}` : ""}
+                    {p.maturityValue != null
+                      ? ` · payout ${formatINR(p.maturityValue)}`
+                      : p.sumAssured != null
+                        ? ` · sum assured ${formatINR(p.sumAssured)}`
+                        : ""}
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${tone}`}
+                >
+                  {toneLabel}
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function RecentTransactionsSection({
+  transactions,
+}: {
+  transactions: RecentTxn[];
+}) {
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-base font-semibold">Recent transactions</h2>
+          <p className="text-xs text-muted-foreground">
+            Last 10 entries across income, expense, and transfers
+          </p>
+        </div>
+        <Link
+          href="/transactions"
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          All transactions →
+        </Link>
+      </div>
+      {transactions.length === 0 ? (
+        <p className="py-4 text-center text-xs text-muted-foreground">
+          No transactions yet.
+        </p>
+      ) : (
+        <ul className="divide-y">
+          {transactions.map((t) => {
+            const isIncome = t.type === "INCOME";
+            const isTransfer = t.type === "TRANSFER";
+            const isExpense = t.type === "EXPENSE";
+            const color = isIncome
+              ? "text-emerald-700 dark:text-emerald-400"
+              : isTransfer
+                ? "text-muted-foreground"
+                : isExpense
+                  ? "text-foreground"
+                  : "";
+            const sign = isIncome ? "+" : isTransfer ? "" : isExpense ? "−" : "";
+            const categoryLabel = t.category
+              ? t.category.parent
+                ? `${t.category.parent.name} › ${t.category.name}`
+                : t.category.name
+              : isTransfer
+                ? t.transferDirection === "OUT"
+                  ? "Transfer out"
+                  : t.transferDirection === "IN"
+                    ? "Transfer in"
+                    : "Transfer"
+                : "—";
+            return (
+              <li
+                key={t.id}
+                className="flex items-center justify-between gap-3 py-2.5 text-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{t.description}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatDate(t.date)} · {categoryLabel}
+                  </div>
+                </div>
+                <div
+                  className={`font-semibold tabular-nums shrink-0 ${color}`}
+                >
+                  {sign}
+                  {formatINR(t.amount)}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }
