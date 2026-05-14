@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone } from "lucide-react";
+import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
@@ -35,6 +35,8 @@ type Account = {
   sharedWithUserIds: string[];
   availableLimit: number | null;
   upcomingBillAmount: number | null;
+  nextBillDue: string | null;
+  linkedCardId: string | null;
 };
 
 const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
@@ -402,6 +404,7 @@ function AccountCard({
   onEdit: () => void;
 }) {
   const router = useRouter();
+  const [navigating, setNavigating] = useState(false);
   const { Icon, label } = KIND_META[a.kind];
   const isCard = a.kind === "CARD";
   const showLimit = isCard && a.creditLimit != null;
@@ -409,21 +412,30 @@ function AccountCard({
   const limitPct =
     showLimit && a.creditLimit && a.creditLimit > 0 ? avail / a.creditLimit : 1;
   const limitTone = limitPct > 0.5 ? "gain" : limitPct > 0.2 ? "outstanding" : "loss";
-  const href = `/accounts/${a.id}`;
+  // CARD-kind accounts open the card detail page (richer view); other
+  // kinds open the per-account ledger.
+  const href =
+    isCard && a.linkedCardId ? `/cards/${a.linkedCardId}` : `/accounts/${a.id}`;
+  const go = () => {
+    setNavigating(true);
+    router.push(href);
+  };
 
   return (
     <div
       role="link"
       tabIndex={0}
-      onClick={() => router.push(href)}
+      onClick={() => navigating || go()}
       onKeyDown={(e) => {
+        if (navigating) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          router.push(href);
+          go();
         }
       }}
       aria-label={`Open ${a.name}`}
-      className="cursor-pointer rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+      aria-busy={navigating}
+      className="relative cursor-pointer rounded-lg border bg-card p-5 flex flex-col gap-3 transition-colors hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -504,6 +516,11 @@ function AccountCard({
             {a.upcomingBillAmount != null && a.upcomingBillAmount > 0 ? (
               <span className="font-medium text-destructive tabular-nums">
                 Due {formatINR(a.upcomingBillAmount)}
+                {a.nextBillDue && (
+                  <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                    by {new Date(a.nextBillDue).toLocaleDateString("en-IN")}
+                  </span>
+                )}
               </span>
             ) : a.balance > 0 ? (
               <span className="text-muted-foreground tabular-nums">
@@ -541,6 +558,14 @@ function AccountCard({
           >
             manage card →
           </Link>
+        </div>
+      )}
+      {navigating && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-card/70 backdrop-blur-[1px]"
+          aria-hidden
+        >
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
         </div>
       )}
     </div>
