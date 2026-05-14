@@ -20,7 +20,8 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { Prisma } from "@/generated/prisma/client";
+import { NotificationKind, Prisma } from "@/generated/prisma/client";
+import { createNotification } from "@/lib/notifications";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -80,6 +81,7 @@ export async function materializeStatementsFor(
       id: true,
       kind: true,
       workspaceId: true,
+      ownerUserId: true,
       statementDate: true,
       gracePeriod: true,
     },
@@ -121,6 +123,12 @@ export async function materializeStatementsFor(
   let cursorY = earliest.date.getUTCFullYear();
   let cursorM = earliest.date.getUTCMonth();
   let created = 0;
+  const newlyCreated: Array<{
+    periodStart: Date;
+    periodEnd: Date;
+    dueDate: Date;
+    totalDue: number;
+  }> = [];
   // Hard cap to avoid runaway loops on bad data — 240 months ≈ 20 years.
   for (let i = 0; i < 240; i++) {
     const cycle = cycleEndingIn(cursorY, cursorM, sd);
@@ -160,33 +168,44 @@ export async function materializeStatementsFor(
 
     const dueDate = new Date(cycle.end.getTime() + grace * ONE_DAY_MS);
 
-    const result = await prisma.cardStatement.upsert({
+    // Explicit find→create/update (instead of upsert) so we know with
+    // certainty whether this iteration produced a new row. The new-row
+    // signal drives the statement-generated notification below.
+    const existing = await prisma.cardStatement.findUnique({
       where: {
-        accountId_periodStart: {
+        accountId_periodStart: { accountId, periodStart: cycle.start },
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      // Re-snapshot the totals every time we materialise — guards
+      // against the rare edge where a transaction was back-dated into
+      // a closed period before the lock kicked in.
+      await prisma.cardStatement.update({
+        where: { id: existing.id },
+        data: { periodEnd: cycle.end, dueDate, totalDue },
+      });
+    } else {
+      await prisma.cardStatement.create({
+        data: {
+          workspaceId: account.workspaceId,
           accountId,
           periodStart: cycle.start,
+          periodEnd: cycle.end,
+          dueDate,
+          totalDue,
+          closedAt: cycle.end,
         },
-      },
-      create: {
-        workspaceId: account.workspaceId,
-        accountId,
+        select: { id: true },
+      });
+      created += 1;
+      newlyCreated.push({
         periodStart: cycle.start,
         periodEnd: cycle.end,
         dueDate,
         totalDue,
-        closedAt: cycle.end,
-      },
-      update: {
-        // Re-snapshot the totals every time we materialise — guards
-        // against the rare edge where a transaction was back-dated into
-        // a closed period before the lock kicked in.
-        periodEnd: cycle.end,
-        dueDate,
-        totalDue,
-      },
-      select: { id: true, createdAt: true },
-    });
-    if (result.createdAt.getTime() > Date.now() - 5_000) created += 1;
+      });
+    }
 
     // Step forward one month.
     cursorM += 1;
@@ -203,6 +222,32 @@ export async function materializeStatementsFor(
     select: { id: true },
   });
   await Promise.all(statements.map((s) => recomputeStatementPaidAt(s.id)));
+
+  // Fire one notification per freshly-generated statement. Targeted at
+  // the card's owner when known; otherwise broadcast to the workspace
+  // (recipient filtering then trims it to members with `cards` access).
+  if (newlyCreated.length > 0) {
+    const card = await prisma.card.findFirst({
+      where: { accountId },
+      select: { id: true, name: true },
+    });
+    const cardName = card?.name ?? "Card";
+    const cardLink = card ? `/cards/${card.id}` : "/cards";
+    for (const s of newlyCreated) {
+      const dueOn = s.dueDate.toISOString().slice(0, 10);
+      const amount = `₹${Number(s.totalDue).toLocaleString("en-IN")}`;
+      await createNotification({
+        workspaceId: account.workspaceId,
+        userId: account.ownerUserId ?? null,
+        kind: NotificationKind.CARD_STATEMENT_DUE,
+        title: `${cardName} statement generated · ${amount} due`,
+        body: `Billing cycle ${s.periodStart.toISOString().slice(0, 10)} → ${s.periodEnd
+          .toISOString()
+          .slice(0, 10)}. Payment due by ${dueOn}.`,
+        link: cardLink,
+      });
+    }
+  }
 
   return created;
 }

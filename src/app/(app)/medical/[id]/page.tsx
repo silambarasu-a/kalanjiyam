@@ -12,7 +12,11 @@ type Txn = {
   date: string;
   description: string;
   hospitalizationStage: "PRE" | "DURING" | "POST" | null;
-  category: { id: string; name: string } | null;
+  category: {
+    id: string;
+    name: string;
+    parent: { id: string; name: string } | null;
+  } | null;
   account: { id: string; name: string } | null;
   card: { id: string; name: string } | null;
 };
@@ -180,6 +184,9 @@ export default function MedicalDetailPage({
                     <div>{t.description}</div>
                     <div className="text-xs text-muted-foreground">
                       {formatDate(t.date)}
+                      {t.category
+                        ? ` · ${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`
+                        : ""}
                       {t.account ? ` · ${t.account.name}` : ""}
                       {t.card ? ` · ${t.card.name}` : ""}
                     </div>

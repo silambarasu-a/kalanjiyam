@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Car, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
@@ -17,6 +18,23 @@ import {
 } from "@/components/ui/dialog";
 
 type VehicleKind = "BIKE" | "CAR" | "TRACTOR" | "TRUCK" | "SCOOTER" | "OTHER";
+type VehicleFuelType =
+  | "PETROL"
+  | "DIESEL"
+  | "CNG"
+  | "LPG"
+  | "ELECTRIC"
+  | "HYBRID"
+  | "OTHER";
+const FUEL_TYPE_OPTIONS: { value: VehicleFuelType; label: string }[] = [
+  { value: "PETROL", label: "Petrol" },
+  { value: "DIESEL", label: "Diesel" },
+  { value: "CNG", label: "CNG" },
+  { value: "LPG", label: "LPG" },
+  { value: "ELECTRIC", label: "Electric (EV)" },
+  { value: "HYBRID", label: "Hybrid" },
+  { value: "OTHER", label: "Other" },
+];
 
 type Vehicle = {
   id: string;
@@ -110,9 +128,10 @@ export default function VehiclesPage() {
 
 function VehicleRow({ vehicle }: { vehicle: Vehicle }) {
   return (
-    <Link
+    <NavigatingCard
       href={`/vehicles/${vehicle.id}`}
       className="flex items-start justify-between gap-3 p-4 hover:bg-muted/40"
+      ariaLabel={`Open ${vehicle.name}`}
     >
       <div className="flex items-start gap-3">
         <Car className="mt-0.5 h-4 w-4 text-muted-foreground" />
@@ -160,7 +179,7 @@ function VehicleRow({ vehicle }: { vehicle: Vehicle }) {
           </div>
         )}
       </div>
-    </Link>
+    </NavigatingCard>
   );
 }
 
@@ -184,6 +203,7 @@ function VehicleDialog({
   const [model, setModel] = useState("");
   const [year, setYear] = useState("");
   const [registrationNo, setRegistrationNo] = useState("");
+  const [fuelType, setFuelType] = useState<VehicleFuelType | "">("");
   const [purchaseDate, setPurchaseDate] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
   const [odometerStart, setOdometerStart] = useState("");
@@ -201,6 +221,7 @@ function VehicleDialog({
     setModel("");
     setYear("");
     setRegistrationNo("");
+    setFuelType("");
     setPurchaseDate("");
     setPurchasePrice("");
     setOdometerStart("");
@@ -221,6 +242,7 @@ function VehicleDialog({
         model: model.trim() || undefined,
         year: year ? Number(year) : undefined,
         registrationNo: registrationNo.trim() || undefined,
+        fuelType: fuelType || undefined,
         purchaseDate: purchaseDate || undefined,
         purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
         odometerStart: odometerStart ? Number(odometerStart) : undefined,
@@ -322,15 +344,41 @@ function VehicleDialog({
               />
             </label>
           </div>
-          <label className="block">
-            <span className="text-xs font-medium">Registration No (optional)</span>
-            <Input
-              value={registrationNo}
-              onChange={(e) => setRegistrationNo(e.target.value.toUpperCase())}
-              maxLength={40}
-              placeholder="TN 09 AB 1234"
-            />
-          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">Registration No (optional)</span>
+              <Input
+                value={registrationNo}
+                onChange={(e) => setRegistrationNo(e.target.value.toUpperCase())}
+                maxLength={40}
+                placeholder="TN 09 AB 1234"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">
+                Fuel type{" "}
+                <span className="font-normal text-muted-foreground">(optional)</span>
+              </span>
+              <select
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={fuelType}
+                onChange={(e) =>
+                  setFuelType(e.target.value as VehicleFuelType | "")
+                }
+              >
+                <option value="">— pick a fuel —</option>
+                {FUEL_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[10px] text-muted-foreground">
+                Drives the unit on fuel-fill inputs (litres / kWh / kg) and
+                enables mileage tracking.
+              </span>
+            </label>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Purchase date</span>

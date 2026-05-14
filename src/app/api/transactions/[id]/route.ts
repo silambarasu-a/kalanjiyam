@@ -16,6 +16,7 @@ import {
 } from "@/lib/loan-math";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
+import { isS3Configured, presignGet } from "@/lib/s3";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -41,6 +42,152 @@ async function loadOwnership(transactionId: string) {
         t.account?.sharedWithUserIds ?? t.card?.sharedWithUserIds ?? [],
     },
   };
+}
+
+/**
+ * GET /api/transactions/[id] — detail view for a single transaction.
+ *
+ * Returns the transaction's core fields plus all linked context
+ * (category w/ parent, account, card, beneficiary, vehicle, event,
+ * hospitalization, fuel data, transfer legs, member-charge state) and
+ * a list of active receipt attachments with short-lived presigned GET
+ * URLs so the UI can render inline image / PDF previews without a
+ * second round trip.
+ */
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await requireWorkspace("transactions", "read");
+    const { id } = await context.params;
+    const t = await prisma.transaction.findUnique({
+      where: { id },
+      include: {
+        category: {
+          select: {
+            id: true,
+            name: true,
+            parent: { select: { id: true, name: true } },
+          },
+        },
+        account: { select: { id: true, name: true, kind: true } },
+        card: { select: { id: true, name: true } },
+        beneficiaryContact: { select: { id: true, name: true } },
+        memberCharge: {
+          select: { id: true, status: true, amount: true, settledAmount: true },
+        },
+        vehicle: { select: { id: true, name: true, registrationNo: true } },
+        event: { select: { id: true, name: true, kind: true } },
+        hospitalization: {
+          select: {
+            id: true,
+            hospitalName: true,
+            patientContact: { select: { id: true, name: true } },
+          },
+        },
+        transfer: {
+          select: {
+            fromAccount: { select: { id: true, name: true, kind: true } },
+            toAccount: { select: { id: true, name: true, kind: true } },
+            fromContact: { select: { id: true, name: true } },
+            toContact: { select: { id: true, name: true } },
+          },
+        },
+        user: { select: { id: true, name: true } },
+      },
+    });
+    if (!t || t.workspaceId !== ctx.workspaceId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // Active attachments + presigned URLs for inline preview / download.
+    const attachmentRows = await prisma.attachment.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        ownerKind: "TRANSACTION_RECEIPT",
+        ownerId: t.id,
+        archivedAt: null,
+      },
+      orderBy: { uploadedAt: "desc" },
+      include: {
+        uploadedBy: { select: { id: true, name: true } },
+      },
+    });
+    const canSign = isS3Configured();
+    const attachments = await Promise.all(
+      attachmentRows.map(async (a) => {
+        let url: string | null = null;
+        if (canSign) {
+          try {
+            url = await presignGet(a.s3Key, 300);
+          } catch {
+            url = null;
+          }
+        }
+        return {
+          id: a.id,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          uploadedAt: a.uploadedAt.toISOString(),
+          uploadedBy: a.uploadedBy
+            ? { id: a.uploadedBy.id, name: a.uploadedBy.name }
+            : null,
+          url,
+        };
+      }),
+    );
+
+    return NextResponse.json({
+      transaction: {
+        id: t.id,
+        type: t.type,
+        kind: t.kind,
+        amount: Number(t.amount),
+        description: t.description,
+        date: t.date.toISOString(),
+        createdAt: t.createdAt.toISOString(),
+        updatedAt: t.updatedAt.toISOString(),
+        editedAt: t.editedAt?.toISOString() ?? null,
+        editNote: t.editNote,
+        category: t.category
+          ? {
+              id: t.category.id,
+              name: t.category.name,
+              parent: t.category.parent,
+            }
+          : null,
+        account: t.account,
+        card: t.card,
+        beneficiary: t.beneficiaryContact,
+        memberChargeType: t.memberChargeType,
+        memberCharge: t.memberCharge
+          ? {
+              id: t.memberCharge.id,
+              status: t.memberCharge.status,
+              amount: Number(t.memberCharge.amount),
+              settledAmount: Number(t.memberCharge.settledAmount),
+            }
+          : null,
+        vehicle: t.vehicle,
+        event: t.event,
+        hospitalization: t.hospitalization,
+        hospitalizationStage: t.hospitalizationStage,
+        transferId: t.transferId,
+        transfer: t.transfer,
+        eventId: t.eventId,
+        vehicleId: t.vehicleId,
+        fuelQuantity: t.fuelQuantity == null ? null : Number(t.fuelQuantity),
+        fuelUnit: t.fuelUnit,
+        fuelOdometer: t.fuelOdometer,
+        author: t.user,
+      },
+      attachments,
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function PATCH(
@@ -253,6 +400,20 @@ const body = await request.json();
             parsed.data.hospitalizationStage === undefined
               ? t.hospitalizationStage
               : parsed.data.hospitalizationStage,
+          eventId:
+            parsed.data.eventId === undefined ? t.eventId : parsed.data.eventId,
+          fuelQuantity:
+            parsed.data.fuelQuantity === undefined
+              ? t.fuelQuantity
+              : parsed.data.fuelQuantity,
+          fuelUnit:
+            parsed.data.fuelUnit === undefined
+              ? t.fuelUnit
+              : parsed.data.fuelUnit,
+          fuelOdometer:
+            parsed.data.fuelOdometer === undefined
+              ? t.fuelOdometer
+              : parsed.data.fuelOdometer,
           goldForm:
             parsed.data.goldForm === undefined ? t.goldForm : parsed.data.goldForm,
           editNote: parsed.data.editNote ?? null,

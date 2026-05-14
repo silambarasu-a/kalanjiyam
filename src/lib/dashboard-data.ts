@@ -38,6 +38,18 @@ export type ExpiringDocument = {
   vehicle: { id: string; name: string; registrationNo: string | null };
 };
 
+export type MaturingPolicy = {
+  id: string;
+  name: string;
+  policyType: string | null;
+  institution: string | null;
+  policyNumber: string | null;
+  maturityAt: string;
+  daysLeft: number;
+  maturityValue: number | null;
+  sumAssured: number | null;
+};
+
 export type DashboardStats = {
   period: { start: string; end: string; income: number; expense: number; net: number };
   netWorth: number;
@@ -481,6 +493,11 @@ export async function getDashboardCashflow(args: {
   // ── DUES (upcoming) ───────────────────────────────────────────────
   const dues: Due[] = [];
   for (const r of upcomingReminders) {
+    // Vehicle-doc renewals (PUC / FC / RC / Road tax / Insurance copy)
+    // are surfaced via the dedicated "Documents expiring soon" tile
+    // with proper labels and a vehicle-deep-link. Skip them here to
+    // avoid showing the same reminder twice on the dashboard.
+    if (r.kind === "VEHICLE_DOC_RENEWAL") continue;
     const label =
       r.investment?.name ??
       r.loan?.lenderContact?.name ??
@@ -861,6 +878,67 @@ export async function getExpiringVehicleDocuments(args: {
         name: d.vehicle.name,
         registrationNo: d.vehicle.registrationNo,
       },
+    };
+  });
+}
+
+/**
+ * Life-family insurance policies (LIFE / TERM / ULIP / ENDOWMENT)
+ * whose maturityAt falls within the next `windowDays`. For long-term
+ * planning the default window is wider than vehicle docs — 90 days —
+ * but the caller can override.
+ *
+ * VEHICLE / HEALTH policies are intentionally excluded: their cycle is
+ * captured by the existing INSURANCE_PREMIUM reminders + Upcoming Dues
+ * tile (annual renewal = next premium due). Maturity only has a
+ * separate meaning for long-tenure life-family products.
+ */
+export async function getMaturingPolicies(args: {
+  workspaceId: string;
+  today: Date;
+  windowDays?: number;
+}): Promise<MaturingPolicy[]> {
+  const window = args.windowDays ?? 90;
+  const horizon = new Date(args.today);
+  horizon.setUTCDate(horizon.getUTCDate() + window);
+
+  const policies = await prisma.investment.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      kind: "INSURANCE",
+      active: true,
+      maturityAt: { not: null, lte: horizon },
+      policyType: { in: ["LIFE", "TERM", "ULIP", "ENDOWMENT"] },
+    },
+    orderBy: { maturityAt: "asc" },
+    take: 30,
+    select: {
+      id: true,
+      name: true,
+      policyType: true,
+      institution: true,
+      policyNumber: true,
+      maturityAt: true,
+      maturityValue: true,
+      sumAssured: true,
+    },
+  });
+
+  return policies.map((p) => {
+    const maturity = p.maturityAt as Date;
+    const days = Math.round(
+      (maturity.getTime() - args.today.getTime()) / 86_400_000,
+    );
+    return {
+      id: p.id,
+      name: p.name,
+      policyType: p.policyType,
+      institution: p.institution,
+      policyNumber: p.policyNumber,
+      maturityAt: maturity.toISOString(),
+      daysLeft: days,
+      maturityValue: p.maturityValue == null ? null : Number(p.maturityValue),
+      sumAssured: p.sumAssured == null ? null : Number(p.sumAssured),
     };
   });
 }

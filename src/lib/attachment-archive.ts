@@ -29,7 +29,7 @@ export async function archiveAttachmentsForOwner(args: {
   /** User performing the action; null when triggered by a system task. */
   userId: string | null;
   tx?: Tx;
-}): Promise<{ archived: number }> {
+}): Promise<{ archived: number; s3Failed: string[] }> {
   const db: Tx = args.tx ?? prisma;
 
   const live = await db.attachment.findMany({
@@ -41,7 +41,7 @@ export async function archiveAttachmentsForOwner(args: {
     },
     select: { id: true, s3Key: true },
   });
-  if (live.length === 0) return { archived: 0 };
+  if (live.length === 0) return { archived: 0, s3Failed: [] };
 
   await db.attachment.updateMany({
     where: { id: { in: live.map((a) => a.id) } },
@@ -65,27 +65,31 @@ export async function archiveAttachmentsForOwner(args: {
     });
   }
 
-  // S3 cleanup is best-effort and runs OUTSIDE the caller's transaction
-  // (we want the DB archive to be durable even when the bucket is
-  // unreachable). Fire-and-forget via the parent caller — we just
-  // schedule it here.
-  if (isS3Configured()) {
-    queueMicrotask(async () => {
-      for (const a of live) {
-        try {
-          await deleteObject(a.s3Key);
-        } catch (err) {
-          console.warn(
-            "[attachment-archive] failed to delete S3 object",
-            a.s3Key,
-            err,
-          );
-        }
+  // S3 cleanup runs OUTSIDE the caller's transaction (we want the DB
+  // archive to be durable even when the bucket is unreachable) but
+  // INSIDE the request lifecycle — awaited so serverless functions
+  // don't terminate before the deletes execute. Failures are logged
+  // and tracked but do not throw: the DB archive is already committed,
+  // and forcing a request failure here would only leave the user
+  // confused about what state their data is in.
+  const failedKeys: string[] = [];
+  if (isS3Configured() && live.length > 0) {
+    const results = await Promise.allSettled(
+      live.map((a) => deleteObject(a.s3Key)),
+    );
+    results.forEach((r, i) => {
+      if (r.status === "rejected") {
+        failedKeys.push(live[i].s3Key);
+        console.warn(
+          "[attachment-archive] failed to delete S3 object",
+          live[i].s3Key,
+          r.reason,
+        );
       }
     });
   }
 
-  return { archived: live.length };
+  return { archived: live.length, s3Failed: failedKeys };
 }
 
 /**
@@ -99,9 +103,10 @@ export async function archiveAttachmentsForOwners(args: {
   ownerIds: string[];
   userId: string | null;
   tx?: Tx;
-}): Promise<{ archived: number }> {
-  if (args.ownerIds.length === 0) return { archived: 0 };
+}): Promise<{ archived: number; s3Failed: string[] }> {
+  if (args.ownerIds.length === 0) return { archived: 0, s3Failed: [] };
   let total = 0;
+  const s3Failed: string[] = [];
   for (const ownerId of args.ownerIds) {
     const r = await archiveAttachmentsForOwner({
       workspaceId: args.workspaceId,
@@ -111,6 +116,7 @@ export async function archiveAttachmentsForOwners(args: {
       tx: args.tx,
     });
     total += r.archived;
+    s3Failed.push(...r.s3Failed);
   }
-  return { archived: total };
+  return { archived: total, s3Failed };
 }

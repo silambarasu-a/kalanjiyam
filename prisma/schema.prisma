@@ -164,6 +164,19 @@ enum VehicleKind {
   OTHER
 }
 
+// Drives the unit shown on fuel-fill inputs (litres / units / kg) and
+// the per-fill mileage calc. Optional on Vehicle so legacy rows don't
+// break — fuel inputs hide when the type is unknown.
+enum VehicleFuelType {
+  PETROL
+  DIESEL
+  CNG
+  LPG
+  ELECTRIC
+  HYBRID
+  OTHER
+}
+
 enum VehicleDisposalKind {
   SOLD
   EXCHANGED
@@ -382,6 +395,7 @@ model Workspace {
   vehicles            Vehicle[]
   vehicleDocuments    VehicleDocument[]
   hospitalizations    Hospitalization[]
+  events              Event[]
   notifications       Notification[]
   attachments         Attachment[]
   stockWishlist       StockWishlist[]
@@ -641,11 +655,18 @@ model Category {
   isDefault    Boolean           @default(false)
   workspaceId  String?
   workspace    Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Two-level hierarchy: parents have parentCategoryId = null,
+  // children point at their parent. Three-level nesting is rejected
+  // at the API layer, not the DB.
+  parentCategoryId String?
+  parent           Category?  @relation("CategoryChildren", fields: [parentCategoryId], references: [id], onDelete: SetNull)
+  children         Category[] @relation("CategoryChildren")
   transactions Transaction[]
   createdAt    DateTime          @default(now())
 
   @@index([name])
   @@index([workspaceId])
+  @@index([workspaceId, parentCategoryId])
 }
 
 model Transaction {
@@ -719,9 +740,25 @@ model Transaction {
   vehicleId String?
   vehicle   Vehicle? @relation("VehicleTransaction", fields: [vehicleId], references: [id], onDelete: SetNull)
 
+  // Fuel-fill metadata — only meaningful on EXPENSE transactions
+  // tagged to a vehicle with category = Fuel. fuelQuantity is litres
+  // or kWh or kg depending on the vehicle's fuelType at the time;
+  // fuelUnit stores the symbol so historical reads stay correct even
+  // if the vehicle is converted to a different fuel type later.
+  // fuelOdometer is the km reading at the fill, used for mileage.
+  fuelQuantity Decimal? @db.Decimal(10, 3)
+  fuelUnit     String?
+  fuelOdometer Int?
+
   hospitalizationId    String?
   hospitalization      Hospitalization?      @relation("TransactionHospitalization", fields: [hospitalizationId], references: [id], onDelete: SetNull)
   hospitalizationStage HospitalizationStage?
+
+  // Event/Trip tagging. Multiple transactions roll up under one event
+  // (e.g. "Tirupati trip"). SET NULL on event delete so transactions
+  // are never destroyed when an event is removed.
+  eventId String?
+  event   Event?  @relation("EventTransaction", fields: [eventId], references: [id], onDelete: SetNull)
 
   goldForm GoldForm?
 
@@ -752,6 +789,7 @@ model Transaction {
   @@index([claimId])
   @@index([vehicleId])
   @@index([hospitalizationId])
+  @@index([eventId])
 }
 
 model MemberCharge {
@@ -1337,24 +1375,27 @@ model Notification {
 }
 
 model Vehicle {
-  id             String      @id @default(uuid())
+  id             String           @id @default(uuid())
   workspaceId    String
-  workspace      Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   ownerContactId String
-  ownerContact   Contact     @relation("VehicleOwner", fields: [ownerContactId], references: [id], onDelete: Restrict)
+  ownerContact   Contact          @relation("VehicleOwner", fields: [ownerContactId], references: [id], onDelete: Restrict)
   kind           VehicleKind
   name           String
   make           String?
   model          String?
   year           Int?
-  registrationNo String?     @unique
+  registrationNo String?          @unique
+  // Drives the unit on fuel-fill inputs and the mileage formula.
+  // Nullable so legacy rows are unaffected.
+  fuelType       VehicleFuelType?
   purchaseDate   DateTime?
-  purchasePrice  Decimal?    @db.Decimal(14, 2)
+  purchasePrice  Decimal?         @db.Decimal(14, 2)
   odometerStart  Int?
-  active         Boolean     @default(true)
+  active         Boolean          @default(true)
   notes          String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
   // Disposal — set when the vehicle leaves the household (sold / exchanged
   // / scrapped / gifted / written off). `active` is also flipped to false
@@ -1432,6 +1473,43 @@ enum AttachmentOwnerKind {
   CROP_BATCH_BILL
   LOAN_DOCUMENT
   INCOME_PROOF
+  EVENT_DOCUMENT
+}
+
+//
+// EVENTS — time-bounded spending containers (trips, functions,
+// festivals, projects, medical episodes). Transactions tag into an
+// Event via Transaction.eventId; the Event detail page rolls them up
+// across categories. Member splits reuse the existing MemberCharge
+// model — no new table required.
+//
+enum EventKind {
+  TRIP      // vacations, day trips, pilgrimages
+  FUNCTION  // wedding, birthday, anniversary
+  FESTIVAL  // Diwali, Pongal, Christmas
+  PROJECT   // home renovation, garden setup
+  MEDICAL   // surgery + recovery period
+  OTHER
+}
+
+model Event {
+  id          String     @id @default(uuid())
+  workspaceId String
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  kind        EventKind  @default(TRIP)
+  startedAt   DateTime
+  endedAt     DateTime?
+  notes       String?
+  budget      Decimal?   @db.Decimal(14, 2)
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  transactions Transaction[] @relation("EventTransaction")
+
+  @@index([workspaceId, active])
+  @@index([workspaceId, startedAt])
 }
 
 model Attachment {
