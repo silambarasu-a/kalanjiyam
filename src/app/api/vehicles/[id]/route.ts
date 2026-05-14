@@ -6,7 +6,7 @@ import {
   assertWorkspaceContact,
 } from "@/lib/workspace";
 import { vehicleUpdateSchema } from "@/lib/validators-domain";
-import { VehicleKind } from "@/generated/prisma/client";
+import { VehicleKind, VehicleFuelType } from "@/generated/prisma/client";
 import { archiveAttachmentsForOwners } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
@@ -92,6 +92,7 @@ export async function GET(
         model: vehicle.model,
         year: vehicle.year,
         registrationNo: vehicle.registrationNo,
+        fuelType: vehicle.fuelType,
         purchaseDate: vehicle.purchaseDate?.toISOString() ?? null,
         purchasePrice:
           vehicle.purchasePrice == null ? null : Number(vehicle.purchasePrice),
@@ -171,6 +172,10 @@ export async function PATCH(
           data.registrationNo !== undefined
             ? data.registrationNo?.trim() || null
             : existing.registrationNo,
+        fuelType:
+          data.fuelType === undefined
+            ? existing.fuelType
+            : (data.fuelType as VehicleFuelType | null),
         purchaseDate:
           data.purchaseDate !== undefined
             ? data.purchaseDate

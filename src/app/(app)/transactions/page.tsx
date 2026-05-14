@@ -21,7 +21,12 @@ type Txn = {
   amount: number;
   description: string;
   date: string;
-  category: { id: string; name: string; group: string | null } | null;
+  category: {
+    id: string;
+    name: string;
+    group: string | null;
+    parent: { id: string; name: string } | null;
+  } | null;
   account: { id: string; name: string; kind: string } | null;
   card: { id: string; name: string } | null;
   beneficiary: { id: string; name: string } | null;
@@ -31,6 +36,7 @@ type Txn = {
   transferDirection: "OUT" | "IN" | null;
   transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
   refundForTransactionId: string | null;
+  eventId: string | null;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -174,8 +180,19 @@ export default function TransactionsPage() {
                           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                             {isTransferOut ? "Transfer out" : isTransferIn ? "Transfer in" : "Transfer"}
                           </span>
+                        ) : t.category ? (
+                          t.category.parent ? (
+                            <span>
+                              <span className="text-muted-foreground/70">
+                                {t.category.parent.name} ›{" "}
+                              </span>
+                              {t.category.name}
+                            </span>
+                          ) : (
+                            t.category.name
+                          )
                         ) : (
-                          t.category?.name ?? "—"
+                          "—"
                         )}
                       </td>
                       <td
@@ -197,6 +214,7 @@ export default function TransactionsPage() {
                                   amount: t.amount,
                                   date: t.date,
                                   description: t.description,
+                                  eventId: t.eventId ?? null,
                                 });
                                 setEditOpen(true);
                               }}

@@ -76,6 +76,15 @@ type Vehicle = {
   model: string | null;
   year: number | null;
   registrationNo: string | null;
+  fuelType:
+    | "PETROL"
+    | "DIESEL"
+    | "CNG"
+    | "LPG"
+    | "ELECTRIC"
+    | "HYBRID"
+    | "OTHER"
+    | null;
   purchaseDate: string | null;
   purchasePrice: number | null;
   odometerStart: number | null;
@@ -229,6 +238,9 @@ export default function VehicleDetailPage({
         />
         <StatCard label="Service + Fuel" value={formatINR(totals.service + totals.fuel)} />
       </div>
+
+      {/* Fuel & mileage — aggregated from fuel-tagged transactions */}
+      <FuelMileageSection vehicleId={id} />
 
       {/* Documents (RC / FC / PUC / Road tax / Insurance copy / Other) */}
       <DocumentsSection vehicleId={id} />
@@ -468,6 +480,7 @@ function EditVehicleDialog({
   const [model, setModel] = useState("");
   const [year, setYear] = useState("");
   const [registrationNo, setRegistrationNo] = useState("");
+  const [fuelType, setFuelType] = useState<Vehicle["fuelType"] | "">("");
   const [purchaseDate, setPurchaseDate] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
   const [odometerStart, setOdometerStart] = useState("");
@@ -486,6 +499,7 @@ function EditVehicleDialog({
     setModel(vehicle.model ?? "");
     setYear(vehicle.year != null ? String(vehicle.year) : "");
     setRegistrationNo(vehicle.registrationNo ?? "");
+    setFuelType(vehicle.fuelType ?? "");
     setPurchaseDate(vehicle.purchaseDate ? vehicle.purchaseDate.slice(0, 10) : "");
     setPurchasePrice(
       vehicle.purchasePrice != null ? String(vehicle.purchasePrice) : "",
@@ -511,6 +525,7 @@ function EditVehicleDialog({
         model: model.trim() || undefined,
         year: year ? Number(year) : undefined,
         registrationNo: registrationNo.trim() || undefined,
+        fuelType: fuelType || null,
         purchaseDate: purchaseDate || undefined,
         purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
         odometerStart: odometerStart ? Number(odometerStart) : undefined,
@@ -605,14 +620,35 @@ function EditVehicleDialog({
               />
             </label>
           </div>
-          <label className="block">
-            <span className="text-xs font-medium">Registration No</span>
-            <Input
-              value={registrationNo}
-              onChange={(e) => setRegistrationNo(e.target.value.toUpperCase())}
-              maxLength={40}
-            />
-          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-medium">Registration No</span>
+              <Input
+                value={registrationNo}
+                onChange={(e) => setRegistrationNo(e.target.value.toUpperCase())}
+                maxLength={40}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">Fuel type</span>
+              <select
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={fuelType ?? ""}
+                onChange={(e) =>
+                  setFuelType((e.target.value || "") as Vehicle["fuelType"] | "")
+                }
+              >
+                <option value="">— pick a fuel —</option>
+                <option value="PETROL">Petrol</option>
+                <option value="DIESEL">Diesel</option>
+                <option value="CNG">CNG</option>
+                <option value="LPG">LPG</option>
+                <option value="ELECTRIC">Electric (EV)</option>
+                <option value="HYBRID">Hybrid</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </label>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium">Purchase date</span>
@@ -1358,5 +1394,159 @@ function DocumentDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ---------------- Fuel & Mileage ---------------- */
+
+type FuelSummary = {
+  vehicle: {
+    id: string;
+    name: string;
+    fuelType: string | null;
+    odometerStart: number | null;
+  };
+  totals: {
+    spent: number;
+    quantity: number;
+    fills: number;
+    unit: string | null;
+  };
+  kmDriven: number | null;
+  averageMileage: number | null;
+  fills: {
+    id: string;
+    date: string;
+    amount: number;
+    description: string;
+    quantity: number;
+    unit: string | null;
+    odometer: number | null;
+    kmSincePrev: number | null;
+    mileage: number | null;
+  }[];
+};
+
+function FuelMileageSection({ vehicleId }: { vehicleId: string }) {
+  const { data, isLoading } = useSWR<FuelSummary>(
+    `/api/vehicles/${vehicleId}/fuel-summary`,
+    fetcher,
+  );
+
+  if (isLoading) {
+    return (
+      <Section title="Fuel & mileage">
+        <div className="rounded-lg border bg-card p-4 text-xs text-muted-foreground">
+          Loading…
+        </div>
+      </Section>
+    );
+  }
+  if (!data) return null;
+
+  const { vehicle: v, totals, kmDriven, averageMileage, fills } = data;
+  const unit = totals.unit ?? "L";
+  const mileageUnit = `km / ${unit}`;
+
+  if (!v.fuelType) {
+    return (
+      <Section title="Fuel & mileage">
+        <Empty msg="Set a fuel type on this vehicle (Edit → Fuel type) to enable fuel-fill tracking with the right unit." />
+      </Section>
+    );
+  }
+
+  if (fills.length === 0) {
+    return (
+      <Section title="Fuel & mileage">
+        <Empty msg="No fuel fills tagged yet. Add an Expense with category 'Fuel' tagged to this vehicle, with quantity + odometer reading, to start tracking mileage." />
+      </Section>
+    );
+  }
+
+  return (
+    <Section
+      title={
+        <span className="flex items-center justify-between gap-2">
+          <span>Fuel &amp; mileage</span>
+          <span className="text-[10px] font-normal text-muted-foreground uppercase tracking-wide">
+            {v.fuelType}
+          </span>
+        </span>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-3">
+        <StatCard
+          label="Total fills"
+          value={String(totals.fills)}
+        />
+        <StatCard
+          label="Total fuel"
+          value={`${totals.quantity.toFixed(2)} ${unit}`}
+        />
+        <StatCard
+          label="Total spent"
+          value={formatINR(totals.spent)}
+        />
+        <StatCard
+          label="Km driven"
+          value={kmDriven != null ? `${kmDriven.toLocaleString()} km` : "—"}
+        />
+      </div>
+      {averageMileage != null && (
+        <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 p-3 mb-3 text-sm">
+          <span className="font-medium">
+            Average mileage:{" "}
+            <span className="tabular-nums">
+              {averageMileage.toFixed(2)} {mileageUnit}
+            </span>
+          </span>
+          <span className="ml-2 text-xs text-muted-foreground">
+            (fill-to-fill: km between fills ÷ fuel filled)
+          </span>
+        </div>
+      )}
+      <div className="rounded-lg border bg-card divide-y">
+        {fills.map((f) => (
+          <div
+            key={f.id}
+            className="grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2.5 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="font-medium truncate">{f.description}</div>
+              <div className="text-xs text-muted-foreground">
+                {formatDate(f.date)}
+                {f.odometer != null && ` · ${f.odometer.toLocaleString()} km`}
+                {f.kmSincePrev != null &&
+                  ` · +${f.kmSincePrev.toLocaleString()} km since last`}
+              </div>
+            </div>
+            <div className="text-right tabular-nums">
+              <div className="text-sm">
+                {f.quantity.toFixed(2)}{" "}
+                <span className="text-xs text-muted-foreground">
+                  {f.unit ?? unit}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {formatINR(f.amount)}
+              </div>
+            </div>
+            <div className="text-right tabular-nums w-20">
+              {f.mileage != null ? (
+                <span className="text-emerald-700 dark:text-emerald-400 text-sm font-medium">
+                  {f.mileage.toFixed(1)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground text-xs">—</span>
+              )}
+              <div className="text-[10px] text-muted-foreground">
+                {mileageUnit}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }

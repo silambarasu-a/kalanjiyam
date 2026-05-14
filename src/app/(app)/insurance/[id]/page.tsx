@@ -87,6 +87,7 @@ type Policy = {
   maturityValue: number | null;
   bonusAccrued: number | null;
   bonusLastRevisedAt: string | null;
+  vehicleId: string | null;
   renewedFromInvestmentId: string | null;
   renewedFrom: ChainLink | null;
   successors: ChainLink[];
@@ -1195,8 +1196,24 @@ function EditPolicyDialog({
   const [nominee, setNominee] = useState("");
   const [notes, setNotes] = useState("");
   const [coverage, setCoverage] = useState<VehicleCoverageDraft>(EMPTY_COVERAGE);
+  const [vehicleId, setVehicleId] = useState<string>("");
+  const [policyTermYears, setPolicyTermYears] = useState("");
+  const [premiumPayingTermYears, setPremiumPayingTermYears] = useState("");
+  const [maturityValue, setMaturityValue] = useState("");
+  const [bonusAccrued, setBonusAccrued] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Vehicles needed only when policyType=VEHICLE — small fetch, gated.
+  const { data: vehiclesData } = useSWR<{
+    vehicles: {
+      id: string;
+      name: string;
+      kind: string;
+      registrationNo: string | null;
+    }[];
+  }>(open && policyType === "VEHICLE" ? "/api/vehicles" : null, fetcher);
+  const vehicles = vehiclesData?.vehicles ?? [];
 
   useEffect(() => {
     if (!open) return;
@@ -1213,6 +1230,21 @@ function EditPolicyDialog({
     setNominee(policy.nominee ?? "");
     setNotes(policy.notes ?? "");
     setCoverage(coverageFromMetadata(policy.metadata));
+    setVehicleId(policy.vehicleId ?? "");
+    setPolicyTermYears(
+      policy.policyTermYears != null ? String(policy.policyTermYears) : "",
+    );
+    setPremiumPayingTermYears(
+      policy.premiumPayingTermYears != null
+        ? String(policy.premiumPayingTermYears)
+        : "",
+    );
+    setMaturityValue(
+      policy.maturityValue != null ? String(policy.maturityValue) : "",
+    );
+    setBonusAccrued(
+      policy.bonusAccrued != null ? String(policy.bonusAccrued) : "",
+    );
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, policy]);
@@ -1257,6 +1289,23 @@ function EditPolicyDialog({
         maturityAt: maturityAt || null,
         nominee: nominee.trim() || null,
         notes: notes.trim() || null,
+        // Vehicle picker — only sent when policy type is VEHICLE; an
+        // empty string clears the linkage (a HEALTH policy shouldn't
+        // hold onto a stale vehicleId from an earlier classification).
+        vehicleId: policyType === "VEHICLE" ? vehicleId || null : null,
+        // Life-family corporate fields — only sent when relevant.
+        policyTermYears:
+          isLifeFamily(policyType) && policyTermYears
+            ? Number(policyTermYears)
+            : null,
+        premiumPayingTermYears:
+          isLifeFamily(policyType) && premiumPayingTermYears
+            ? Number(premiumPayingTermYears)
+            : null,
+        maturityValue:
+          isLifeFamily(policyType) && maturityValue ? Number(maturityValue) : null,
+        bonusAccrued:
+          isLifeFamily(policyType) && bonusAccrued ? Number(bonusAccrued) : null,
         ...(metadataPatch !== null || policyType === "VEHICLE"
           ? { metadata: metadataPatch }
           : {}),
@@ -1351,7 +1400,82 @@ function EditPolicyDialog({
             <AmountInput value={sumAssured} onChange={setSumAssured} placeholder="0" />
           </label>
           {policyType === "VEHICLE" && (
+            <label className="block">
+              <span className="text-xs font-medium">Vehicle covered</span>
+              <select
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={vehicleId}
+                onChange={(e) => setVehicleId(e.target.value)}
+              >
+                <option value="">— pick a vehicle —</option>
+                {vehicles.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                    {v.registrationNo ? ` · ${v.registrationNo}` : ""} (
+                    {v.kind.toLowerCase()})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {policyType === "VEHICLE" && (
             <VehicleCoverageEditor value={coverage} onChange={setCoverage} />
+          )}
+          {isLifeFamily(policyType) && (
+            <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+              <div>
+                <div className="text-xs font-medium">Policy schedule</div>
+                <div className="text-[10px] text-muted-foreground">
+                  Corporate fields for life-family policies. All optional.
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Policy term (years)</span>
+                  <Input
+                    inputMode="numeric"
+                    value={policyTermYears}
+                    onChange={(e) =>
+                      setPolicyTermYears(
+                        e.target.value.replace(/\D/g, "").slice(0, 3),
+                      )
+                    }
+                    placeholder="e.g. 20"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Premium-paying term</span>
+                  <Input
+                    inputMode="numeric"
+                    value={premiumPayingTermYears}
+                    onChange={(e) =>
+                      setPremiumPayingTermYears(
+                        e.target.value.replace(/\D/g, "").slice(0, 3),
+                      )
+                    }
+                    placeholder="e.g. 10"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium">Maturity value</span>
+                  <AmountInput
+                    value={maturityValue}
+                    onChange={setMaturityValue}
+                    placeholder="0"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium">Bonus accrued</span>
+                  <AmountInput
+                    value={bonusAccrued}
+                    onChange={setBonusAccrued}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+            </div>
           )}
           <div className="grid grid-cols-2 gap-3">
             <label className="block">

@@ -122,6 +122,7 @@ export async function GET(
         bonusAccrued: inv.bonusAccrued == null ? null : Number(inv.bonusAccrued),
         bonusLastRevisedAt: inv.bonusLastRevisedAt?.toISOString() ?? null,
         ridersJson: inv.ridersJson ?? null,
+        vehicleId: inv.vehicleId ?? null,
         renewedFromInvestmentId: inv.renewedFromInvestmentId ?? null,
         renewedFrom: inv.renewedFrom
           ? {

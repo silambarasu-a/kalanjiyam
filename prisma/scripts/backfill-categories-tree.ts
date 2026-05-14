@@ -1,18 +1,27 @@
+/**
+ * Idempotent backfill for the new two-level Category hierarchy.
+ *
+ *  - Reads → diffs → writes only what's missing.
+ *  - Operates ONLY on default rows (workspaceId IS NULL, isDefault=true).
+ *    Custom workspace categories are never touched.
+ *  - For each existing default child whose parentCategoryId is NULL,
+ *    sets it to the matching parent. Never overwrites a non-NULL value.
+ *  - For each missing default (parent or child), inserts a new row.
+ *  - Never mutates Transaction rows — every transaction's categoryId
+ *    keeps pointing at the same Category id it always did.
+ *
+ * Run with:
+ *   npx tsx prisma/scripts/backfill-categories-tree.ts
+ *
+ * Safe to re-run any number of times; subsequent runs are no-ops.
+ */
 import "dotenv/config";
-import { PrismaClient, TransactionType, WorkspaceRole } from "../src/generated/prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { hash } from "bcryptjs";
+import { prisma } from "../../src/lib/prisma";
+import type { TransactionType } from "../../src/generated/prisma/client";
 
-const adapter = new PrismaPg({
-  connectionString: process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL,
-});
-const prisma = new PrismaClient({ adapter });
+type Tree = Record<TransactionType, Record<string, string[]>>;
 
-// Two-level default category tree. Top-level keys = parent names;
-// values = list of child category names. Empty array = parent with no
-// children. The same shape lives in
-// prisma/scripts/backfill-categories-tree.ts; keep them in sync.
-const TREE: Record<TransactionType, Record<string, string[]>> = {
+const TREE: Tree = {
   EXPENSE: {
     Vehicle: [
       "Vehicle Purchase",
@@ -60,6 +69,7 @@ const TREE: Record<TransactionType, Record<string, string[]>> = {
       "Seeds / Planting",
     ],
     "Family Events": ["Wedding", "Birthday", "Anniversary"],
+    // standalone parents
     "Loan Payment": [],
     Pet: [],
     "Subscription / Membership": [],
@@ -89,16 +99,18 @@ const TREE: Record<TransactionType, Record<string, string[]>> = {
   TRANSFER: {},
 };
 
-async function seedDefaultCategories() {
+async function main() {
   let createdParents = 0;
   let createdChildren = 0;
   let parentedExisting = 0;
+  let alreadyParented = 0;
+
   for (const [type, parents] of Object.entries(TREE) as [
     TransactionType,
     Record<string, string[]>,
   ][]) {
     for (const [parentName, childNames] of Object.entries(parents)) {
-      // Find or create parent (workspaceId=null, isDefault=true, top-level).
+      // Step 1 — find or create the top-level parent (workspaceId=null, isDefault=true)
       let parent = await prisma.category.findFirst({
         where: {
           name: parentName,
@@ -113,18 +125,17 @@ async function seedDefaultCategories() {
             name: parentName,
             isDefault: true,
             types: [type],
-            group:
-              type === "EXPENSE"
-                ? "Expense"
-                : type === "INCOME"
-                  ? "Income"
-                  : "Investment",
+            // Keep `group` aligned with the type so the legacy UI keeps
+            // its grouping label intact for clients that haven't moved
+            // to the parentCategoryId model yet.
+            group: type === "EXPENSE" ? "Expense" : type === "INCOME" ? "Income" : "Investment",
             parentCategoryId: null,
           },
         });
         createdParents++;
-        console.log(`  + parent: ${parentName} (${type})`);
       }
+
+      // Step 2 — for each child: re-parent existing OR insert new
       for (const childName of childNames) {
         const existing = await prisma.category.findFirst({
           where: {
@@ -141,6 +152,8 @@ async function seedDefaultCategories() {
               data: { parentCategoryId: parent.id },
             });
             parentedExisting++;
+          } else {
+            alreadyParented++;
           }
         } else {
           await prisma.category.create({
@@ -158,71 +171,22 @@ async function seedDefaultCategories() {
             },
           });
           createdChildren++;
-          console.log(`    + child: ${childName} (under ${parentName})`);
         }
       }
     }
   }
+
   console.log(
-    `  Done. Parents created: ${createdParents}, children created: ${createdChildren}, existing children re-parented: ${parentedExisting}.`,
+    `[backfill] parents created: ${createdParents}, ` +
+      `children created: ${createdChildren}, ` +
+      `existing children re-parented: ${parentedExisting}, ` +
+      `already-parented: ${alreadyParented}`,
   );
 }
 
-async function seedDevUser() {
-  if (process.env.NODE_ENV === "production") return;
-  const email = "ramon@starlightmusic.com";
-
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
-    console.log(`  dev user already exists: ${email}`);
-    return;
-  }
-
-  const passwordHash = await hash("Kalanjiyam@123", 12);
-  const user = await prisma.user.create({
-    data: {
-      name: "Ramon",
-      email,
-      emailVerified: new Date(),
-      passwordHash,
-    },
-  });
-
-  const workspace = await prisma.workspace.create({
-    data: {
-      name: "My Workspace",
-      ownerUserId: user.id,
-    },
-  });
-
-  await prisma.workspaceMember.create({
-    data: {
-      workspaceId: workspace.id,
-      userId: user.id,
-      role: WorkspaceRole.OWNER,
-      acceptedAt: new Date(),
-    },
-  });
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { activeWorkspaceId: workspace.id },
-  });
-
-  console.log(`  + dev user ${email} + workspace "My Workspace"`);
-}
-
-async function main() {
-  console.log("Seeding default categories...");
-  await seedDefaultCategories();
-  console.log("Seeding dev user (dev only)...");
-  await seedDevUser();
-  console.log("Done.");
-}
-
 main()
+  .then(() => process.exit(0))
   .catch((err) => {
     console.error(err);
     process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+  });

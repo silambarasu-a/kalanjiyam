@@ -30,6 +30,12 @@ import {
   submitPolicyMembers,
   type InsurancePolicyExtras,
 } from "@/components/insurance/policy-extras-fields";
+import { CategoryCombobox } from "@/components/categories/category-combobox";
+import { CategoryQuickCreateDialog } from "@/components/categories/category-quick-create-dialog";
+import {
+  ReceiptStager,
+  uploadReceiptToAttachment,
+} from "@/components/transactions/receipt-stager";
 import {
   Dialog,
   DialogContent,
@@ -65,6 +71,7 @@ type Category = {
   name: string;
   group: string | null;
   types: string[];
+  parentCategoryId: string | null;
 };
 type Contact = { id: string; name: string };
 type Worker = { id: string; name: string; dailyRate: number | null; balance: number };
@@ -83,6 +90,10 @@ type LivestockBatch = {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
+
+// uploadReceiptToAttachment was extracted to
+// @/components/transactions/receipt-stager so the helper can be shared
+// with InvestmentForm / TransferForm / LoanEmiForm without duplication.
 
 /**
  * Map a policy type to the insurer categories that actually sell that
@@ -197,6 +208,16 @@ function DialogBody({
     "/api/livestock-batches?active=true",
     fetcher
   );
+  const { data: eventsData } = useSWR<{
+    events: {
+      id: string;
+      name: string;
+      kind: string;
+      startedAt: string;
+      endedAt: string | null;
+      active: boolean;
+    }[];
+  }>("/api/events?status=active", fetcher);
   const { data: workersData } = useSWR<{ workers: Worker[] }>(
     type === "EXPENSE" ? "/api/workers" : null,
     fetcher,
@@ -213,6 +234,7 @@ function DialogBody({
   const contacts = contactsData?.members ?? [];
   const cropBatches = cropBatchesData?.batches ?? [];
   const livestockBatches = livestockBatchesData?.batches ?? [];
+  const events = eventsData?.events ?? [];
   const workers = (workersData?.workers ?? []).filter((w) => w);
 
   return (
@@ -266,6 +288,7 @@ function DialogBody({
           contacts={contacts}
           cropBatches={cropBatches}
           livestockBatches={livestockBatches}
+          events={events}
           workers={workers}
           onClose={onClose}
         />
@@ -282,6 +305,7 @@ function IncomeExpenseForm({
   contacts,
   cropBatches,
   livestockBatches,
+  events,
   workers,
   onClose,
 }: {
@@ -292,6 +316,14 @@ function IncomeExpenseForm({
   contacts: Contact[];
   cropBatches: CropBatch[];
   livestockBatches: LivestockBatch[];
+  events: {
+    id: string;
+    name: string;
+    kind: string;
+    startedAt: string;
+    endedAt: string | null;
+    active: boolean;
+  }[];
   workers: Worker[];
   onClose: () => void;
 }) {
@@ -300,6 +332,9 @@ function IncomeExpenseForm({
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(today);
   const [categoryId, setCategoryId] = useState("");
+  // Inline "+ New category" creation triggered from the CategoryCombobox.
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [quickCreateName, setQuickCreateName] = useState("");
   const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" or "card:<id>"
   const [beneficiaryContactId, setBeneficiaryMemberId] = useState("");
   const [chargeFlag, setChargeFlag] = useState<ChargeFlag>("NONE");
@@ -319,9 +354,27 @@ function IncomeExpenseForm({
     type === "EXPENSE" &&
     !!selectedCategory?.name &&
     VEHICLE_CATEGORIES.has(selectedCategory.name.toLowerCase());
+  // Sub-mode: when the Vehicle category is specifically "fuel" we
+  // surface quantity + odometer inputs so mileage can be tracked.
+  const isFuelMode =
+    type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "fuel";
   const [vehicleId, setVehicleId] = useState<string | null>(null);
   const { data: vehiclesData } = useSWR<{
-    vehicles: { id: string; name: string; kind: string; registrationNo: string | null }[];
+    vehicles: {
+      id: string;
+      name: string;
+      kind: string;
+      registrationNo: string | null;
+      fuelType:
+        | "PETROL"
+        | "DIESEL"
+        | "CNG"
+        | "LPG"
+        | "ELECTRIC"
+        | "HYBRID"
+        | "OTHER"
+        | null;
+    }[];
   }>(isVehicleMode ? "/api/vehicles" : null, fetcher);
   const vehicles = vehiclesData?.vehicles ?? [];
 
@@ -329,12 +382,43 @@ function IncomeExpenseForm({
   // creates a VehicleDocument tied to the picked vehicle so the system
   // schedules the next renewal reminder. Receipt PDF can be attached
   // afterwards from either the transaction edit dialog or the doc row.
+  // Staged receipt file — uploaded post-save to the most useful owner
+  // (VehicleDocument > Event > Transaction). Held client-side as a
+  // File until we have the row id to anchor the Attachment.
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  // Per-kind cap is enforced server-side; we duplicate the same table
+  // here for friendlier inline validation. Keep in sync with
+  // src/lib/attachments.ts ATTACHMENT_POLICY[*].maxMB.
+  const ATTACHMENT_MAX_MB: Record<
+    "VEHICLE_DOCUMENT" | "EVENT_DOCUMENT" | "TRANSACTION_RECEIPT",
+    number
+  > = {
+    VEHICLE_DOCUMENT: 20,
+    EVENT_DOCUMENT: 25,
+    TRANSACTION_RECEIPT: 10,
+  };
   const [createVehicleDoc, setCreateVehicleDoc] = useState(false);
   const [vehicleDocKind, setVehicleDocKind] = useState<
     "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER"
   >("PUC");
   const [vehicleDocExpiryAt, setVehicleDocExpiryAt] = useState("");
   const [vehicleDocNumber, setVehicleDocNumber] = useState("");
+
+  // Fuel-fill metadata — surfaced when the Fuel category is selected
+  // AND a vehicle is picked. Quantity unit is inferred from the
+  // vehicle's fuelType ("L" for petrol/diesel/CNG/LPG/hybrid, "kWh"
+  // for EV) so the user only types a number; odometer is the km
+  // reading at the fill, used for mileage on /vehicles/[id].
+  const [fuelQuantity, setFuelQuantity] = useState("");
+  const [fuelOdometer, setFuelOdometer] = useState("");
+  const selectedVehicleForFuel = vehicles.find((v) => v.id === vehicleId);
+  const fuelUnitForVehicle: { unit: string; label: string } | null = (() => {
+    const ft = selectedVehicleForFuel?.fuelType;
+    if (!ft) return null;
+    if (ft === "ELECTRIC") return { unit: "kWh", label: "Units (kWh)" };
+    if (ft === "CNG") return { unit: "kg", label: "Kg" };
+    return { unit: "L", label: "Litres" };
+  })();
 
   const isHospitalMode =
     type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "hospital";
@@ -534,6 +618,15 @@ function IncomeExpenseForm({
         payload.memberChargeType = chargeFlag;
       }
       if (isVehicleMode && vehicleId) payload.vehicleId = vehicleId;
+      // Fuel sub-mode: persist litres/kWh/kg quantity + odometer so the
+      // vehicle's fuel-summary endpoint can compute mileage.
+      if (isFuelMode && vehicleId) {
+        if (fuelQuantity) {
+          payload.fuelQuantity = Number(fuelQuantity);
+          payload.fuelUnit = fuelUnitForVehicle?.unit ?? "L";
+        }
+        if (fuelOdometer) payload.fuelOdometer = Number(fuelOdometer);
+      }
       if (isHospitalMode && hospitalizationId) {
         payload.hospitalizationId = hospitalizationId;
         payload.hospitalizationStage = hospitalizationStage;
@@ -548,6 +641,7 @@ function IncomeExpenseForm({
       }
       if (tagSource.startsWith("crop:")) payload.cropBatchId = tagSource.slice(5);
       if (tagSource.startsWith("livestock:")) payload.livestockBatchId = tagSource.slice(10);
+      if (tagSource.startsWith("event:")) payload.eventId = tagSource.slice(6);
       const res = await fetch("/api/transactions", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -557,10 +651,12 @@ function IncomeExpenseForm({
       if (!res.ok) {
         setError(body.error ?? "Failed");
       } else {
+        const newTxnId = body.id as string | undefined;
         toast.success(type === "INCOME" ? "Income recorded" : "Expense recorded");
         // Optional follow-up: also create a VehicleDocument so the
         // system schedules the next renewal reminder. Failure here is
         // surfaced as a warning toast; the transaction stays.
+        let newVehicleDocId: string | null = null;
         if (
           isVehicleMode &&
           vehicleId &&
@@ -587,7 +683,45 @@ function IncomeExpenseForm({
               }`,
             );
           } else {
+            const dbody = await docRes.json().catch(() => ({}));
+            newVehicleDocId = (dbody.id as string | undefined) ?? null;
             toast.success("Renewal reminder scheduled");
+          }
+        }
+        // Smart-routed attachment upload — attaches to the most useful
+        // owner based on what the user just created:
+        //   - Vehicle doc was created → attach to the doc (cert lives
+        //     with the doc; visible on /vehicles/<id>).
+        //   - Event tagged          → attach to the event.
+        //   - Otherwise             → attach to the transaction.
+        if (receiptFile && newTxnId) {
+          const eventId = tagSource.startsWith("event:")
+            ? tagSource.slice(6)
+            : null;
+          let ownerKind:
+            | "VEHICLE_DOCUMENT"
+            | "EVENT_DOCUMENT"
+            | "TRANSACTION_RECEIPT";
+          let ownerId: string;
+          if (newVehicleDocId) {
+            ownerKind = "VEHICLE_DOCUMENT";
+            ownerId = newVehicleDocId;
+          } else if (eventId) {
+            ownerKind = "EVENT_DOCUMENT";
+            ownerId = eventId;
+          } else {
+            ownerKind = "TRANSACTION_RECEIPT";
+            ownerId = newTxnId;
+          }
+          const uploadOk = await uploadReceiptToAttachment({
+            file: receiptFile,
+            ownerKind,
+            ownerId,
+          });
+          if (uploadOk.error) {
+            toast.warning(`Transaction saved, but receipt upload failed: ${uploadOk.error}`);
+          } else {
+            toast.success("Receipt attached");
           }
         }
         await mutateBalances();
@@ -629,20 +763,40 @@ function IncomeExpenseForm({
             />
           </div>
         </label>
-        <label className="block">
+        <div className="block">
           <span className="text-xs font-medium">Category</span>
           <div className="mt-1">
-            <NativeSelect
-              value={categoryId}
-              onChange={setCategoryId}
-              placeholder="— optional —"
-              options={categories.map((c) => ({
-                value: c.id,
-                label: c.group ? `${c.group} · ${c.name}` : c.name,
+            <CategoryCombobox
+              value={categoryId || null}
+              onChange={(id) => setCategoryId(id)}
+              categories={categories.map((c) => ({
+                id: c.id,
+                name: c.name,
+                parentCategoryId: c.parentCategoryId,
+                group: c.group,
               }))}
+              placeholder="— optional —"
+              canCreate
+              onRequestCreate={(typedText) => {
+                setQuickCreateName(typedText);
+                setQuickCreateOpen(true);
+              }}
             />
           </div>
-        </label>
+        </div>
+        <CategoryQuickCreateDialog
+          open={quickCreateOpen}
+          onClose={() => setQuickCreateOpen(false)}
+          initialName={quickCreateName}
+          type={type}
+          allCategories={categories.map((c) => ({
+            id: c.id,
+            name: c.name,
+            parentCategoryId: c.parentCategoryId,
+            group: c.group,
+          }))}
+          onCreated={(id) => setCategoryId(id)}
+        />
       </div>
 
       {isWageMode && (
@@ -687,6 +841,72 @@ function IncomeExpenseForm({
               first, then come back.
             </p>
           )}
+
+          {/* Fuel-fill metadata — appears when category is Fuel + a
+              vehicle is picked. Unit label is driven by the vehicle's
+              fuelType; if it's not set, prompt the user to update the
+              vehicle first. */}
+          {isFuelMode && vehicleId && (
+            <div className="mt-3 border-t pt-3 space-y-2">
+              <div className="text-xs font-medium">Fuel fill</div>
+              {fuelUnitForVehicle ? (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-[10px] font-medium">
+                        Quantity ({fuelUnitForVehicle.label})
+                      </span>
+                      <Input
+                        inputMode="decimal"
+                        value={fuelQuantity}
+                        onChange={(e) =>
+                          setFuelQuantity(
+                            e.target.value.replace(/[^\d.]/g, "").slice(0, 10),
+                          )
+                        }
+                        placeholder={
+                          fuelUnitForVehicle.unit === "kWh" ? "12.5" : "8.45"
+                        }
+                        className="mt-0.5 h-8 text-xs"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] font-medium">
+                        Odometer (km)
+                      </span>
+                      <Input
+                        inputMode="numeric"
+                        value={fuelOdometer}
+                        onChange={(e) =>
+                          setFuelOdometer(
+                            e.target.value.replace(/\D/g, "").slice(0, 8),
+                          )
+                        }
+                        placeholder="e.g. 42150"
+                        className="mt-0.5 h-8 text-xs"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Both optional. Recording quantity + odometer on each fill
+                    enables mileage tracking on the vehicle page.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  This vehicle has no fuel type set.{" "}
+                  <Link
+                    href={`/vehicles/${vehicleId}`}
+                    className="underline"
+                  >
+                    Pick a fuel type
+                  </Link>{" "}
+                  to enable litre / kWh / kg tracking.
+                </p>
+              )}
+            </div>
+          )}
+
           {vehicleId && (
             <div className="mt-3 border-t pt-3">
               <label className="flex items-center gap-2 text-xs">
@@ -823,9 +1043,14 @@ function IncomeExpenseForm({
         </div>
       )}
 
-      {(cropBatches.length > 0 || livestockBatches.length > 0) && (
+      {(cropBatches.length > 0 ||
+        livestockBatches.length > 0 ||
+        events.length > 0) && (
         <label className="block">
-          <span className="text-xs font-medium">Tag to farm batch (optional)</span>
+          <span className="text-xs font-medium">
+            Tag to batch / event{" "}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </span>
           <div className="mt-1">
             <NativeSelect
               value={tagSource}
@@ -847,12 +1072,25 @@ function IncomeExpenseForm({
                       label: `${b.livestock.name} · ${b.name} (${b.currentCount} head)`,
                     })),
                   },
+                  events.length > 0 && {
+                    label: "Events / Trips",
+                    options: events.map((e) => {
+                      const date = new Date(e.startedAt)
+                        .toISOString()
+                        .slice(0, 10);
+                      return {
+                        value: `event:${e.id}`,
+                        label: `${e.name} · ${date} (${e.kind.toLowerCase()})`,
+                      };
+                    }),
+                  },
                 ].filter(Boolean) as NativeSelectGroup[]
               }
             />
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Tags this transaction to a crop or livestock batch for per-batch P&amp;L.
+            Tag this transaction to a crop / livestock batch (per-batch P&amp;L) or
+            to an event / trip (roll-up across categories).
           </p>
         </label>
       )}
@@ -904,6 +1142,63 @@ function IncomeExpenseForm({
           maxLength={200}
         />
       </label>
+
+      {(() => {
+        // Predict where the receipt will land so we can show the right
+        // size cap inline (matches what the server will enforce).
+        const willAttachTo: keyof typeof ATTACHMENT_MAX_MB =
+          isVehicleMode && vehicleId && createVehicleDoc && vehicleDocExpiryAt
+            ? "VEHICLE_DOCUMENT"
+            : tagSource.startsWith("event:")
+              ? "EVENT_DOCUMENT"
+              : "TRANSACTION_RECEIPT";
+        const maxMB = ATTACHMENT_MAX_MB[willAttachTo];
+        const destinationHint =
+          willAttachTo === "VEHICLE_DOCUMENT"
+            ? "the new vehicle document (visible on /vehicles)"
+            : willAttachTo === "EVENT_DOCUMENT"
+              ? "the linked event (visible on /events)"
+              : "this transaction (visible on its edit dialog)";
+        return (
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+            <div className="text-xs font-medium">
+              Receipt / supporting file{" "}
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </div>
+            {receiptFile ? (
+              <div className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5 text-xs">
+                <span className="truncate">
+                  {receiptFile.name} ({Math.round(receiptFile.size / 1024)} KB)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReceiptFile(null)}
+                  className="underline hover:text-foreground shrink-0"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  if (f && f.size > maxMB * 1_000_000) {
+                    setError(`File is too large (limit ${maxMB} MB for ${destinationHint.split(" (")[0]})`);
+                    return;
+                  }
+                  setReceiptFile(f);
+                }}
+                className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
+              />
+            )}
+            <p className="text-[10px] text-muted-foreground">
+              Will attach to {destinationHint}. Max {maxMB} MB.
+            </p>
+          </div>
+        );
+      })()}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -1708,6 +2003,7 @@ function LoanEmiForm({
   const [paidAt, setPaidAt] = useState(today);
   const [accountId, setAccountId] = useState("");
   const [notes, setNotes] = useState("");
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1767,6 +2063,18 @@ function LoanEmiForm({
       globalMutate(
         (k) => typeof k === "string" && k.startsWith("/api/loans"),
       );
+      // Optional receipt — attaches to the auto-created loan-payment
+      // transaction. Failure surfaces as a warning toast.
+      if (receiptFile && body.transactionId) {
+        const result = await uploadReceiptToAttachment({
+          file: receiptFile,
+          ownerKind: "TRANSACTION_RECEIPT",
+          ownerId: body.transactionId,
+        });
+        if (result.error) {
+          toast.warning(`EMI paid, but receipt upload failed: ${result.error}`);
+        }
+      }
       await mutateBalances();
       onClose();
     } finally {
@@ -1852,6 +2160,14 @@ function LoanEmiForm({
         reducing-balance rule. Tweak the split on the loan&rsquo;s detail page
         if you need to override.
       </p>
+
+      <ReceiptStager
+        value={receiptFile}
+        onChange={setReceiptFile}
+        ownerKind="TRANSACTION_RECEIPT"
+        destinationHint="Attaches to the auto-created loan-payment transaction."
+        onError={setError}
+      />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -1949,6 +2265,10 @@ function InvestmentForm({
   // kind/name/symbol fields and submit posts to /api/investments which
   // creates the holding + initial BUY transaction in one shot.
   const [creatingNew, setCreatingNew] = useState(defaultCreatingNew);
+  // Optional receipt staged before save — attaches to the auto-created
+  // BUY/SELL transaction (or the new holding's seed transaction). Edit
+  // flows can attach via the transaction edit dialog as before.
+  const [investReceiptFile, setInvestReceiptFile] = useState<File | null>(null);
   const [newKind, setNewKind] = useState<
     "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
   >("STOCK");
@@ -2839,6 +3159,16 @@ function InvestmentForm({
         return;
       }
       toast.success(action === "BUY" ? "Investment purchase recorded" : "Investment sale recorded");
+      if (investReceiptFile && body.id) {
+        const result = await uploadReceiptToAttachment({
+          file: investReceiptFile,
+          ownerKind: "TRANSACTION_RECEIPT",
+          ownerId: body.id,
+        });
+        if (result.error) {
+          toast.warning(`Saved, but receipt upload failed: ${result.error}`);
+        }
+      }
       await mutateBalances();
       onClose();
     } finally {
@@ -3925,6 +4255,16 @@ function InvestmentForm({
           ? "Adds to the holding's invested amount and quantity."
           : "Reduces the holding's invested amount and quantity (clamped at 0)."}
       </p>
+
+      {!creatingNew && (
+        <ReceiptStager
+          value={investReceiptFile}
+          onChange={setInvestReceiptFile}
+          ownerKind="TRANSACTION_RECEIPT"
+          destinationHint="Attaches to the BUY/SELL transaction (broker contract note, mutual-fund statement, etc.)."
+          onError={setError}
+        />
+      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 

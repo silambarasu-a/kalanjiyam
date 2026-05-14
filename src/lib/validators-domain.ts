@@ -17,8 +17,13 @@ export const categoryCreateSchema = z.object({
   types: z
     .array(z.enum(["INCOME", "EXPENSE", "INVESTMENT", "HAND_LOAN", "TRANSFER"]))
     .min(1),
-  group: z.string().trim().max(40).optional(),
-  icon: z.string().trim().max(40).optional(),
+  group: z.string().trim().max(40).optional().nullable(),
+  icon: z.string().trim().max(40).optional().nullable(),
+  // Two-level hierarchy: leave unset for top-level groups; set to the
+  // id of an existing top-level Category for child categories. The API
+  // enforces that the referenced parent itself has parentCategoryId =
+  // null and that its `types` is a superset of the child's.
+  parentCategoryId: z.string().min(1).max(64).optional().nullable(),
 });
 
 export const categoryUpdateSchema = categoryCreateSchema.partial();
@@ -117,6 +122,14 @@ export const transactionCreateSchema = z
     claimId: z.string().uuid().optional().nullable(),
     hospitalizationId: z.string().uuid().optional().nullable(),
     hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
+    eventId: z.string().uuid().optional().nullable(),
+    // Fuel-fill metadata: optional. Unit is a short symbol ("L" /
+    // "kWh" / "kg" / "m3") derived client-side from the vehicle's
+    // fuelType at time of entry — stored so historical mileage calcs
+    // remain correct if the vehicle is converted to a different fuel.
+    fuelQuantity: z.number().positive().max(10_000).optional().nullable(),
+    fuelUnit: z.string().trim().min(1).max(8).optional().nullable(),
+    fuelOdometer: z.number().int().nonnegative().max(99_999_999).optional().nullable(),
     goldForm: z
       .enum(["ORNAMENT", "COIN", "BAR", "BISCUIT", "JEWELLERY_MAKING"])
       .optional()
@@ -150,6 +163,10 @@ export const transactionUpdateSchema = z.object({
   claimId: z.string().uuid().optional().nullable(),
   hospitalizationId: z.string().uuid().optional().nullable(),
   hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
+  eventId: z.string().uuid().optional().nullable(),
+  fuelQuantity: z.number().positive().max(10_000).optional().nullable(),
+  fuelUnit: z.string().trim().min(1).max(8).optional().nullable(),
+  fuelOdometer: z.number().int().nonnegative().max(99_999_999).optional().nullable(),
   goldForm: z
     .enum(["ORNAMENT", "COIN", "BAR", "BISCUIT", "JEWELLERY_MAKING"])
     .optional()
@@ -752,6 +769,16 @@ export const insuranceClaimUpdateSchema = insuranceClaimCreateSchema.partial();
 
 const vehicleKindEnum = z.enum(["BIKE", "CAR", "TRACTOR", "TRUCK", "SCOOTER", "OTHER"]);
 
+const vehicleFuelTypeEnum = z.enum([
+  "PETROL",
+  "DIESEL",
+  "CNG",
+  "LPG",
+  "ELECTRIC",
+  "HYBRID",
+  "OTHER",
+]);
+
 export const vehicleCreateSchema = z.object({
   ownerContactId: z.string().uuid(),
   kind: vehicleKindEnum,
@@ -760,6 +787,7 @@ export const vehicleCreateSchema = z.object({
   model: z.string().trim().max(60).optional(),
   year: z.number().int().min(1900).max(2100).optional().nullable(),
   registrationNo: z.string().trim().max(40).optional(),
+  fuelType: vehicleFuelTypeEnum.optional().nullable(),
   purchaseDate: z.string().optional().nullable(),
   purchasePrice: z.number().positive().optional().nullable(),
   odometerStart: z.number().int().nonnegative().optional().nullable(),
@@ -811,6 +839,7 @@ const attachmentOwnerKindEnum = z.enum([
   "CROP_BATCH_BILL",
   "LOAN_DOCUMENT",
   "INCOME_PROOF",
+  "EVENT_DOCUMENT",
 ]);
 
 export const attachmentUploadUrlSchema = z.object({
@@ -836,3 +865,44 @@ export const attachmentListQuerySchema = z.object({
   ownerKind: attachmentOwnerKindEnum,
   ownerId: z.string().min(1).max(64),
 });
+
+/* ---------------- Event / Trip schemas ---------------- */
+
+const eventKindEnum = z.enum([
+  "TRIP",
+  "FUNCTION",
+  "FESTIVAL",
+  "PROJECT",
+  "MEDICAL",
+  "OTHER",
+]);
+
+export const eventCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    kind: eventKindEnum.default("TRIP"),
+    startedAt: z.string().min(1),
+    endedAt: z.string().optional().nullable(),
+    notes: z.string().trim().max(1000).optional().nullable(),
+    budget: z.number().nonnegative().optional().nullable(),
+    active: z.boolean().optional(),
+  })
+  .refine(
+    (v) => !v.endedAt || new Date(v.endedAt) >= new Date(v.startedAt),
+    { message: "End date can't be before start date", path: ["endedAt"] },
+  );
+
+export const eventUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    kind: eventKindEnum.optional(),
+    startedAt: z.string().min(1).optional(),
+    endedAt: z.string().optional().nullable(),
+    notes: z.string().trim().max(1000).optional().nullable(),
+    budget: z.number().nonnegative().optional().nullable(),
+    active: z.boolean().optional(),
+  })
+  .refine(
+    (v) => !v.startedAt || !v.endedAt || new Date(v.endedAt) >= new Date(v.startedAt),
+    { message: "End date can't be before start date", path: ["endedAt"] },
+  );

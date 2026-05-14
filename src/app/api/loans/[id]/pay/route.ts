@@ -138,7 +138,7 @@ export async function POST(
       return advanceByCycle(new Date(loan.nextDueDate), frequency, 1);
     })();
 
-    await prisma.$transaction(async (tx) => {
+    const created = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -169,6 +169,7 @@ export async function POST(
 
     return NextResponse.json({
       ok: true,
+      transactionId: created.id,
       outstanding: newOutstanding,
       split: {
         principal: principalDrop,

@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +22,17 @@ export type EditableTransaction = {
   amount: number;
   date: string; // ISO
   description: string;
+  eventId?: string | null;
 };
+
+type EventLite = {
+  id: string;
+  name: string;
+  kind: string;
+  startedAt: string;
+};
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function EditTransactionDialog({
   transaction,
@@ -37,9 +49,18 @@ export function EditTransactionDialog({
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
+  const [eventId, setEventId] = useState<string>("");
   const [editNote, setEditNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch events only while the dialog is open to avoid the round-trip
+  // on every transaction list render.
+  const { data: eventsData } = useSWR<{ events: EventLite[] }>(
+    open ? "/api/events?status=all" : null,
+    fetcher,
+  );
+  const events = eventsData?.events ?? [];
 
   // Re-seed the form whenever a different transaction is loaded.
   const txId = transaction?.id;
@@ -49,6 +70,7 @@ export function EditTransactionDialog({
     setAmount(String(Math.round(transaction.amount)));
     setDate(transaction.date.slice(0, 10));
     setDescription(transaction.description);
+    setEventId(transaction.eventId ?? "");
     setEditNote("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -76,6 +98,7 @@ export function EditTransactionDialog({
           amount: amt,
           date,
           description: description.trim(),
+          eventId: eventId || null,
           editNote: editNote.trim() || undefined,
         }),
       });
@@ -116,6 +139,28 @@ export function EditTransactionDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 maxLength={200}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium">
+                Tag to event / trip{" "}
+                <span className="text-muted-foreground">(optional)</span>
+              </span>
+              <NativeSelect
+                value={eventId}
+                onChange={(v) => setEventId(v)}
+                options={[
+                  { value: "", label: "— none —" },
+                  ...events.map((e) => {
+                    const date = new Date(e.startedAt)
+                      .toISOString()
+                      .slice(0, 10);
+                    return {
+                      value: e.id,
+                      label: `${e.name} · ${date} (${e.kind.toLowerCase()})`,
+                    };
+                  }),
+                ]}
               />
             </label>
             <label className="block">
