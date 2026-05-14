@@ -23,6 +23,12 @@ export type EditableTransaction = {
   date: string; // ISO
   description: string;
   eventId?: string | null;
+  // Fuel-fill fields — only surfaced when the row has any of them set.
+  // Caller (transactions list) populates from the API response so
+  // edits round-trip correctly for fuel transactions.
+  fuelQuantity?: number | null;
+  fuelUnit?: string | null;
+  fuelOdometer?: number | null;
 };
 
 type EventLite = {
@@ -50,6 +56,8 @@ export function EditTransactionDialog({
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
   const [eventId, setEventId] = useState<string>("");
+  const [fuelQuantity, setFuelQuantity] = useState("");
+  const [fuelOdometer, setFuelOdometer] = useState("");
   const [editNote, setEditNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +79,12 @@ export function EditTransactionDialog({
     setDate(transaction.date.slice(0, 10));
     setDescription(transaction.description);
     setEventId(transaction.eventId ?? "");
+    setFuelQuantity(
+      transaction.fuelQuantity != null ? String(transaction.fuelQuantity) : "",
+    );
+    setFuelOdometer(
+      transaction.fuelOdometer != null ? String(transaction.fuelOdometer) : "",
+    );
     setEditNote("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -91,6 +105,14 @@ export function EditTransactionDialog({
     }
     setSubmitting(true);
     try {
+      // Only echo fuel fields back when this transaction had them to
+      // begin with — otherwise we'd silently null out the columns on
+      // every edit of an unrelated transaction. PATCH treats `undefined`
+      // as "no change", so omitting the key entirely is the safe path.
+      const hadFuel =
+        transaction.fuelQuantity != null ||
+        transaction.fuelOdometer != null ||
+        transaction.fuelUnit != null;
       const res = await fetch(`/api/transactions/${transaction.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -99,6 +121,14 @@ export function EditTransactionDialog({
           date,
           description: description.trim(),
           eventId: eventId || null,
+          ...(hadFuel
+            ? {
+                fuelQuantity: fuelQuantity ? Number(fuelQuantity) : null,
+                fuelOdometer: fuelOdometer ? Number(fuelOdometer) : null,
+                // Keep the original unit; we don't surface a unit
+                // picker in this dialog. Leave it as-is by omitting it.
+              }
+            : {}),
           editNote: editNote.trim() || undefined,
         }),
       });
@@ -141,6 +171,49 @@ export function EditTransactionDialog({
                 maxLength={200}
               />
             </label>
+            {(transaction.fuelQuantity != null ||
+              transaction.fuelOdometer != null) && (
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <div className="text-xs font-medium">Fuel fill</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] font-medium">
+                      Quantity{" "}
+                      <span className="font-normal text-muted-foreground">
+                        ({transaction.fuelUnit ?? "L"})
+                      </span>
+                    </span>
+                    <Input
+                      inputMode="decimal"
+                      value={fuelQuantity}
+                      onChange={(e) =>
+                        setFuelQuantity(
+                          e.target.value.replace(/[^\d.]/g, "").slice(0, 10),
+                        )
+                      }
+                      className="mt-0.5 h-8 text-xs"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-medium">Odometer (km)</span>
+                    <Input
+                      inputMode="numeric"
+                      value={fuelOdometer}
+                      onChange={(e) =>
+                        setFuelOdometer(
+                          e.target.value.replace(/\D/g, "").slice(0, 8),
+                        )
+                      }
+                      className="mt-0.5 h-8 text-xs"
+                    />
+                  </label>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Clearing either field re-saves it as empty; mileage on
+                  the vehicle page recalculates automatically.
+                </p>
+              </div>
+            )}
             <label className="block">
               <span className="text-xs font-medium">
                 Tag to event / trip{" "}

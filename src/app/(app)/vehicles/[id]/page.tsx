@@ -65,7 +65,11 @@ type Txn = {
   date: string;
   description: string;
   categoryId: string | null;
-  category: { id: string; name: string } | null;
+  category: {
+    id: string;
+    name: string;
+    parent: { id: string; name: string } | null;
+  } | null;
 };
 
 type Vehicle = {
@@ -355,7 +359,9 @@ export default function VehicleDetailPage({
                   <div>{t.description}</div>
                   <div className="text-xs text-muted-foreground">
                     {formatDate(t.date)}
-                    {t.category ? ` · ${t.category.name}` : ""}
+                    {t.category
+                      ? ` · ${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`
+                      : ""}
                   </div>
                 </div>
                 <div className="font-medium">{formatINR(t.amount)}</div>

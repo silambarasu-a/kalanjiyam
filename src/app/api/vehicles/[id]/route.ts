@@ -75,7 +75,13 @@ export async function GET(
             date: true,
             description: true,
             categoryId: true,
-            category: { select: { id: true, name: true } },
+            category: {
+              select: {
+                id: true,
+                name: true,
+                parent: { select: { id: true, name: true } },
+              },
+            },
           },
         },
       },

@@ -128,6 +128,9 @@ export async function GET(request: Request) {
           transferCounterparty,
           refundForTransactionId: t.refundForTransactionId,
           eventId: t.eventId,
+          fuelQuantity: t.fuelQuantity == null ? null : Number(t.fuelQuantity),
+          fuelUnit: t.fuelUnit,
+          fuelOdometer: t.fuelOdometer,
         };
       }),
     });
