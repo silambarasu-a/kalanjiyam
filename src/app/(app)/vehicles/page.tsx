@@ -31,6 +31,8 @@ type Vehicle = {
   active: boolean;
   notes: string | null;
   ownerContact: { id: string; name: string };
+  disposedAt: string | null;
+  disposalKind: string | null;
   counts: {
     insurances: number;
     loans: number;
@@ -53,7 +55,12 @@ const KIND_OPTIONS: { value: VehicleKind; label: string }[] = [
 export default function VehiclesPage() {
   const { data, isLoading } = useSWR<{ vehicles: Vehicle[] }>("/api/vehicles", fetcher);
   const [open, setOpen] = useState(false);
-  const vehicles = data?.vehicles ?? [];
+  const [showDisposed, setShowDisposed] = useState(false);
+  const allVehicles = data?.vehicles ?? [];
+  const disposedCount = allVehicles.filter((v) => v.disposedAt).length;
+  const vehicles = showDisposed
+    ? allVehicles
+    : allVehicles.filter((v) => !v.disposedAt);
 
   return (
     <div className="space-y-6">
@@ -70,9 +77,24 @@ export default function VehiclesPage() {
         </Button>
       </div>
 
+      {disposedCount > 0 && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showDisposed}
+            onChange={(e) => setShowDisposed(e.target.checked)}
+          />
+          <span>
+            Show {disposedCount} disposed vehicle{disposedCount === 1 ? "" : "s"}
+          </span>
+        </label>
+      )}
+
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {!isLoading && vehicles.length === 0 && (
-        <p className="text-sm text-muted-foreground">No vehicles yet.</p>
+        <p className="text-sm text-muted-foreground">
+          {showDisposed ? "No vehicles yet." : "No active vehicles."}
+        </p>
       )}
 
       <div className="rounded-lg border bg-card divide-y">
@@ -100,10 +122,16 @@ function VehicleRow({ vehicle }: { vehicle: Vehicle }) {
             <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {vehicle.kind}
             </span>
-            {!vehicle.active && (
-              <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                Inactive
+            {vehicle.disposedAt ? (
+              <span className="rounded-full border border-amber-300 bg-amber-50/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 dark:border-amber-700 dark:bg-amber-950/20 dark:text-amber-300">
+                {vehicle.disposalKind?.replace("_", " ").toLowerCase() ?? "disposed"}
               </span>
+            ) : (
+              !vehicle.active && (
+                <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Inactive
+                </span>
+              )
             )}
           </div>
           <div className="mt-1 text-xs text-muted-foreground">

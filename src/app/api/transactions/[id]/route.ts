@@ -15,6 +15,7 @@ import {
   type LoanFrequency,
 } from "@/lib/loan-math";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -450,6 +451,16 @@ export async function DELETE(
         }
       }
 
+      // Archive any TRANSACTION_RECEIPT attachments tied to this txn
+      // before the row goes away — the polymorphic Attachment FK isn't
+      // cascaded by Prisma, so without this they'd orphan in S3 + DB.
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "TRANSACTION_RECEIPT",
+        ownerId: id,
+        userId: ctx.userId,
+        tx,
+      });
       await tx.transaction.delete({ where: { id } });
     });
     return NextResponse.json({ ok: true });

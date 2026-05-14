@@ -164,6 +164,23 @@ enum VehicleKind {
   OTHER
 }
 
+enum VehicleDisposalKind {
+  SOLD
+  EXCHANGED
+  SCRAPPED
+  GIFTED
+  TOTAL_LOSS
+}
+
+enum VehicleDocumentKind {
+  RC
+  FC
+  PUC
+  ROAD_TAX
+  INSURANCE_COPY
+  OTHER
+}
+
 enum InsuredMemberRole {
   INSURED
   BENEFICIARY
@@ -273,6 +290,7 @@ enum ReminderKind {
   LEASE_PAYMENT
   LOAN_EMI
   CARD_STATEMENT
+  VEHICLE_DOC_RENEWAL
 }
 
 enum ReminderStatus {
@@ -320,6 +338,8 @@ model User {
   auditLogs                 AuditLog[]
   sentWorkspaceInvites      WorkspaceInvite[]  @relation("WorkspaceInviteInviter")
   notifications             Notification[]
+  uploadedAttachments       Attachment[]       @relation("AttachmentUploader")
+  archivedAttachments       Attachment[]       @relation("AttachmentArchiver")
 
   @@index([email])
 }
@@ -360,8 +380,10 @@ model Workspace {
   insuredMembers      InsuredMember[]
   insuranceClaims     InsuranceClaim[]
   vehicles            Vehicle[]
+  vehicleDocuments    VehicleDocument[]
   hospitalizations    Hospitalization[]
   notifications       Notification[]
+  attachments         Attachment[]
   stockWishlist       StockWishlist[]
   auditLogs           AuditLog[]
 
@@ -463,6 +485,7 @@ model Contact {
   lenderLoans        Loan[]            @relation("LoanLenderContact")
   insuredMemberships InsuredMember[]   @relation("InsuredMemberContact")
   ownedVehicles      Vehicle[]         @relation("VehicleOwner")
+  vehiclesBought     Vehicle[]         @relation("VehicleDisposalBuyer")
   hospitalizations   Hospitalization[] @relation("HospitalizationPatient")
 
   @@index([workspaceId, active])
@@ -1181,6 +1204,8 @@ model InvestmentReminder {
   leaseSchedule          LeasePaymentSchedule? @relation("ReminderLeaseSchedule", fields: [leaseScheduleId], references: [id], onDelete: Cascade)
   cardStatementId        String?
   cardStatement          CardStatement?        @relation("ReminderCardStatement", fields: [cardStatementId], references: [id], onDelete: Cascade)
+  vehicleDocumentId      String?
+  vehicleDocument        VehicleDocument?      @relation("ReminderVehicleDocument", fields: [vehicleDocumentId], references: [id], onDelete: Cascade)
   kind                   ReminderKind
   dueDate                DateTime              @db.Date
   amount                 Decimal?              @db.Decimal(14, 2)
@@ -1195,6 +1220,7 @@ model InvestmentReminder {
   @@index([investmentId])
   @@index([insuredMemberId])
   @@index([loanId])
+  @@index([vehicleDocumentId])
 }
 
 model InsuredMember {
@@ -1330,13 +1356,116 @@ model Vehicle {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
-  insurances   Investment[]     @relation("VehicleInsurance")
-  loans        Loan[]           @relation("VehicleLoan")
-  claims       InsuranceClaim[] @relation("VehicleClaims")
-  transactions Transaction[]    @relation("VehicleTransaction")
+  // Disposal — set when the vehicle leaves the household (sold / exchanged
+  // / scrapped / gifted / written off). `active` is also flipped to false
+  // at the same time; this block answers "what happened to it?". For
+  // EXCHANGED disposals, `replacedById` points at the new vehicle that
+  // took its place. For SOLD / GIFTED, `disposalContactId` is the buyer
+  // or recipient (a workspace Contact).
+  disposedAt        DateTime?
+  disposalKind      VehicleDisposalKind?
+  disposalAmount    Decimal?             @db.Decimal(14, 2)
+  disposalContactId String?
+  disposalContact   Contact?             @relation("VehicleDisposalBuyer", fields: [disposalContactId], references: [id], onDelete: SetNull)
+  replacedById      String?
+  replacedBy        Vehicle?             @relation("VehicleReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces          Vehicle[]            @relation("VehicleReplacement")
+
+  insurances   Investment[]      @relation("VehicleInsurance")
+  loans        Loan[]            @relation("VehicleLoan")
+  claims       InsuranceClaim[]  @relation("VehicleClaims")
+  transactions Transaction[]     @relation("VehicleTransaction")
+  documents    VehicleDocument[]
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerContactId])
+  @@index([disposalContactId])
+  @@index([replacedById])
+}
+
+model VehicleDocument {
+  id        String              @id @default(uuid())
+  workspaceId String
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  vehicleId String
+  vehicle   Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  kind      VehicleDocumentKind
+  label     String? // free-form (e.g. "RC for new card", "PUC Bangalore")
+  number    String? // document reference number printed on the doc
+  issuedAt  DateTime?
+  expiryAt  DateTime? // the date that drives renewal reminders
+  notes     String?
+  // Legacy inline attachment columns — kept for one release while the
+  // generic Attachment model takes over. After backfill these are
+  // read-only mirrors; new uploads only land in Attachment.
+  attachmentKey      String?
+  attachmentFilename String?
+  attachmentMimeType String?
+  attachmentSize     Int?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  reminders InvestmentReminder[] @relation("ReminderVehicleDocument")
+
+  @@index([workspaceId, expiryAt])
+  @@index([vehicleId])
+  @@index([workspaceId, kind])
+}
+
+//
+// ATTACHMENTS — polymorphic file metadata for every domain that needs
+// uploads (vehicle docs, insurance policy scans, card statements,
+// expense receipts, crop bills, loan documents, income proofs, …).
+//
+// The owner pointer (ownerKind + ownerId) is a soft FK. Referential
+// integrity is enforced at the API layer (verify the parent row, then
+// the workspaceId, then the S3 key prefix). Doing it this way keeps
+// new owner kinds plug-and-play: add the enum value + a row in
+// src/lib/attachments.ts and you're done — no schema migration needed.
+//
+
+enum AttachmentOwnerKind {
+  VEHICLE_DOCUMENT
+  INSURANCE_POLICY
+  CARD_STATEMENT
+  TRANSACTION_RECEIPT
+  CROP_BATCH_BILL
+  LOAN_DOCUMENT
+  INCOME_PROOF
+}
+
+model Attachment {
+  id          String              @id @default(uuid())
+  workspaceId String
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  ownerKind   AttachmentOwnerKind
+  ownerId     String
+
+  // S3 bucket-relative key. Globally unique so a deleted-and-recreated
+  // row can't collide with a stale presigned URL.
+  s3Key       String              @unique
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  // SHA-256 of the object body, optional. Populated by the client when
+  // it can; used to detect S3-side corruption / silent re-writes.
+  checksum    String?
+
+  // Audit: WHO uploaded this, and (if applicable) who archived it.
+  uploadedByUserId String
+  uploadedBy       User      @relation("AttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  uploadedAt       DateTime  @default(now())
+
+  archivedAt       DateTime?
+  archivedByUserId String?
+  archivedBy       User?     @relation("AttachmentArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, ownerKind, ownerId, archivedAt])
+  @@index([workspaceId, uploadedByUserId])
 }
 
 //

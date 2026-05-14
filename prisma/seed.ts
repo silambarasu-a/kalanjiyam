@@ -21,6 +21,7 @@ const DEFAULT_CATEGORIES: CategoryDef[] = [
   { name: "Interest", types: [TransactionType.INCOME], group: "Income" },
   { name: "Agri Income", types: [TransactionType.INCOME], group: "Income" },
   { name: "Lease Income", types: [TransactionType.INCOME], group: "Income" },
+  { name: "Vehicle Sale", types: [TransactionType.INCOME], group: "Income" },
   { name: "Other Income", types: [TransactionType.INCOME], group: "Income" },
 
   // Expense

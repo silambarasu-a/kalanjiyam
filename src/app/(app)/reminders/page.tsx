@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
@@ -28,11 +29,32 @@ type Reminder = {
     | "INSURANCE_PREMIUM"
     | "LEASE_PAYMENT"
     | "LOAN_EMI"
-    | "CARD_STATEMENT";
+    | "CARD_STATEMENT"
+    | "VEHICLE_DOC_RENEWAL";
   dueDate: string;
   amount: number | null;
   status: "UPCOMING" | "CONFIRMED" | "SKIPPED" | "MISSED";
   investment: { id: string; name: string; kind: string; premiumAmount: number | null } | null;
+  vehicleDocument: {
+    id: string;
+    kind: "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER";
+    label: string | null;
+    vehicleId: string;
+    vehicleName: string | null;
+    registrationNo: string | null;
+  } | null;
+};
+
+const VEHICLE_DOC_KIND_LABEL: Record<
+  "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER",
+  string
+> = {
+  RC: "RC book",
+  FC: "Fitness Certificate",
+  PUC: "Pollution (PUC)",
+  ROAD_TAX: "Road tax",
+  INSURANCE_COPY: "Insurance copy",
+  OTHER: "Vehicle document",
 };
 type Account = {
   id: string;
@@ -133,6 +155,48 @@ function ReminderRow({
   reminder: Reminder;
   onConfirm: () => void;
 }) {
+  // Vehicle document renewals (FC / PUC / Road Tax / etc.) are expiry
+  // trackers, not payments — no Confirm dialog. Render with a link to
+  // the vehicle so the user can update the doc with the new expiry.
+  if (reminder.kind === "VEHICLE_DOC_RENEWAL" && reminder.vehicleDocument) {
+    const doc = reminder.vehicleDocument;
+    const overdue = new Date(reminder.dueDate) < new Date();
+    const label = doc.label ?? VEHICLE_DOC_KIND_LABEL[doc.kind];
+    const vehicleLabel = doc.vehicleName ?? doc.registrationNo ?? "vehicle";
+    return (
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Clock
+          className={`h-4 w-4 shrink-0 ${overdue ? "text-destructive" : "text-primary"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">
+            {label} · {vehicleLabel}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {overdue ? "Expired" : "Expires"} {formatDate(reminder.dueDate)}
+          </div>
+        </div>
+        <Link href={`/vehicles/${doc.vehicleId}`}>
+          <Button size="sm" variant="outline">
+            Open vehicle
+          </Button>
+        </Link>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={async () => {
+            if (!confirm("Skip this reminder?")) return;
+            await fetch(`/api/reminders/${reminder.id}/skip`, { method: "POST" });
+            globalMutate("/api/reminders?status=UPCOMING");
+          }}
+          aria-label="Skip"
+        >
+          <X className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  }
+
   const amount = reminder.amount ?? reminder.investment?.premiumAmount ?? null;
   const overdue = new Date(reminder.dueDate) < new Date();
   return (

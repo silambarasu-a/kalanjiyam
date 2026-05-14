@@ -32,6 +32,15 @@ export async function GET(request: Request) {
       take: 100,
       include: {
         investment: { select: { id: true, name: true, kind: true, premiumAmount: true } },
+        vehicleDocument: {
+          select: {
+            id: true,
+            kind: true,
+            label: true,
+            vehicleId: true,
+            vehicle: { select: { id: true, name: true, registrationNo: true } },
+          },
+        },
       },
     });
 
@@ -49,6 +58,16 @@ export async function GET(request: Request) {
               kind: r.investment.kind,
               premiumAmount:
                 r.investment.premiumAmount == null ? null : Number(r.investment.premiumAmount),
+            }
+          : null,
+        vehicleDocument: r.vehicleDocument
+          ? {
+              id: r.vehicleDocument.id,
+              kind: r.vehicleDocument.kind,
+              label: r.vehicleDocument.label,
+              vehicleId: r.vehicleDocument.vehicleId,
+              vehicleName: r.vehicleDocument.vehicle?.name ?? null,
+              registrationNo: r.vehicleDocument.vehicle?.registrationNo ?? null,
             }
           : null,
       })),

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { cropUpdateSchema } from "@/lib/validators-domain";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -59,7 +60,16 @@ export async function DELETE(
         { status: 400 }
       );
     }
-    await prisma.crop.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "CROP_BATCH_BILL",
+        ownerId: id,
+        userId: ctx.userId,
+        tx,
+      });
+      await tx.crop.delete({ where: { id } });
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

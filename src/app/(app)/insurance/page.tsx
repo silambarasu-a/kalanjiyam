@@ -10,6 +10,14 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { InsurerPicker } from "@/components/ui/insurer-picker";
 import {
+  EMPTY_INSURANCE_EXTRAS,
+  buildInsuranceExtraPayload,
+  incompleteMemberRows,
+  InsurancePolicyExtrasFields,
+  submitPolicyMembers,
+  type InsurancePolicyExtras,
+} from "@/components/insurance/policy-extras-fields";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -249,17 +257,6 @@ const POLICY_TYPES: { value: PolicyType; label: string }[] = [
 
 const FREQUENCIES = ["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"];
 
-type DraftMember = {
-  contactId: string;
-  premiumAmount: string;
-  role: "INSURED" | "BENEFICIARY";
-  sharePercent: string;
-};
-
-function isLifeFamily(t: PolicyType): boolean {
-  return t === "LIFE" || t === "TERM" || t === "ULIP" || t === "ENDOWMENT";
-}
-
 function NewPolicyDialog({
   open,
   onClose,
@@ -279,12 +276,7 @@ function NewPolicyDialog({
   const [maturityAt, setMaturityAt] = useState("");
   const [nominee, setNominee] = useState("");
   const [notes, setNotes] = useState("");
-  const [members, setMembers] = useState<DraftMember[]>([]);
-  const [vehicleId, setVehicleId] = useState<string>("");
-  const [policyTermYears, setPolicyTermYears] = useState("");
-  const [premiumPayingTermYears, setPremiumPayingTermYears] = useState("");
-  const [maturityValue, setMaturityValue] = useState("");
-  const [bonusAccrued, setBonusAccrued] = useState("");
+  const [extras, setExtras] = useState<InsurancePolicyExtras>(EMPTY_INSURANCE_EXTRAS);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -314,12 +306,7 @@ function NewPolicyDialog({
     setMaturityAt("");
     setNominee("");
     setNotes("");
-    setMembers([]);
-    setVehicleId("");
-    setPolicyTermYears("");
-    setPremiumPayingTermYears("");
-    setMaturityValue("");
-    setBonusAccrued("");
+    setExtras(EMPTY_INSURANCE_EXTRAS);
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open]);
@@ -334,27 +321,15 @@ function NewPolicyDialog({
   })();
 
   // Any partially-filled member row is a red flag — better to bail
-  // early than save the policy + silently drop those rows. This is the
-  // bug we hit: a user typed a premium on a row without picking a
-  // contact, expected the row to save, and it disappeared.
-  const incompleteMembers = members
-    .map((m, idx) => ({ m, idx }))
-    .filter(({ m }) => {
-      if (!m.contactId) {
-        // Row has any per-row data → it was clearly intended to save.
-        return !!(m.premiumAmount || m.sharePercent);
-      }
-      // Contact picked but role-specific field missing.
-      if (m.role === "BENEFICIARY" && !m.sharePercent) return true;
-      return false;
-    });
+  // early than save the policy + silently drop those rows.
+  const incompleteMembers = incompleteMemberRows(extras.members);
 
   async function submit() {
     setError(null);
     if (incompleteMembers.length > 0) {
       const rows = incompleteMembers.map(({ idx }) => `#${idx + 1}`).join(", ");
       setError(
-        `Member ${rows} ${incompleteMembers.length === 1 ? "is" : "are"} missing required fields — pick a contact${members.some((m) => m.role === "BENEFICIARY" && !m.sharePercent) ? " and share %" : ""}, or remove the row.`,
+        `Member ${rows} ${incompleteMembers.length === 1 ? "is" : "are"} missing required fields — pick a contact${extras.members.some((m) => m.role === "BENEFICIARY" && !m.sharePercent) ? " and share %" : ""}, or remove the row.`,
       );
       return;
     }
@@ -375,20 +350,9 @@ function NewPolicyDialog({
         maturityAt: maturityAt || undefined,
         nominee: nominee.trim() || undefined,
         notes: notes.trim() || undefined,
-        vehicleId: policyType === "VEHICLE" && vehicleId ? vehicleId : undefined,
-        // Life-family corporate fields — only sent when relevant.
-        policyTermYears:
-          isLifeFamily(policyType) && policyTermYears
-            ? Number(policyTermYears)
-            : undefined,
-        premiumPayingTermYears:
-          isLifeFamily(policyType) && premiumPayingTermYears
-            ? Number(premiumPayingTermYears)
-            : undefined,
-        maturityValue:
-          isLifeFamily(policyType) && maturityValue ? Number(maturityValue) : undefined,
-        bonusAccrued:
-          isLifeFamily(policyType) && bonusAccrued ? Number(bonusAccrued) : undefined,
+        // Vehicle picker, life corporate fields, vehicle coverage —
+        // shared with the transaction-dialog INSURANCE branch.
+        ...buildInsuranceExtraPayload(extras, policyType),
         // No transaction is created — this records an existing policy.
         isExisting: true,
       };
@@ -404,33 +368,14 @@ function NewPolicyDialog({
       }
       const policyId = body.id as string;
 
-      // Add covered members. Each call is independent — if one fails we
-      // still keep the policy and surface a partial-success error so the
-      // user can retry on the detail page.
-      const memberPayloads = members
-        .filter((m) => m.contactId)
-        .map((m) => ({
-          contactId: m.contactId,
-          premiumAmount: m.premiumAmount ? Number(m.premiumAmount) : undefined,
-          premiumFrequency: m.premiumAmount ? premiumFrequency : undefined,
-          role: m.role,
-          sharePercent:
-            m.role === "BENEFICIARY" && m.sharePercent
-              ? Number(m.sharePercent)
-              : undefined,
-        }));
-      const memberErrors: string[] = [];
-      for (const mp of memberPayloads) {
-        const mr = await fetch(`/api/insurance/${policyId}/members`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(mp),
-        });
-        if (!mr.ok) {
-          const mb = await mr.json().catch(() => ({}));
-          memberErrors.push(mb.error ?? "Failed to add a member");
-        }
-      }
+      // Add covered members / beneficiaries. Each call is independent —
+      // partial success surfaces an error and leaves the policy in
+      // place so the user can finish on the detail page.
+      const memberErrors = await submitPolicyMembers(
+        policyId,
+        extras.members,
+        premiumFrequency,
+      );
 
       globalMutate("/api/insurance");
       if (memberErrors.length > 0) {
@@ -527,229 +472,14 @@ function NewPolicyDialog({
             <AmountInput value={sumAssured} onChange={setSumAssured} placeholder="0" />
           </label>
 
-          {policyType === "VEHICLE" && (
-            <label className="block">
-              <span className="text-xs font-medium">Vehicle covered</span>
-              <select
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                value={vehicleId}
-                onChange={(e) => setVehicleId(e.target.value)}
-              >
-                <option value="">— pick a vehicle —</option>
-                {vehicles.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                    {v.registrationNo ? ` · ${v.registrationNo}` : ""} (
-                    {v.kind.toLowerCase()})
-                  </option>
-                ))}
-              </select>
-              {vehicles.length === 0 && (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  No vehicles yet.{" "}
-                  <Link href="/vehicles" className="underline">
-                    Add a vehicle
-                  </Link>{" "}
-                  first.
-                </p>
-              )}
-            </label>
-          )}
-
-          {isLifeFamily(policyType) && (
-            <div className="rounded-md border bg-muted/30 p-3 space-y-3">
-              <div>
-                <div className="text-xs font-medium">Policy schedule</div>
-                <div className="text-[10px] text-muted-foreground">
-                  Corporate fields for life-family policies. All optional.
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs font-medium">Policy term (years)</span>
-                  <Input
-                    inputMode="numeric"
-                    value={policyTermYears}
-                    onChange={(e) =>
-                      setPolicyTermYears(e.target.value.replace(/\D/g, "").slice(0, 3))
-                    }
-                    placeholder="e.g. 20"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">Premium-paying term</span>
-                  <Input
-                    inputMode="numeric"
-                    value={premiumPayingTermYears}
-                    onChange={(e) =>
-                      setPremiumPayingTermYears(
-                        e.target.value.replace(/\D/g, "").slice(0, 3),
-                      )
-                    }
-                    placeholder="e.g. 10"
-                  />
-                </label>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs font-medium">Maturity value</span>
-                  <AmountInput
-                    value={maturityValue}
-                    onChange={setMaturityValue}
-                    placeholder="0"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-medium">Bonus accrued</span>
-                  <AmountInput
-                    value={bonusAccrued}
-                    onChange={setBonusAccrued}
-                    placeholder="0"
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-md border bg-muted/30 p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs font-medium">
-                  {isLifeFamily(policyType) ? "Beneficiaries" : "Covered members"}
-                </div>
-                <div className="text-[10px] text-muted-foreground">
-                  {isLifeFamily(policyType)
-                    ? "People who receive the benefit on maturity / claim. Shares must sum to ≤ 100%."
-                    : "Family / individuals on this policy. Per-member premium is optional — leave blank to share the policy premium."}
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  setMembers((m) => [
-                    ...m,
-                    {
-                      contactId: "",
-                      premiumAmount: "",
-                      role: isLifeFamily(policyType) ? "BENEFICIARY" : "INSURED",
-                      sharePercent: "",
-                    },
-                  ])
-                }
-                disabled={contacts.length === 0}
-                className="gap-1"
-              >
-                <Plus className="h-3 w-3" /> Add {isLifeFamily(policyType) ? "beneficiary" : "member"}
-              </Button>
-            </div>
-            {contacts.length === 0 ? (
-              <p className="mt-2 text-xs text-muted-foreground">
-                No contacts yet.{" "}
-                <Link href="/contacts" className="underline">
-                  Add family members on Contacts
-                </Link>
-                , then re-open this dialog.
-              </p>
-            ) : members.length === 0 ? (
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                None added. You can add them later from the policy detail page too.
-              </p>
-            ) : (
-              <div className="mt-2 space-y-2">
-                {members.map((m, idx) => {
-                  const usedIds = new Set(
-                    members.map((x, i) => (i === idx ? "" : x.contactId)).filter(Boolean),
-                  );
-                  const isIncomplete =
-                    (!m.contactId && (m.premiumAmount || m.sharePercent)) ||
-                    (m.contactId && m.role === "BENEFICIARY" && !m.sharePercent);
-                  return (
-                    <div
-                      key={idx}
-                      className={`flex items-start gap-2 ${isIncomplete ? "rounded border border-destructive/40 bg-destructive/5 p-2" : ""}`}
-                    >
-                      <select
-                        className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
-                        value={m.contactId}
-                        onChange={(e) =>
-                          setMembers((all) =>
-                            all.map((x, i) =>
-                              i === idx ? { ...x, contactId: e.target.value } : x,
-                            ),
-                          )
-                        }
-                      >
-                        <option value="">Select contact…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id} disabled={usedIds.has(c.id)}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      {m.role === "BENEFICIARY" ? (
-                        <div className="w-32">
-                          <Input
-                            inputMode="decimal"
-                            value={m.sharePercent}
-                            onChange={(e) =>
-                              setMembers((all) =>
-                                all.map((x, i) =>
-                                  i === idx
-                                    ? { ...x, sharePercent: e.target.value }
-                                    : x,
-                                ),
-                              )
-                            }
-                            placeholder="Share %"
-                          />
-                        </div>
-                      ) : (
-                        <div className="w-40">
-                          <AmountInput
-                            value={m.premiumAmount}
-                            onChange={(v) =>
-                              setMembers((all) =>
-                                all.map((x, i) =>
-                                  i === idx ? { ...x, premiumAmount: v } : x,
-                                ),
-                              )
-                            }
-                            placeholder="Own premium"
-                          />
-                        </div>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() =>
-                          setMembers((all) => all.filter((_, i) => i !== idx))
-                        }
-                        title="Remove"
-                      >
-                        ×
-                      </Button>
-                    </div>
-                  );
-                })}
-                {isLifeFamily(policyType) && members.length > 0 && (
-                  <p className="text-[10px] text-muted-foreground">
-                    Total beneficiary share:{" "}
-                    {members
-                      .reduce(
-                        (a, m) =>
-                          a + (m.role === "BENEFICIARY" ? Number(m.sharePercent || 0) : 0),
-                        0,
-                      )
-                      .toFixed(2)}
-                    %
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
+          <InsurancePolicyExtrasFields
+            policyType={policyType}
+            premiumFrequency={premiumFrequency}
+            value={extras}
+            onChange={setExtras}
+            contacts={contacts}
+            vehicles={vehicles}
+          />
 
           <div className="grid grid-cols-3 gap-3">
             <label className="block">
