@@ -220,6 +220,101 @@ export async function getDashboardStats(args: {
   };
 }
 
+type LiquidKind = "BANK" | "CASH" | "WALLET";
+
+export type LiquidAccountEntry = {
+  id: string;
+  name: string;
+  balance: number;
+};
+
+export type LiquidByMemberRow = {
+  userId: string;
+  name: string;
+  email: string | null;
+  kinds: Record<LiquidKind, { accounts: LiquidAccountEntry[]; subtotal: number }>;
+  total: number;
+};
+
+export type LiquidByMember = {
+  rows: LiquidByMemberRow[];
+  grandTotal: number;
+};
+
+/**
+ * Per-member breakdown of liquid balances — expanded view under the
+ * dashboard's Liquid tile. Only BANK/CASH/WALLET accounts that are
+ * active and have an `ownerUserId` are included; unowned/contact-owned
+ * accounts are surfaced via the tile's headline total minus this
+ * function's `grandTotal` (rendered as "Unassigned" in the UI).
+ *
+ * Shape: a fixed 3-column layout grouped by account kind. Each cell
+ * lists the member's individual accounts of that kind with their
+ * balances; this stays stable regardless of which banks different
+ * members use.
+ */
+export async function getLiquidByMember(args: {
+  workspaceId: string;
+}): Promise<LiquidByMember> {
+  const accounts = await prisma.account.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      active: true,
+      kind: { in: ["BANK", "CASH", "WALLET"] },
+      ownerUserId: { not: null },
+    },
+    select: {
+      id: true,
+      name: true,
+      kind: true,
+      ownerUserId: true,
+      ownerUser: { select: { id: true, name: true, email: true } },
+    },
+  });
+
+  const balances = await Promise.all(
+    accounts.map((a) => computeAccountBalance(a.id)),
+  );
+  const balanceById = new Map(balances.map((b) => [b.accountId, b.balance]));
+
+  const byUser = new Map<string, LiquidByMemberRow>();
+  for (const a of accounts) {
+    if (!a.ownerUser) continue;
+    const userId = a.ownerUser.id;
+    let row = byUser.get(userId);
+    if (!row) {
+      row = {
+        userId,
+        name: a.ownerUser.name ?? a.ownerUser.email ?? "Unnamed",
+        email: a.ownerUser.email,
+        kinds: {
+          BANK: { accounts: [], subtotal: 0 },
+          CASH: { accounts: [], subtotal: 0 },
+          WALLET: { accounts: [], subtotal: 0 },
+        },
+        total: 0,
+      };
+      byUser.set(userId, row);
+    }
+    const kind = a.kind as LiquidKind;
+    const balance = balanceById.get(a.id) ?? 0;
+    row.kinds[kind].accounts.push({ id: a.id, name: a.name, balance });
+    row.kinds[kind].subtotal += balance;
+    row.total += balance;
+  }
+
+  const rows = [...byUser.values()];
+  for (const row of rows) {
+    (Object.keys(row.kinds) as LiquidKind[]).forEach((k) => {
+      row.kinds[k].accounts.sort((x, y) => y.balance - x.balance);
+    });
+  }
+  rows.sort((a, b) => b.total - a.total);
+
+  const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
+  return { rows, grandTotal };
+}
+
 /**
  * Cashflow — upcoming dues + settled-this-month list + monthly totals.
  * Heavier: pulls payment history from every source (cards, loans,

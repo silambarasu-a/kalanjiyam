@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
   Bell,
+  ChevronDown,
   CreditCard,
   Landmark,
   Wallet2,
@@ -123,6 +124,33 @@ type MaturingPolicy = {
   sumAssured: number | null;
 };
 
+type LiquidKind = "BANK" | "CASH" | "WALLET";
+
+const LIQUID_KIND_LABEL: Record<LiquidKind, string> = {
+  BANK: "Bank",
+  CASH: "Cash",
+  WALLET: "Wallet",
+};
+
+const LIQUID_KIND_ORDER: LiquidKind[] = ["BANK", "CASH", "WALLET"];
+
+type LiquidByMember = {
+  rows: Array<{
+    userId: string;
+    name: string;
+    email: string | null;
+    kinds: Record<
+      LiquidKind,
+      {
+        accounts: Array<{ id: string; name: string; balance: number }>;
+        subtotal: number;
+      }
+    >;
+    total: number;
+  }>;
+  grandTotal: number;
+};
+
 type RecentTxn = {
   id: string;
   type: "INCOME" | "EXPENSE" | "INVESTMENT" | "HAND_LOAN" | "TRANSFER";
@@ -230,6 +258,8 @@ export default function DashboardPage() {
   const investedCurrentLive =
     stats != null ? stats.investedCurrent + stockLiveGain : null;
 
+  const [liquidExpanded, setLiquidExpanded] = useState(false);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -277,29 +307,11 @@ export default function DashboardPage() {
             )
           }
         />
-        <BigStat
-          label="Liquid"
-          value={stats ? formatINR(stats.liquid) : "—"}
-          change={
-            stats &&
-            cashflow &&
-            (stats.cardOutstanding > 0 ||
-              cashflow.currentMonthNonCardDueRemaining > 0)
-              ? (() => {
-                  const net =
-                    stats.liquid -
-                    stats.cardOutstanding -
-                    cashflow.currentMonthNonCardDueRemaining;
-                  const sign = net < 0 ? "−" : "";
-                  return {
-                    value: `${sign}${formatINR(Math.abs(net))} after card + this month's dues`,
-                    tone: net >= 0 ? "gain" : "loss",
-                  } as const;
-                })()
-              : undefined
-          }
-          hint="Bank + cash + wallet"
-          icon={<Landmark className="h-5 w-5" />}
+        <LiquidTile
+          stats={stats}
+          cashflow={cashflow}
+          expanded={liquidExpanded}
+          onToggle={() => setLiquidExpanded((v) => !v)}
         />
         <BigStat
           label="Market Investments"
@@ -330,6 +342,14 @@ export default function DashboardPage() {
           icon={<ArrowDownLeft className="h-5 w-5" />}
         />
       </div>
+
+      {liquidExpanded && (
+        <div className="hidden md:block">
+          <LiquidBreakdownPanel
+            workspaceLiquidTotal={stats?.liquid ?? null}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
         <div className="space-y-4">
@@ -1002,6 +1022,358 @@ function SmallCard({
     >
       {inner}
     </Link>
+  );
+}
+
+function LiquidTile({
+  stats,
+  cashflow,
+  expanded,
+  onToggle,
+}: {
+  stats: Stats | undefined;
+  cashflow: Cashflow | undefined;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const change =
+    stats &&
+    cashflow &&
+    (stats.cardOutstanding > 0 ||
+      cashflow.currentMonthNonCardDueRemaining > 0)
+      ? (() => {
+          const net =
+            stats.liquid -
+            stats.cardOutstanding -
+            cashflow.currentMonthNonCardDueRemaining;
+          const sign = net < 0 ? "−" : "";
+          return {
+            value: `${sign}${formatINR(Math.abs(net))} after card + this month's dues`,
+            tone: net >= 0 ? ("gain" as const) : ("loss" as const),
+          };
+        })()
+      : undefined;
+  const changeColor =
+    change?.tone === "gain"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : change?.tone === "loss"
+        ? "text-destructive"
+        : "text-muted-foreground";
+
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls="liquid-breakdown"
+        className="group relative w-full text-left p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Liquid
+          </div>
+          <div className="text-muted-foreground">
+            <Landmark className="h-5 w-5" />
+          </div>
+        </div>
+        <div className="mt-2 text-2xl font-semibold text-foreground">
+          {stats ? formatINR(stats.liquid) : "—"}
+        </div>
+        {change && (
+          <div
+            className={`mt-1 text-xs font-medium tabular-nums ${changeColor}`}
+          >
+            {change.value}
+          </div>
+        )}
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          Bank + cash + wallet
+        </div>
+        <ChevronDown
+          className={`absolute bottom-3 right-3 h-4 w-4 text-muted-foreground transition-transform ${
+            expanded ? "rotate-180" : ""
+          }`}
+          aria-hidden="true"
+        />
+      </button>
+      {expanded && (
+        <div className="md:hidden border-t px-5 pb-5 pt-3">
+          <LiquidBreakdownPanel
+            workspaceLiquidTotal={stats?.liquid ?? null}
+            embedded
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiquidBreakdownPanel({
+  workspaceLiquidTotal,
+  embedded = false,
+}: {
+  workspaceLiquidTotal: number | null;
+  embedded?: boolean;
+}) {
+  const { data, error, isLoading } = useSWR<LiquidByMember>(
+    "/api/dashboard/liquid-by-member",
+    fetcher,
+  );
+
+  const unassigned =
+    workspaceLiquidTotal != null && data
+      ? workspaceLiquidTotal - data.grandTotal
+      : 0;
+
+  return (
+    <section
+      id={embedded ? undefined : "liquid-breakdown"}
+      className={
+        embedded
+          ? "space-y-3"
+          : "rounded-xl border bg-card p-5 space-y-4"
+      }
+    >
+      {!embedded && (
+        <div className="flex items-center gap-3">
+          <div className="h-8 w-8 rounded-lg bg-accent text-primary flex items-center justify-center">
+            <Landmark className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold">Liquid by member</div>
+            <div className="text-xs text-muted-foreground">
+              Bank + cash + wallet · grouped by account owner
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="space-y-2">
+          <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </div>
+      )}
+
+      {error && (
+        <div className="text-sm text-destructive">
+          Couldn&apos;t load the breakdown.
+        </div>
+      )}
+
+      {data && data.rows.length === 0 && unassigned <= 0 && (
+        <div className="text-sm text-muted-foreground">
+          No member-owned liquid accounts yet. Assign an owner on an account in{" "}
+          <Link href="/accounts" className="underline">
+            /accounts
+          </Link>
+          .
+        </div>
+      )}
+
+      {data && (data.rows.length > 0 || unassigned > 0) && embedded && (
+        <LiquidBreakdownMobile
+          data={data}
+          unassigned={unassigned}
+          workspaceLiquidTotal={workspaceLiquidTotal}
+        />
+      )}
+
+      {data && (data.rows.length > 0 || unassigned > 0) && !embedded && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th className="text-left font-medium uppercase tracking-wider py-2 pr-3">
+                  Member
+                </th>
+                <th className="text-center font-medium uppercase tracking-wider py-2 px-3">
+                  Bank
+                </th>
+                <th className="text-center font-medium uppercase tracking-wider py-2 px-3">
+                  Cash
+                </th>
+                <th className="text-center font-medium uppercase tracking-wider py-2 px-3">
+                  Wallet
+                </th>
+                <th className="text-right font-medium uppercase tracking-wider py-2 pl-3">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((row) => (
+                <tr
+                  key={row.userId}
+                  className="border-b last:border-b-0 align-top"
+                >
+                  <th
+                    scope="row"
+                    className="py-3 pr-3 text-left font-semibold"
+                  >
+                    {row.name}
+                  </th>
+                  <LiquidKindCell cell={row.kinds.BANK} />
+                  <LiquidKindCell cell={row.kinds.CASH} />
+                  <LiquidKindCell cell={row.kinds.WALLET} />
+                  <td className="py-3 pl-3 text-right font-semibold tabular-nums">
+                    {formatINR(row.total)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              {unassigned > 0 && (
+                <tr className="text-muted-foreground border-t">
+                  <td className="py-2 pr-3">
+                    <div className="text-xs">
+                      Unassigned
+                      <div className="text-[10px]">
+                        Accounts with no owner — set one in{" "}
+                        <Link href="/accounts" className="underline">
+                          /accounts
+                        </Link>
+                      </div>
+                    </div>
+                  </td>
+                  <td colSpan={3} />
+                  <td className="py-2 pl-3 text-right tabular-nums">
+                    {formatINR(unassigned)}
+                  </td>
+                </tr>
+              )}
+              <tr className="border-t">
+                <td className="py-2 pr-3 text-xs uppercase tracking-wider text-muted-foreground">
+                  Total
+                </td>
+                <td colSpan={3} />
+                <td className="py-2 pl-3 text-right font-semibold tabular-nums">
+                  {formatINR((workspaceLiquidTotal ?? data.grandTotal) || 0)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LiquidBreakdownMobile({
+  data,
+  unassigned,
+  workspaceLiquidTotal,
+}: {
+  data: LiquidByMember;
+  unassigned: number;
+  workspaceLiquidTotal: number | null;
+}) {
+  const total = workspaceLiquidTotal ?? data.grandTotal;
+  return (
+    <div className="divide-y">
+      {data.rows.map((row) => (
+        <div key={row.userId} className="py-3 first:pt-0 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="font-semibold">{row.name}</div>
+            <div className="font-semibold tabular-nums whitespace-nowrap">
+              {formatINR(row.total)}
+            </div>
+          </div>
+          {LIQUID_KIND_ORDER.map((kind) => {
+            const cell = row.kinds[kind];
+            if (cell.accounts.length === 0) return null;
+            return (
+              <div key={kind} className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {LIQUID_KIND_LABEL[kind]}
+                </div>
+                <ul className="space-y-1">
+                  {cell.accounts.map((a) => (
+                    <li
+                      key={a.id}
+                      className="flex items-baseline justify-between gap-3 text-xs"
+                    >
+                      <span className="text-muted-foreground truncate">
+                        {a.name}
+                      </span>
+                      <span className="font-medium tabular-nums whitespace-nowrap">
+                        {formatINR(a.balance)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {unassigned > 0 && (
+        <div className="py-3 flex items-baseline justify-between gap-3 text-xs text-muted-foreground">
+          <div>
+            <div>Unassigned</div>
+            <div className="text-[10px]">
+              Accounts with no owner — set one in{" "}
+              <Link href="/accounts" className="underline">
+                /accounts
+              </Link>
+            </div>
+          </div>
+          <span className="tabular-nums whitespace-nowrap">
+            {formatINR(unassigned)}
+          </span>
+        </div>
+      )}
+      <div className="py-3 flex items-center justify-between gap-3">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">
+          Total
+        </span>
+        <span className="text-base font-semibold tabular-nums whitespace-nowrap">
+          {formatINR(total)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function LiquidKindCell({
+  cell,
+}: {
+  cell: {
+    accounts: Array<{ id: string; name: string; balance: number }>;
+    subtotal: number;
+  };
+}) {
+  if (cell.accounts.length === 0) {
+    return <td className="py-3 px-3 text-center text-muted-foreground">—</td>;
+  }
+  return (
+    <td className="py-3 px-3 tabular-nums">
+      <ul className="space-y-1">
+        {cell.accounts.map((a) => (
+          <li
+            key={a.id}
+            className="flex items-baseline justify-between gap-3 text-xs"
+          >
+            <span className="text-muted-foreground truncate">{a.name}</span>
+            <span className="font-medium whitespace-nowrap">
+              {formatINR(a.balance)}
+            </span>
+          </li>
+        ))}
+        {cell.accounts.length > 1 && (
+          <li className="flex items-baseline justify-between gap-3 pt-1 mt-1 border-t text-sm font-semibold">
+            <span className="text-muted-foreground text-xs uppercase tracking-wider">
+              Subtotal
+            </span>
+            <span className="whitespace-nowrap">
+              {formatINR(cell.subtotal)}
+            </span>
+          </li>
+        )}
+      </ul>
+    </td>
   );
 }
 
