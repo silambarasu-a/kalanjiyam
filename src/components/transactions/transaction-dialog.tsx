@@ -34,7 +34,7 @@ import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { CategoryQuickCreateDialog } from "@/components/categories/category-quick-create-dialog";
 import {
   ReceiptStager,
-  uploadReceiptToAttachment,
+  uploadReceiptsToAttachment,
 } from "@/components/transactions/receipt-stager";
 import {
   Dialog,
@@ -91,7 +91,7 @@ type LivestockBatch = {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
 
-// uploadReceiptToAttachment was extracted to
+// uploadReceiptsToAttachment was extracted to
 // @/components/transactions/receipt-stager so the helper can be shared
 // with InvestmentForm / TransferForm / LoanEmiForm without duplication.
 
@@ -382,10 +382,10 @@ function IncomeExpenseForm({
   // creates a VehicleDocument tied to the picked vehicle so the system
   // schedules the next renewal reminder. Receipt PDF can be attached
   // afterwards from either the transaction edit dialog or the doc row.
-  // Staged receipt file — uploaded post-save to the most useful owner
-  // (VehicleDocument > Event > Transaction). Held client-side as a
-  // File until we have the row id to anchor the Attachment.
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  // Staged receipt files — uploaded post-save to the most useful owner
+  // (VehicleDocument > Event > Transaction). Held client-side as
+  // File objects until we have the row id to anchor the Attachment.
+  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   // Per-kind cap is enforced server-side; we duplicate the same table
   // here for friendlier inline validation. Keep in sync with
   // src/lib/attachments.ts ATTACHMENT_POLICY[*].maxMB.
@@ -395,7 +395,7 @@ function IncomeExpenseForm({
   > = {
     VEHICLE_DOCUMENT: 20,
     EVENT_DOCUMENT: 25,
-    TRANSACTION_RECEIPT: 10,
+    TRANSACTION_RECEIPT: 50,
   };
   const [createVehicleDoc, setCreateVehicleDoc] = useState(false);
   const [vehicleDocKind, setVehicleDocKind] = useState<
@@ -694,7 +694,7 @@ function IncomeExpenseForm({
         //     with the doc; visible on /vehicles/<id>).
         //   - Event tagged          → attach to the event.
         //   - Otherwise             → attach to the transaction.
-        if (receiptFile && newTxnId) {
+        if (receiptFiles.length > 0 && newTxnId) {
           const eventId = tagSource.startsWith("event:")
             ? tagSource.slice(6)
             : null;
@@ -713,15 +713,21 @@ function IncomeExpenseForm({
             ownerKind = "TRANSACTION_RECEIPT";
             ownerId = newTxnId;
           }
-          const uploadOk = await uploadReceiptToAttachment({
-            file: receiptFile,
+          const result = await uploadReceiptsToAttachment({
+            files: receiptFiles,
             ownerKind,
             ownerId,
           });
-          if (uploadOk.error) {
-            toast.warning(`Transaction saved, but receipt upload failed: ${uploadOk.error}`);
-          } else {
-            toast.success("Receipt attached");
+          if (result.errors.length > 0) {
+            toast.warning(
+              `Transaction saved, but ${result.errors.length} of ${receiptFiles.length} file(s) failed: ${result.errors.join("; ")}`,
+            );
+          } else if (result.uploaded > 0) {
+            toast.success(
+              result.uploaded === 1
+                ? "Receipt attached"
+                : `${result.uploaded} receipts attached`,
+            );
           }
         }
         await mutateBalances();
@@ -1162,39 +1168,55 @@ function IncomeExpenseForm({
         return (
           <div className="rounded-md border bg-muted/30 p-3 space-y-2">
             <div className="text-xs font-medium">
-              Receipt / supporting file{" "}
+              Receipts / supporting files{" "}
               <span className="font-normal text-muted-foreground">(optional)</span>
             </div>
-            {receiptFile ? (
-              <div className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5 text-xs">
-                <span className="truncate">
-                  {receiptFile.name} ({Math.round(receiptFile.size / 1024)} KB)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setReceiptFile(null)}
-                  className="underline hover:text-foreground shrink-0"
-                >
-                  Remove
-                </button>
-              </div>
-            ) : (
-              <input
-                type="file"
-                accept="image/*,application/pdf"
-                onChange={(e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  if (f && f.size > maxMB * 1_000_000) {
-                    setError(`File is too large (limit ${maxMB} MB for ${destinationHint.split(" (")[0]})`);
-                    return;
-                  }
-                  setReceiptFile(f);
-                }}
-                className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
-              />
+            {receiptFiles.length > 0 && (
+              <ul className="space-y-1">
+                {receiptFiles.map((f, idx) => (
+                  <li
+                    key={`${f.name}-${f.size}-${idx}`}
+                    className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5 text-xs"
+                  >
+                    <span className="truncate">
+                      {f.name} ({Math.round(f.size / 1024)} KB)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReceiptFiles(receiptFiles.filter((_, i) => i !== idx))
+                      }
+                      className="underline hover:text-foreground shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
+            <input
+              type="file"
+              multiple
+              accept="image/*,application/pdf"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                const valid: File[] = [];
+                for (const f of picked) {
+                  if (f.size > maxMB * 1_000_000) {
+                    setError(
+                      `${f.name} is too large (limit ${maxMB} MB for ${destinationHint.split(" (")[0]})`,
+                    );
+                    continue;
+                  }
+                  valid.push(f);
+                }
+                if (valid.length > 0) setReceiptFiles([...receiptFiles, ...valid]);
+                e.target.value = "";
+              }}
+              className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
+            />
             <p className="text-[10px] text-muted-foreground">
-              Will attach to {destinationHint}. Max {maxMB} MB.
+              Will attach to {destinationHint}. Max {maxMB} MB per file.
             </p>
           </div>
         );
@@ -2003,7 +2025,7 @@ function LoanEmiForm({
   const [paidAt, setPaidAt] = useState(today);
   const [accountId, setAccountId] = useState("");
   const [notes, setNotes] = useState("");
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2063,16 +2085,18 @@ function LoanEmiForm({
       globalMutate(
         (k) => typeof k === "string" && k.startsWith("/api/loans"),
       );
-      // Optional receipt — attaches to the auto-created loan-payment
-      // transaction. Failure surfaces as a warning toast.
-      if (receiptFile && body.transactionId) {
-        const result = await uploadReceiptToAttachment({
-          file: receiptFile,
+      // Optional receipts — attach to the auto-created loan-payment
+      // transaction. Failures surface as a warning toast.
+      if (receiptFiles.length > 0 && body.transactionId) {
+        const result = await uploadReceiptsToAttachment({
+          files: receiptFiles,
           ownerKind: "TRANSACTION_RECEIPT",
           ownerId: body.transactionId,
         });
-        if (result.error) {
-          toast.warning(`EMI paid, but receipt upload failed: ${result.error}`);
+        if (result.errors.length > 0) {
+          toast.warning(
+            `EMI paid, but ${result.errors.length} of ${receiptFiles.length} file(s) failed: ${result.errors.join("; ")}`,
+          );
         }
       }
       await mutateBalances();
@@ -2162,8 +2186,8 @@ function LoanEmiForm({
       </p>
 
       <ReceiptStager
-        value={receiptFile}
-        onChange={setReceiptFile}
+        value={receiptFiles}
+        onChange={setReceiptFiles}
         ownerKind="TRANSACTION_RECEIPT"
         destinationHint="Attaches to the auto-created loan-payment transaction."
         onError={setError}
@@ -2268,7 +2292,7 @@ function InvestmentForm({
   // Optional receipt staged before save — attaches to the auto-created
   // BUY/SELL transaction (or the new holding's seed transaction). Edit
   // flows can attach via the transaction edit dialog as before.
-  const [investReceiptFile, setInvestReceiptFile] = useState<File | null>(null);
+  const [investReceiptFiles, setInvestReceiptFiles] = useState<File[]>([]);
   const [newKind, setNewKind] = useState<
     "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
   >("STOCK");
@@ -3159,14 +3183,16 @@ function InvestmentForm({
         return;
       }
       toast.success(action === "BUY" ? "Investment purchase recorded" : "Investment sale recorded");
-      if (investReceiptFile && body.id) {
-        const result = await uploadReceiptToAttachment({
-          file: investReceiptFile,
+      if (investReceiptFiles.length > 0 && body.id) {
+        const result = await uploadReceiptsToAttachment({
+          files: investReceiptFiles,
           ownerKind: "TRANSACTION_RECEIPT",
           ownerId: body.id,
         });
-        if (result.error) {
-          toast.warning(`Saved, but receipt upload failed: ${result.error}`);
+        if (result.errors.length > 0) {
+          toast.warning(
+            `Saved, but ${result.errors.length} of ${investReceiptFiles.length} file(s) failed: ${result.errors.join("; ")}`,
+          );
         }
       }
       await mutateBalances();
@@ -4258,8 +4284,8 @@ function InvestmentForm({
 
       {!creatingNew && (
         <ReceiptStager
-          value={investReceiptFile}
-          onChange={setInvestReceiptFile}
+          value={investReceiptFiles}
+          onChange={setInvestReceiptFiles}
           ownerKind="TRANSACTION_RECEIPT"
           destinationHint="Attaches to the BUY/SELL transaction (broker contract note, mutual-fund statement, etc.)."
           onError={setError}

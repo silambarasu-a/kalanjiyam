@@ -61,7 +61,7 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     entityPath: "transaction-receipts",
     feature: "transactions",
     mime: ["application/pdf", "image/*"],
-    maxMB: 10,
+    maxMB: 50,
     sensitive: false,
   },
   CROP_BATCH_BILL: {
