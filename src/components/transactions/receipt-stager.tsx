@@ -1,12 +1,13 @@
 "use client";
 
+import { useRef } from "react";
 import type { AttachmentOwnerKind } from "@/lib/attachments";
 
 /**
- * Stages a file in React state before the parent row exists. After the
+ * Stages files in React state before the parent row exists. After the
  * row is created (transaction / event / etc.), call
- * `uploadReceiptToAttachment` with the new owner id to run the three-step
- * direct-to-S3 upload.
+ * `uploadReceiptsToAttachment` with the new owner id to run the
+ * three-step direct-to-S3 upload for each file.
  *
  * Re-used from the transaction-dialog so investment / transfer / loan-EMI
  * forms get the same receipt-staging affordance.
@@ -20,7 +21,7 @@ export const RECEIPT_KIND_MAX_MB: Record<
 > = {
   VEHICLE_DOCUMENT: 20,
   EVENT_DOCUMENT: 25,
-  TRANSACTION_RECEIPT: 10,
+  TRANSACTION_RECEIPT: 50,
 };
 
 export async function uploadReceiptToAttachment(args: {
@@ -75,6 +76,26 @@ export async function uploadReceiptToAttachment(args: {
   }
 }
 
+/**
+ * Sequentially uploads each staged file. Returns counts so the caller
+ * can surface a single toast covering full / partial / total failure.
+ */
+export async function uploadReceiptsToAttachment(args: {
+  files: File[];
+  ownerKind: "VEHICLE_DOCUMENT" | "EVENT_DOCUMENT" | "TRANSACTION_RECEIPT";
+  ownerId: string;
+}): Promise<{ uploaded: number; errors: string[] }> {
+  const { files, ownerKind, ownerId } = args;
+  let uploaded = 0;
+  const errors: string[] = [];
+  for (const file of files) {
+    const r = await uploadReceiptToAttachment({ file, ownerKind, ownerId });
+    if (r.error) errors.push(`${file.name}: ${r.error}`);
+    else uploaded++;
+  }
+  return { uploaded, errors };
+}
+
 export function ReceiptStager({
   value,
   onChange,
@@ -82,52 +103,66 @@ export function ReceiptStager({
   destinationHint,
   onError,
 }: {
-  value: File | null;
-  onChange: (file: File | null) => void;
+  value: File[];
+  onChange: (files: File[]) => void;
   /** Used to pick the right size cap for inline validation. */
   ownerKind: keyof typeof RECEIPT_KIND_MAX_MB;
-  /** Friendly description of where the file will land. */
+  /** Friendly description of where the files will land. */
   destinationHint?: string;
   /** Surface validation errors back to the parent form. */
   onError?: (msg: string) => void;
 }) {
   const maxMB = RECEIPT_KIND_MAX_MB[ownerKind];
+  const inputRef = useRef<HTMLInputElement | null>(null);
   return (
     <div className="rounded-md border bg-muted/30 p-3 space-y-2">
       <div className="text-xs font-medium">
-        Receipt / supporting file{" "}
+        Receipts / supporting files{" "}
         <span className="font-normal text-muted-foreground">(optional)</span>
       </div>
-      {value ? (
-        <div className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5 text-xs">
-          <span className="truncate">
-            {value.name} ({Math.round(value.size / 1024)} KB)
-          </span>
-          <button
-            type="button"
-            onClick={() => onChange(null)}
-            className="underline hover:text-foreground shrink-0"
-          >
-            Remove
-          </button>
-        </div>
-      ) : (
-        <input
-          type="file"
-          accept="image/*,application/pdf"
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null;
-            if (f && f.size > maxMB * 1_000_000) {
-              onError?.(`File is too large (limit ${maxMB} MB)`);
-              return;
-            }
-            onChange(f);
-          }}
-          className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
-        />
+      {value.length > 0 && (
+        <ul className="space-y-1">
+          {value.map((f, idx) => (
+            <li
+              key={`${f.name}-${f.size}-${idx}`}
+              className="flex items-center justify-between gap-2 rounded border bg-background px-2 py-1.5 text-xs"
+            >
+              <span className="truncate">
+                {f.name} ({Math.round(f.size / 1024)} KB)
+              </span>
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((_, i) => i !== idx))}
+                className="underline hover:text-foreground shrink-0"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="image/*,application/pdf"
+        onChange={(e) => {
+          const picked = Array.from(e.target.files ?? []);
+          const valid: File[] = [];
+          for (const f of picked) {
+            if (f.size > maxMB * 1_000_000) {
+              onError?.(`${f.name} is too large (limit ${maxMB} MB)`);
+              continue;
+            }
+            valid.push(f);
+          }
+          if (valid.length > 0) onChange([...value, ...valid]);
+          if (inputRef.current) inputRef.current.value = "";
+        }}
+        className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
+      />
       <p className="text-[10px] text-muted-foreground">
-        {destinationHint ?? "Attaches to the saved row."} Max {maxMB} MB.
+        {destinationHint ?? "Attaches to the saved row."} Max {maxMB} MB per file.
       </p>
     </div>
   );

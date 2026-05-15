@@ -447,7 +447,7 @@ export function EditTransactionDialog({
               <AttachmentList
                 ownerKind="TRANSACTION_RECEIPT"
                 ownerId={transaction.id}
-                emptyMessage="No receipts attached. Upload PDF or image (max 10 MB)."
+                emptyMessage="No receipts attached. Upload PDF or image (max 50 MB)."
                 accept="image/*,application/pdf"
               />
             </div>
