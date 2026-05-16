@@ -17,6 +17,14 @@ import {
 } from "@/components/ui/dialog";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
+import {
+  TransactionSplitEditor,
+  recalcEqual,
+  makeEmptySplit,
+  type SplitDraft,
+  type SplitMode,
+  type SplitUnit,
+} from "@/components/transactions/split-rows";
 
 export type EditableTransaction = {
   id: string;
@@ -91,6 +99,13 @@ export function EditTransactionDialog({
   const [editNote, setEditNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Splits state — only meaningful for EXPENSE rows. Hydrated from the
+  // detail GET when the dialog opens; `splitsTouched` guards against
+  // sending a stale [] on PATCH for unrelated edits.
+  const [splits, setSplits] = useState<SplitDraft[]>([]);
+  const [splitsTouched, setSplitsTouched] = useState(false);
+  const [expenseSplitMode, setExpenseSplitMode] = useState<SplitMode>("equal");
+  const [expenseSplitUnit, setExpenseSplitUnit] = useState<SplitUnit>("amount");
 
   // Lookups only fired while the dialog is open. Categories scoped by
   // the transaction's type so the combobox doesn't surface income
@@ -140,6 +155,32 @@ export function EditTransactionDialog({
   );
   const events = eventsData?.events ?? [];
 
+  // Splits + contacts only fetched for EXPENSE rows.
+  const isExpense = txType === "EXPENSE";
+  const { data: contactsData } = useSWR<{ contacts: { id: string; name: string }[] }>(
+    open && isExpense ? "/api/contacts" : null,
+    fetcher,
+  );
+  const contacts = contactsData?.contacts ?? [];
+  const { data: detailData } = useSWR<{
+    transaction: {
+      splits: Array<{
+        id: string;
+        contact: { id: string; name: string };
+        amount: number;
+        sharePercent: number | null;
+        isRecoverable: boolean;
+        notes: string | null;
+      }>;
+    };
+  }>(
+    open && isExpense && transaction?.id
+      ? `/api/transactions/${transaction.id}`
+      : null,
+    fetcher,
+  );
+  const loadedSplits = detailData?.transaction.splits ?? null;
+
   // Re-seed the form whenever a different transaction is loaded.
   const txId = transaction?.id;
   useEffect(() => {
@@ -159,9 +200,35 @@ export function EditTransactionDialog({
     );
     setEditNote("");
     setError(null);
+    setSplits([]);
+    setSplitsTouched(false);
+    setExpenseSplitMode("custom");
+    setExpenseSplitUnit("amount");
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txId]);
+
+  // Hydrate splits once the detail GET resolves.
+  useEffect(() => {
+    if (!loadedSplits) return;
+    if (splitsTouched) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- hydration from SWR */
+    setSplits(
+      loadedSplits.map((s) => ({
+        contactId: s.contact.id,
+        amount: s.amount,
+        sharePercent: s.sharePercent,
+        isRecoverable: s.isRecoverable,
+        notes: s.notes,
+      })),
+    );
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [loadedSplits, splitsTouched]);
+
+  function patchSplits(next: SplitDraft[]) {
+    setSplits(next);
+    setSplitsTouched(true);
+  }
 
   async function submit() {
     if (!transaction) return;
@@ -219,6 +286,26 @@ export function EditTransactionDialog({
               }
             : {}),
           editNote: editNote.trim() || undefined,
+          ...(splitsTouched && isExpense
+            ? {
+                splits: (() => {
+                  const totalNum = parseFloat(amount) || 0;
+                  const finalized =
+                    expenseSplitMode === "equal"
+                      ? recalcEqual(splits, totalNum)
+                      : splits;
+                  return finalized
+                    .filter((s) => s.contactId && s.amount > 0)
+                    .map((s) => ({
+                      contactId: s.contactId,
+                      amount: s.amount,
+                      sharePercent: s.sharePercent,
+                      isRecoverable: s.isRecoverable,
+                      notes: s.notes ?? undefined,
+                    }));
+                })(),
+              }
+            : {}),
         }),
       });
       const body = await res.json().catch(() => ({}) as { error?: string });
@@ -427,6 +514,52 @@ export function EditTransactionDialog({
                 ]}
               />
             </label>
+            {isExpense && (
+              <div className="rounded-md border bg-card p-3 space-y-2">
+                {splits.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const totalNum = parseFloat(amount) || 0;
+                      setExpenseSplitMode("equal");
+                      setExpenseSplitUnit("amount");
+                      patchSplits(recalcEqual([makeEmptySplit()], totalNum));
+                    }}
+                    className="w-full text-left text-sm font-medium hover:underline"
+                  >
+                    + Split this expense with contacts?
+                  </button>
+                ) : (
+                  <>
+                    <TransactionSplitEditor
+                      totalAmount={parseFloat(amount) || 0}
+                      contacts={contacts}
+                      splits={
+                        expenseSplitMode === "equal"
+                          ? recalcEqual(splits, parseFloat(amount) || 0)
+                          : splits
+                      }
+                      onChange={patchSplits}
+                      mode={expenseSplitMode}
+                      onModeChange={setExpenseSplitMode}
+                      unit={expenseSplitUnit}
+                      onUnitChange={setExpenseSplitUnit}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        patchSplits([]);
+                        setExpenseSplitMode("equal");
+                        setExpenseSplitUnit("amount");
+                      }}
+                      className="text-xs text-muted-foreground hover:underline"
+                    >
+                      Clear splits
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
             <label className="block">
               <span className="text-xs font-medium">
                 Edit note <span className="text-muted-foreground">(optional)</span>

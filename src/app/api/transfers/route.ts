@@ -250,7 +250,7 @@ export async function POST(request: Request) {
           });
           memberChargeId = mc.id;
         }
-        await tx.transaction.create({
+        const txn = await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
             type: TransactionType.TRANSFER,
@@ -262,10 +262,23 @@ export async function POST(request: Request) {
             memberChargeType: expectBack
               ? MemberChargeType.RECOVERABLE
               : MemberChargeType.NONE,
-            memberChargeId,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,
+          },
+        });
+        // Mirror the contact link as a TransactionSplit so the new
+        // splits-based readers (contact ledger "spent on them", multi-split
+        // UI) see this transfer just like any expense share.
+        await tx.transactionSplit.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            transactionId: txn.id,
+            contactId: toContact.id,
+            amount,
+            isRecoverable: !!expectBack,
+            memberChargeId,
+            notes: notes ?? null,
           },
         });
       } else if (fromContact && toAccount) {

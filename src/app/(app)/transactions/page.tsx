@@ -38,7 +38,13 @@ type Txn = {
   card: { id: string; name: string } | null;
   beneficiary: { id: string; name: string } | null;
   memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
-  memberCharge: { id: string; status: string } | null;
+  splits: Array<{
+    id: string;
+    contact: { id: string; name: string };
+    amount: number;
+    isRecoverable: boolean;
+    charge: { id: string; status: string; settledAmount: number } | null;
+  }>;
   transferId: string | null;
   transferDirection: "OUT" | "IN" | null;
   transferCounterparty: { name: string; kind: "ACCOUNT" | "CONTACT" } | null;
@@ -240,6 +246,11 @@ export default function TransactionsPage() {
                           <div className="text-[11px] text-muted-foreground truncate">
                             {isTransferOut ? "→ to " : "← from "}
                             {t.transferCounterparty.name}
+                          </div>
+                        ) : t.splits.length > 1 ? (
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            split {t.splits.length} ways
+                            {t.splits.some((s) => s.isRecoverable) ? " (recover)" : ""}
                           </div>
                         ) : (
                           (t.beneficiary ||

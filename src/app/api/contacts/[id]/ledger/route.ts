@@ -27,7 +27,11 @@ export async function GET(
         where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
         orderBy: { createdAt: "desc" },
         include: {
-          originTransaction: { select: { id: true, description: true, date: true } },
+          originSplit: {
+            select: {
+              transaction: { select: { id: true, description: true, date: true } },
+            },
+          },
           settlements: { orderBy: { paidAt: "desc" } },
         },
       }),
@@ -42,24 +46,33 @@ export async function GET(
           toAccount: { select: { id: true, name: true } },
         },
       }),
-      // Spent-on-behalf expenses that the user is NOT recovering. Recoverable
-      // ones already appear via the Charges list (originTransaction).
-      prisma.transaction.findMany({
+      // Spent-on-behalf expenses that the user is NOT recovering. Reads
+      // TransactionSplit rows where isRecoverable=false — covers both
+      // single-beneficiary legacy data (Slice 1 backfilled them) and
+      // multi-contact splits. Recoverable shares show under Charges.
+      prisma.transactionSplit.findMany({
         where: {
           workspaceId: ctx.workspaceId,
-          beneficiaryContactId: id,
-          type: "EXPENSE",
-          memberChargeType: { in: ["NONE", "GIFT"] },
+          contactId: id,
+          isRecoverable: false,
+          transaction: { type: "EXPENSE" },
         },
-        orderBy: { date: "desc" },
+        orderBy: { transaction: { date: "desc" } },
         select: {
           id: true,
           amount: true,
-          date: true,
-          description: true,
-          memberChargeType: true,
-          account: { select: { id: true, name: true } },
-          card: { select: { id: true, name: true } },
+          transaction: {
+            select: {
+              id: true,
+              amount: true,
+              date: true,
+              description: true,
+              memberChargeType: true,
+              account: { select: { id: true, name: true } },
+              card: { select: { id: true, name: true } },
+              splits: { select: { id: true } },
+            },
+          },
         },
       }),
       // Hand loans where this contact is the lender (i.e. money you
@@ -96,6 +109,7 @@ export async function GET(
     }
     const netTransferred = round2(sentToContact - receivedFromContact);
     const spentOnThem = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    type SpentSplit = (typeof expenses)[number];
     const loansOwed = loans.reduce(
       (s, l) => s + (l.active ? Number(l.outstanding) : 0),
       0,
@@ -119,7 +133,13 @@ export async function GET(
         status: c.status,
         notes: c.notes,
         createdAt: c.createdAt.toISOString(),
-        origin: c.originTransaction,
+        origin: c.originSplit?.transaction
+          ? {
+              id: c.originSplit.transaction.id,
+              description: c.originSplit.transaction.description,
+              date: c.originSplit.transaction.date.toISOString(),
+            }
+          : null,
         settlements: c.settlements.map((s) => ({
           id: s.id,
           amount: Number(s.amount),
@@ -142,13 +162,16 @@ export async function GET(
               ? { id: t.toAccount.id, name: t.toAccount.name }
               : null,
       })),
-      expenses: expenses.map((e) => ({
-        id: e.id,
+      expenses: expenses.map((e: SpentSplit) => ({
+        id: e.transaction.id,
         amount: Number(e.amount),
-        date: e.date.toISOString(),
-        description: e.description,
-        kind: e.memberChargeType,
-        account: e.account ?? e.card,
+        date: e.transaction.date.toISOString(),
+        description: e.transaction.description,
+        kind: e.transaction.memberChargeType,
+        // Flag multi-contact splits so the UI can clarify "X of Y₹ total".
+        isPartialOfTotal: e.transaction.splits.length > 1,
+        transactionAmount: Number(e.transaction.amount),
+        account: e.transaction.account ?? e.transaction.card,
       })),
       loans: loans.map((l) => ({
         id: l.id,

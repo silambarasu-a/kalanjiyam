@@ -52,6 +52,8 @@ type SpentExpense = {
   date: string;
   description: string;
   kind: "NONE" | "GIFT" | "RECOVERABLE";
+  isPartialOfTotal: boolean;
+  transactionAmount: number;
   account: { id: string; name: string } | null;
 };
 type LinkedLoan = {
@@ -110,7 +112,29 @@ export default function MemberLedgerDetail() {
   }>(id ? `/api/hospitalizations?patientContactId=${id}` : null, fetcher);
   const episodes = medicalData?.hospitalizations ?? [];
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
+  const [forgivingChargeId, setForgivingChargeId] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState<"SEND" | "RECEIVE" | null>(null);
+
+  async function forgiveCharge(chargeId: string) {
+    setForgivingChargeId(chargeId);
+    try {
+      const res = await fetch(`/api/member-charges/${chargeId}/forgive`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => ({}) as { error?: string });
+      if (!res.ok) {
+        toast.error(body.error ?? "Failed to forgive");
+        return;
+      }
+      toast.success("Charge forgiven");
+      globalMutate(`/api/contacts/${id}/ledger`);
+    } finally {
+      setForgivingChargeId(null);
+    }
+  }
+
+  const openCharges = data?.charges?.filter((c) => c.status !== "WRITTEN_OFF") ?? [];
+  const forgivenCharges = data?.charges?.filter((c) => c.status === "WRITTEN_OFF") ?? [];
 
   if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!data.member) {
@@ -166,9 +190,9 @@ export default function MemberLedgerDetail() {
         <TabsList variant="line" className="border-b w-full justify-start gap-3 rounded-none">
           <TabsTrigger value="charges">
             Charges
-            {data.charges.length > 0 && (
+            {openCharges.length > 0 && (
               <span className="ml-1 text-[10px] text-muted-foreground">
-                ({data.charges.length})
+                ({openCharges.length})
               </span>
             )}
           </TabsTrigger>
@@ -204,11 +228,19 @@ export default function MemberLedgerDetail() {
               </span>
             </TabsTrigger>
           )}
+          {forgivenCharges.length > 0 && (
+            <TabsTrigger value="forgiven">
+              Forgiven
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                ({forgivenCharges.length})
+              </span>
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="charges">
           <div className="rounded-lg border bg-card divide-y">
-            {data.charges.map((c) => {
+            {openCharges.map((c) => {
               const remaining = c.amount - c.settledAmount;
               return (
                 <div key={c.id} className="px-5 py-3">
@@ -230,9 +262,20 @@ export default function MemberLedgerDetail() {
                       )}
                     </div>
                     {c.status !== "SETTLED" && c.status !== "WRITTEN_OFF" && (
-                      <Button size="sm" variant="outline" onClick={() => setSettleCharge(c)}>
-                        Settle
-                      </Button>
+                      <div className="flex flex-col gap-1 items-stretch">
+                        <Button size="sm" variant="outline" onClick={() => setSettleCharge(c)}>
+                          Settle
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={forgivingChargeId === c.id}
+                          onClick={() => forgiveCharge(c.id)}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          {forgivingChargeId === c.id ? "…" : "Forgive"}
+                        </Button>
+                      </div>
                     )}
                   </div>
                   {c.settlements.length > 0 && (
@@ -253,9 +296,9 @@ export default function MemberLedgerDetail() {
                 </div>
               );
             })}
-            {data.charges.length === 0 && (
+            {openCharges.length === 0 && (
               <div className="px-5 py-8 text-sm text-muted-foreground text-center">
-                No charges yet.
+                No open charges.
               </div>
             )}
           </div>
@@ -422,11 +465,63 @@ export default function MemberLedgerDetail() {
                       {formatDate(e.date)}
                       {e.account ? ` · ${e.account.name}` : ""}
                       {e.kind === "GIFT" ? " · Gift" : ""}
+                      {e.isPartialOfTotal
+                        ? ` · share of ${formatINR(e.transactionAmount)} total`
+                        : ""}
                     </div>
                   </div>
                   <div className="text-sm font-semibold tabular-nums">
                     {formatINR(e.amount)}
                   </div>
+                </div>
+              ))}
+            </div>
+          </TabsContent>
+        )}
+
+        {forgivenCharges.length > 0 && (
+          <TabsContent value="forgiven">
+            <p className="text-xs text-muted-foreground mb-2">
+              Charges you wrote off. Any settlements already received against
+              them are preserved here for audit; nothing is added back to
+              Outstanding.
+            </p>
+            <div className="rounded-lg border bg-card divide-y">
+              {forgivenCharges.map((c) => (
+                <div key={c.id} className="px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">
+                        {c.origin?.description ?? "Charge"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {c.origin
+                          ? formatDate(c.origin.date)
+                          : formatDate(c.createdAt)}{" "}
+                        · forgiven
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold line-through opacity-60">
+                        {formatINR(c.amount)}
+                      </div>
+                      {c.settledAmount > 0 && (
+                        <div className="text-xs text-muted-foreground">
+                          Settled before forgive: {formatINR(c.settledAmount)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {c.settlements.length > 0 && (
+                    <ul className="mt-2 ml-1 border-l pl-3 space-y-1">
+                      {c.settlements.map((s) => (
+                        <li key={s.id} className="text-xs text-muted-foreground">
+                          {formatDate(s.paidAt)} · {formatINR(s.amount)}
+                          {s.notes ? ` · ${s.notes}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ))}
             </div>

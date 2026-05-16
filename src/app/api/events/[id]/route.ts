@@ -45,13 +45,18 @@ export async function GET(
             parentCategoryId: true,
           },
         },
-        memberCharge: {
+        splits: {
           select: {
-            id: true,
-            amount: true,
-            settledAmount: true,
-            status: true,
-            beneficiaryContactId: true,
+            contactId: true,
+            isRecoverable: true,
+            memberCharge: {
+              select: {
+                id: true,
+                amount: true,
+                settledAmount: true,
+                status: true,
+              },
+            },
           },
         },
       },
@@ -99,26 +104,25 @@ export async function GET(
       (a, b) => b.total - a.total,
     );
 
-    // Member-splits roll-up — sum unsettled charges per beneficiary.
-    type Charge = NonNullable<(typeof transactions)[number]["memberCharge"]>;
+    // Member-splits roll-up — sum unsettled charges per beneficiary across
+    // every split row attached to this event's transactions.
     const splitsByContact = new Map<
       string,
       { owes: number; settled: number }
     >();
     const contactIds = new Set<string>();
     for (const t of transactions) {
-      const mc: Charge | null = t.memberCharge;
-      if (!mc || mc.status === "WRITTEN_OFF") continue;
-      contactIds.add(mc.beneficiaryContactId);
-      const total = Number(mc.amount);
-      const settled = Number(mc.settledAmount);
-      const row = splitsByContact.get(mc.beneficiaryContactId) ?? {
-        owes: 0,
-        settled: 0,
-      };
-      row.owes += total - settled;
-      row.settled += settled;
-      splitsByContact.set(mc.beneficiaryContactId, row);
+      for (const s of t.splits) {
+        if (!s.isRecoverable || !s.memberCharge) continue;
+        if (s.memberCharge.status === "WRITTEN_OFF") continue;
+        contactIds.add(s.contactId);
+        const total = Number(s.memberCharge.amount);
+        const settled = Number(s.memberCharge.settledAmount);
+        const row = splitsByContact.get(s.contactId) ?? { owes: 0, settled: 0 };
+        row.owes += total - settled;
+        row.settled += settled;
+        splitsByContact.set(s.contactId, row);
+      }
     }
     const contacts = contactIds.size
       ? await prisma.contact.findMany({

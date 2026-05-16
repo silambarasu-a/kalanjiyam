@@ -92,7 +92,15 @@ export async function GET(request: Request) {
         account: { select: { id: true, name: true, kind: true } },
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
-        memberCharge: { select: { id: true, status: true } },
+        splits: {
+          select: {
+            id: true,
+            amount: true,
+            isRecoverable: true,
+            contact: { select: { id: true, name: true } },
+            memberCharge: { select: { id: true, status: true, settledAmount: true } },
+          },
+        },
         // Pull both sides of the transfer so we can label each leg as
         // OUT (this account funded the transfer) or IN (this account
         // received it). Without this the UI shows two identical-looking
@@ -167,7 +175,19 @@ export async function GET(request: Request) {
           card: t.card,
           beneficiary: t.beneficiaryContact,
           memberChargeType: t.memberChargeType,
-          memberCharge: t.memberCharge,
+          splits: t.splits.map((s) => ({
+            id: s.id,
+            contact: s.contact,
+            amount: Number(s.amount),
+            isRecoverable: s.isRecoverable,
+            charge: s.memberCharge
+              ? {
+                  id: s.memberCharge.id,
+                  status: s.memberCharge.status,
+                  settledAmount: Number(s.memberCharge.settledAmount),
+                }
+              : null,
+          })),
           transferId: t.transferId,
           transferDirection,
           transferCounterparty,
@@ -292,6 +312,49 @@ export async function POST(request: Request) {
       }
     }
 
+    // Normalize legacy single-beneficiary input into the splits[] shape so
+    // the rest of the handler only deals with one model. A client that posts
+    // {beneficiaryContactId, memberChargeType} with no splits[] is treated
+    // as a 1-row split for the full amount.
+    type SplitInput = {
+      contactId: string;
+      amount: number;
+      sharePercent: number | null;
+      isRecoverable: boolean;
+      notes: string | null;
+    };
+    const splits: SplitInput[] =
+      data.splits && data.splits.length > 0
+        ? data.splits.map((s) => ({
+            contactId: s.contactId,
+            amount: s.amount,
+            sharePercent: s.sharePercent ?? null,
+            isRecoverable: s.isRecoverable,
+            notes: s.notes ?? null,
+          }))
+        : data.beneficiaryContactId
+          ? [
+              {
+                contactId: data.beneficiaryContactId,
+                amount: data.amount,
+                sharePercent: null,
+                isRecoverable: data.memberChargeType === "RECOVERABLE",
+                notes: null,
+              },
+            ]
+          : [];
+
+    if (splits.length > 0) {
+      const ids = Array.from(new Set(splits.map((s) => s.contactId)));
+      const found = await prisma.contact.findMany({
+        where: { id: { in: ids }, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (found.length !== ids.length) {
+        return NextResponse.json({ error: "Unknown contact in splits" }, { status: 400 });
+      }
+    }
+
     let investmentForUpdate: {
       id: string;
       amount: number;
@@ -324,24 +387,38 @@ export async function POST(request: Request) {
     }
 
     const txDate = new Date(data.date);
-    const charge =
-      data.memberChargeType === "RECOVERABLE" && data.beneficiaryContactId
-        ? { create: true }
-        : null;
+
+    // Q5: when an expense is split across multiple contacts, the legacy
+    // single-beneficiary column is null (the per-contact view reads from
+    // TransactionSplit). For a 1-row split we still populate beneficiary
+    // + charge link so existing readers keep working unchanged.
+    const isSingleSplit = splits.length === 1;
+    const primaryContactId = isSingleSplit ? splits[0].contactId : null;
+    const hasRecoverableSplit = splits.some((s) => s.isRecoverable);
+    const derivedChargeType: MemberChargeType =
+      splits.length === 0
+        ? "NONE"
+        : hasRecoverableSplit
+          ? "RECOVERABLE"
+          : "GIFT";
 
     const created = await prisma.$transaction(async (tx) => {
-      let memberChargeId: string | null = null;
-      if (charge) {
+      // Create one MemberCharge per recoverable split.
+      const splitCharges: Array<{ index: number; chargeId: string }> = [];
+      for (let i = 0; i < splits.length; i++) {
+        const s = splits[i];
+        if (!s.isRecoverable) continue;
         const mc = await tx.memberCharge.create({
           data: {
             workspaceId: ctx.workspaceId,
-            beneficiaryContactId: data.beneficiaryContactId!,
-            amount: data.amount,
+            beneficiaryContactId: s.contactId,
+            amount: s.amount,
             status: MemberChargeStatus.OUTSTANDING,
           },
         });
-        memberChargeId = mc.id;
+        splitCharges.push({ index: i, chargeId: mc.id });
       }
+
       const txn = await tx.transaction.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -363,9 +440,8 @@ export async function POST(request: Request) {
           investmentPrice: data.investmentPrice ?? null,
           exchangeRate: data.exchangeRate ?? null,
           refundForTransactionId: data.refundForTransactionId ?? null,
-          beneficiaryContactId: data.beneficiaryContactId ?? null,
-          memberChargeType: (data.memberChargeType as MemberChargeType) ?? "NONE",
-          memberChargeId,
+          beneficiaryContactId: primaryContactId,
+          memberChargeType: derivedChargeType,
           vehicleId: data.vehicleId ?? null,
           claimId: data.claimId ?? null,
           hospitalizationId: data.hospitalizationId ?? null,
@@ -379,10 +455,20 @@ export async function POST(request: Request) {
           createdByUserId: ctx.userId,
         },
       });
-      if (memberChargeId) {
-        await tx.memberCharge.update({
-          where: { id: memberChargeId },
-          data: { originTransaction: { connect: { id: txn.id } } },
+
+      if (splits.length > 0) {
+        const chargeByIndex = new Map(splitCharges.map((c) => [c.index, c.chargeId]));
+        await tx.transactionSplit.createMany({
+          data: splits.map((s, i) => ({
+            workspaceId: ctx.workspaceId,
+            transactionId: txn.id,
+            contactId: s.contactId,
+            amount: s.amount,
+            sharePercent: s.sharePercent,
+            isRecoverable: s.isRecoverable,
+            memberChargeId: chargeByIndex.get(i) ?? null,
+            notes: s.notes,
+          })),
         });
       }
       // Side effect: update the linked investment's summary fields.
