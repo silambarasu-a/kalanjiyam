@@ -78,6 +78,21 @@ export const cardUpdateSchema = cardCreateSchema.partial().extend({
   active: z.boolean().optional(),
 });
 
+/**
+ * Hand-correct an already-materialised CardStatement. At least one of
+ * `totalDue` / `dueDate` must be provided. Once applied, the materializer
+ * will leave this row alone on subsequent runs.
+ */
+export const cardStatementEditSchema = z
+  .object({
+    totalDue: z.number().nonnegative().optional(),
+    dueDate: z.string().optional(),
+  })
+  .refine(
+    (o) => o.totalDue !== undefined || o.dueDate !== undefined,
+    { message: "Provide totalDue or dueDate" },
+  );
+
 const transactionKindEnum = z.enum([
   "SALARY",
   "INTEREST",

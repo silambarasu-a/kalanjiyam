@@ -175,16 +175,21 @@ export async function materializeStatementsFor(
       where: {
         accountId_periodStart: { accountId, periodStart: cycle.start },
       },
-      select: { id: true },
+      select: { id: true, manuallyEdited: true },
     });
     if (existing) {
       // Re-snapshot the totals every time we materialise — guards
       // against the rare edge where a transaction was back-dated into
       // a closed period before the lock kicked in.
-      await prisma.cardStatement.update({
-        where: { id: existing.id },
-        data: { periodEnd: cycle.end, dueDate, totalDue },
-      });
+      // Exception: rows the user has hand-edited (totalDue / dueDate
+      // corrected via the edit-statement dialog) are owned by the user;
+      // overwriting them here would wipe their fix on the next cron tick.
+      if (!existing.manuallyEdited) {
+        await prisma.cardStatement.update({
+          where: { id: existing.id },
+          data: { periodEnd: cycle.end, dueDate, totalDue },
+        });
+      }
     } else {
       await prisma.cardStatement.create({
         data: {

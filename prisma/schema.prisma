@@ -353,6 +353,7 @@ model User {
   notifications             Notification[]
   uploadedAttachments       Attachment[]       @relation("AttachmentUploader")
   archivedAttachments       Attachment[]       @relation("AttachmentArchiver")
+  editedCardStatements      CardStatement[]    @relation("CardStatementEditor")
 
   @@index([email])
 }
@@ -604,6 +605,13 @@ model CardStatement {
   payments    Transfer[]           @relation("StatementPayments")
   closedAt    DateTime?
   reminders   InvestmentReminder[] @relation("ReminderCardStatement")
+  // When set, the row was hand-edited (`totalDue` / `dueDate` corrected by
+  // a user). The materializer must NOT re-snapshot these fields on its
+  // next run — see `card-statement-service.ts`.
+  manuallyEdited     Boolean   @default(false)
+  manuallyEditedAt   DateTime?
+  manuallyEditedById String?
+  manuallyEditedBy   User?     @relation("CardStatementEditor", fields: [manuallyEditedById], references: [id], onDelete: SetNull)
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
