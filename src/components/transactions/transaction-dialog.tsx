@@ -44,6 +44,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  TransactionSplitEditor,
+  recalcEqual,
+  makeEmptySplit,
+  type SplitDraft,
+  type SplitMode,
+  type SplitUnit,
+} from "@/components/transactions/split-rows";
 import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import {
@@ -89,7 +97,6 @@ type LivestockBatch = {
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
-type ChargeFlag = "NONE" | "RECOVERABLE" | "GIFT";
 
 // uploadReceiptsToAttachment was extracted to
 // @/components/transactions/receipt-stager so the helper can be shared
@@ -336,8 +343,9 @@ function IncomeExpenseForm({
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [quickCreateName, setQuickCreateName] = useState("");
   const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" or "card:<id>"
-  const [beneficiaryContactId, setBeneficiaryMemberId] = useState("");
-  const [chargeFlag, setChargeFlag] = useState<ChargeFlag>("NONE");
+  const [splits, setSplits] = useState<SplitDraft[]>([]);
+  const [expenseSplitMode, setExpenseSplitMode] = useState<SplitMode>("equal");
+  const [expenseSplitUnit, setExpenseSplitUnit] = useState<SplitUnit>("amount");
   const [tagSource, setTagSource] = useState<string>(""); // "" | "crop:<id>" | "livestock:<id>"
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -345,6 +353,13 @@ function IncomeExpenseForm({
   const [workerIds, setWorkerIds] = useState<string[]>([]);
   const [splitMode, setSplitMode] = useState<"equal" | "custom">("equal");
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
+
+  // In equal mode the displayed/submitted split amounts are derived from
+  // (totalAmount / N) on the fly — no useEffect needed. Custom mode uses
+  // the user-entered amounts stored on each split.
+  const totalForSplits = parseFloat(amount) || 0;
+  const displaySplits =
+    expenseSplitMode === "equal" ? recalcEqual(splits, totalForSplits) : splits;
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
   const isWageMode =
@@ -613,9 +628,17 @@ function IncomeExpenseForm({
         accountId: kind === "account" ? sid : null,
         cardId: kind === "card" ? sid : null,
       };
-      if (type === "EXPENSE" && beneficiaryContactId) {
-        payload.beneficiaryContactId = beneficiaryContactId;
-        payload.memberChargeType = chargeFlag;
+      if (type === "EXPENSE" && displaySplits.length > 0) {
+        const ready = displaySplits.filter((s) => s.contactId && s.amount > 0);
+        if (ready.length > 0) {
+          payload.splits = ready.map((s) => ({
+            contactId: s.contactId,
+            amount: s.amount,
+            sharePercent: s.sharePercent,
+            isRecoverable: s.isRecoverable,
+            notes: s.notes ?? undefined,
+          }));
+        }
       }
       if (isVehicleMode && vehicleId) payload.vehicleId = vehicleId;
       // Fuel sub-mode: persist litres/kWh/kg quantity + odometer so the
@@ -1103,38 +1126,43 @@ function IncomeExpenseForm({
 
       {type === "EXPENSE" && (
         <div className="rounded-md border bg-card p-4 space-y-3">
-          <div>
-            <span className="text-xs font-medium">Spent for a contact?</span>
-            <div className="mt-1">
-              <NativeSelect
-                value={beneficiaryContactId}
-                onChange={setBeneficiaryMemberId}
-                placeholder="— optional, pick a contact —"
-                options={contacts.map((m) => ({ value: m.id, label: m.name }))}
+          {splits.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                const totalAmount = parseFloat(amount) || 0;
+                setExpenseSplitMode("equal");
+                setExpenseSplitUnit("amount");
+                setSplits(recalcEqual([makeEmptySplit()], totalAmount));
+              }}
+              className="w-full text-left text-sm font-medium hover:underline"
+            >
+              + Split this expense with contacts?
+            </button>
+          ) : (
+            <>
+              <TransactionSplitEditor
+                totalAmount={totalForSplits}
+                contacts={contacts.map((m) => ({ id: m.id, name: m.name }))}
+                splits={displaySplits}
+                onChange={setSplits}
+                mode={expenseSplitMode}
+                onModeChange={setExpenseSplitMode}
+                unit={expenseSplitUnit}
+                onUnitChange={setExpenseSplitUnit}
               />
-            </div>
-          </div>
-          {beneficiaryContactId && (
-            <label className="flex items-start gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={chargeFlag === "RECOVERABLE"}
-                onChange={(e) =>
-                  setChargeFlag(e.target.checked ? "RECOVERABLE" : "NONE")
-                }
-                className="mt-0.5 h-4 w-4 accent-primary"
-              />
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium block">
-                  Recover this from {contacts.find((m) => m.id === beneficiaryContactId)?.name ?? "them"}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {chargeFlag === "RECOVERABLE"
-                    ? "Adds to their Outstanding — settle later from the contact page."
-                    : "Just tagged for reporting; no balance impact."}
-                </span>
-              </div>
-            </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setSplits([]);
+                  setExpenseSplitMode("equal");
+                  setExpenseSplitUnit("amount");
+                }}
+                className="text-xs text-muted-foreground hover:underline"
+              >
+                Clear splits
+              </button>
+            </>
           )}
         </div>
       )}

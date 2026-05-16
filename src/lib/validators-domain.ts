@@ -96,6 +96,14 @@ const transactionKindEnum = z.enum([
   "REFUND",
 ]);
 
+export const transactionSplitInputSchema = z.object({
+  contactId: z.string().uuid(),
+  amount: z.number().nonnegative(),
+  sharePercent: z.number().min(0).max(100).optional().nullable(),
+  isRecoverable: z.boolean().default(false),
+  notes: z.string().trim().max(200).optional().nullable(),
+});
+
 export const transactionCreateSchema = z
   .object({
     type: z.enum(["INCOME", "EXPENSE", "INVESTMENT"]),
@@ -134,6 +142,7 @@ export const transactionCreateSchema = z
       .enum(["ORNAMENT", "COIN", "BAR", "BISCUIT", "JEWELLERY_MAKING"])
       .optional()
       .nullable(),
+    splits: z.array(transactionSplitInputSchema).max(50).optional().default([]),
   })
   .refine((d) => !!d.accountId || !!d.cardId, {
     message: "Pick an account or a card",
@@ -143,6 +152,22 @@ export const transactionCreateSchema = z
     message: "Pick a beneficiary for recoverable charges",
     path: ["beneficiaryContactId"],
   })
+  .refine((d) => d.splits.length === 0 || d.type === "EXPENSE", {
+    message: "Splits are only allowed on expenses",
+    path: ["splits"],
+  })
+  .refine(
+    (d) => {
+      if (d.splits.length === 0) return true;
+      const sum = d.splits.reduce((s, x) => s + x.amount, 0);
+      return sum <= d.amount + 0.005;
+    },
+    { message: "Splits cannot exceed transaction total", path: ["splits"] },
+  )
+  .refine(
+    (d) => new Set(d.splits.map((s) => s.contactId)).size === d.splits.length,
+    { message: "Each contact can appear only once in splits", path: ["splits"] },
+  )
   .refine((d) => d.type !== "INVESTMENT" || (!!d.investmentId && !!d.investmentAction), {
     message: "Investment transaction needs a holding and action",
     path: ["investmentId"],
@@ -159,6 +184,9 @@ export const transactionUpdateSchema = z.object({
   categoryId: z.string().uuid().optional().nullable(),
   beneficiaryContactId: z.string().uuid().optional().nullable(),
   memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional(),
+  // When present, the server diff-applies this set against existing
+  // TransactionSplit rows. Omit the field to leave splits unchanged.
+  splits: z.array(transactionSplitInputSchema).max(50).optional(),
   vehicleId: z.string().uuid().optional().nullable(),
   claimId: z.string().uuid().optional().nullable(),
   hospitalizationId: z.string().uuid().optional().nullable(),

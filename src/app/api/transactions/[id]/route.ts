@@ -74,8 +74,19 @@ export async function GET(
         account: { select: { id: true, name: true, kind: true } },
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
-        memberCharge: {
-          select: { id: true, status: true, amount: true, settledAmount: true },
+        splits: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            amount: true,
+            sharePercent: true,
+            isRecoverable: true,
+            notes: true,
+            contact: { select: { id: true, name: true } },
+            memberCharge: {
+              select: { id: true, status: true, amount: true, settledAmount: true },
+            },
+          },
         },
         vehicle: { select: { id: true, name: true, registrationNo: true } },
         event: { select: { id: true, name: true, kind: true } },
@@ -162,14 +173,22 @@ export async function GET(
         card: t.card,
         beneficiary: t.beneficiaryContact,
         memberChargeType: t.memberChargeType,
-        memberCharge: t.memberCharge
-          ? {
-              id: t.memberCharge.id,
-              status: t.memberCharge.status,
-              amount: Number(t.memberCharge.amount),
-              settledAmount: Number(t.memberCharge.settledAmount),
-            }
-          : null,
+        splits: t.splits.map((s) => ({
+          id: s.id,
+          contact: s.contact,
+          amount: Number(s.amount),
+          sharePercent: s.sharePercent == null ? null : Number(s.sharePercent),
+          isRecoverable: s.isRecoverable,
+          notes: s.notes,
+          charge: s.memberCharge
+            ? {
+                id: s.memberCharge.id,
+                status: s.memberCharge.status,
+                amount: Number(s.memberCharge.amount),
+                settledAmount: Number(s.memberCharge.settledAmount),
+              }
+            : null,
+        })),
         vehicle: t.vehicle,
         event: t.event,
         hospitalization: t.hospitalization,
@@ -271,6 +290,124 @@ const body = await request.json();
         })
       : null;
 
+    // Splits handling (Slice 2). When `splits` is omitted, leave existing
+    // rows alone. When provided, the new set diff-replaces what's in DB.
+    const splitsInput = parsed.data.splits;
+    type ExistingSplit = {
+      id: string;
+      contactId: string;
+      amount: number;
+      isRecoverable: boolean;
+      memberChargeId: string | null;
+      chargeSettled: number;
+      chargeSettlementCount: number;
+    };
+    let existingSplits: ExistingSplit[] = [];
+    if (splitsInput !== undefined) {
+      if (t.type !== "EXPENSE") {
+        return NextResponse.json(
+          { error: "Splits are only allowed on expenses" },
+          { status: 400 },
+        );
+      }
+      const rows = await prisma.transactionSplit.findMany({
+        where: { transactionId: id },
+        include: {
+          memberCharge: {
+            select: { id: true, settledAmount: true, _count: { select: { settlements: true } } },
+          },
+        },
+      });
+      existingSplits = rows.map((r) => ({
+        id: r.id,
+        contactId: r.contactId,
+        amount: Number(r.amount),
+        isRecoverable: r.isRecoverable,
+        memberChargeId: r.memberChargeId,
+        chargeSettled: r.memberCharge ? Number(r.memberCharge.settledAmount) : 0,
+        chargeSettlementCount: r.memberCharge ? r.memberCharge._count.settlements : 0,
+      }));
+
+      const dupCheck = new Set<string>();
+      for (const s of splitsInput) {
+        if (dupCheck.has(s.contactId)) {
+          return NextResponse.json(
+            { error: "Each contact can appear only once in splits" },
+            { status: 400 },
+          );
+        }
+        dupCheck.add(s.contactId);
+      }
+      const sum = splitsInput.reduce((acc, s) => acc + s.amount, 0);
+      if (sum > newAmount + 0.005) {
+        return NextResponse.json(
+          { error: "Splits cannot exceed transaction total" },
+          { status: 400 },
+        );
+      }
+      if (splitsInput.length > 0) {
+        const ids = Array.from(dupCheck);
+        const found = await prisma.contact.findMany({
+          where: { id: { in: ids }, workspaceId: ctx.workspaceId },
+          select: { id: true },
+        });
+        if (found.length !== ids.length) {
+          return NextResponse.json(
+            { error: "Unknown contact in splits" },
+            { status: 400 },
+          );
+        }
+      }
+      // Q6: cannot remove or unrecover a split whose charge has settlements.
+      // User must "Forgive" from the contact page first.
+      const incomingByContact = new Map(splitsInput.map((s) => [s.contactId, s]));
+      for (const e of existingSplits) {
+        const next = incomingByContact.get(e.contactId);
+        const willRemove = !next;
+        const willUnrecover = next && e.isRecoverable && !next.isRecoverable;
+        const willShrinkBelowSettled =
+          next && next.isRecoverable && next.amount + 0.005 < e.chargeSettled;
+        if (
+          (willRemove || willUnrecover) &&
+          e.isRecoverable &&
+          e.chargeSettlementCount > 0
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "Cannot remove this contact — they have already paid back part of this charge. Forgive it from the contact page instead.",
+            },
+            { status: 400 },
+          );
+        }
+        if (willShrinkBelowSettled) {
+          return NextResponse.json(
+            {
+              error: "New split amount is less than what has been settled",
+            },
+            { status: 400 },
+          );
+        }
+      }
+    } else if (amountChanged) {
+      // Splits not being touched but total amount went down — make sure
+      // existing splits still fit under the new total.
+      const sum = await prisma.transactionSplit.aggregate({
+        where: { transactionId: id },
+        _sum: { amount: true },
+      });
+      const total = Number(sum._sum.amount ?? 0);
+      if (total > newAmount + 0.005) {
+        return NextResponse.json(
+          {
+            error:
+              "New total is less than the sum of existing splits — adjust the splits first",
+          },
+          { status: 400 },
+        );
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       if (amountChanged && full) {
         // ── Loan EMI: reverse the old payment's principal portion, then
@@ -370,6 +507,134 @@ const body = await request.json();
         }
       }
 
+      // Apply the splits diff (Slice 2). After this block, `finalSplitState`
+      // tells us how to denormalise the legacy fields on the Transaction row.
+      let finalSplitState: {
+        contactId: string;
+        isRecoverable: boolean;
+        chargeId: string | null;
+      }[] | null = null;
+      if (splitsInput !== undefined) {
+        const incomingByContact = new Map(splitsInput.map((s) => [s.contactId, s]));
+        const existingByContact = new Map(existingSplits.map((e) => [e.contactId, e]));
+
+        // Removed contacts: delete the split + (delete charge if untouched).
+        for (const e of existingSplits) {
+          if (incomingByContact.has(e.contactId)) continue;
+          await tx.transactionSplit.delete({ where: { id: e.id } });
+          if (e.memberChargeId && e.chargeSettlementCount === 0) {
+            await tx.memberCharge.delete({ where: { id: e.memberChargeId } });
+          }
+        }
+
+        const finalRows: {
+          contactId: string;
+          isRecoverable: boolean;
+          chargeId: string | null;
+        }[] = [];
+
+        for (const s of splitsInput) {
+          const existing = existingByContact.get(s.contactId);
+          if (!existing) {
+            // New split row.
+            let chargeId: string | null = null;
+            if (s.isRecoverable) {
+              const mc = await tx.memberCharge.create({
+                data: {
+                  workspaceId: ctx.workspaceId,
+                  beneficiaryContactId: s.contactId,
+                  amount: s.amount,
+                  status: MemberChargeStatus.OUTSTANDING,
+                },
+              });
+              chargeId = mc.id;
+            }
+            await tx.transactionSplit.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                transactionId: id,
+                contactId: s.contactId,
+                amount: s.amount,
+                sharePercent: s.sharePercent ?? null,
+                isRecoverable: s.isRecoverable,
+                memberChargeId: chargeId,
+                notes: s.notes ?? null,
+              },
+            });
+            finalRows.push({
+              contactId: s.contactId,
+              isRecoverable: s.isRecoverable,
+              chargeId,
+            });
+            continue;
+          }
+          // Existing split — patch as needed.
+          let chargeId = existing.memberChargeId;
+          if (s.isRecoverable && !existing.isRecoverable) {
+            // Newly recoverable — create the charge.
+            const mc = await tx.memberCharge.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                beneficiaryContactId: s.contactId,
+                amount: s.amount,
+                status: MemberChargeStatus.OUTSTANDING,
+              },
+            });
+            chargeId = mc.id;
+          } else if (!s.isRecoverable && existing.isRecoverable && existing.memberChargeId) {
+            // Was recoverable, now isn't — safe to delete the charge here
+            // because we rejected up-front if any settlements existed.
+            await tx.memberCharge.delete({ where: { id: existing.memberChargeId } });
+            chargeId = null;
+          } else if (s.isRecoverable && chargeId && s.amount !== existing.amount) {
+            // Amount changed on an existing recoverable charge — update + recompute status.
+            const settled = existing.chargeSettled;
+            const status: MemberChargeStatus =
+              settled <= 0
+                ? MemberChargeStatus.OUTSTANDING
+                : settled + 0.005 >= s.amount
+                  ? MemberChargeStatus.SETTLED
+                  : MemberChargeStatus.PARTIAL;
+            await tx.memberCharge.update({
+              where: { id: chargeId },
+              data: { amount: s.amount, status },
+            });
+          }
+          await tx.transactionSplit.update({
+            where: { id: existing.id },
+            data: {
+              amount: s.amount,
+              sharePercent: s.sharePercent ?? null,
+              isRecoverable: s.isRecoverable,
+              memberChargeId: chargeId,
+              notes: s.notes ?? null,
+            },
+          });
+          finalRows.push({
+            contactId: s.contactId,
+            isRecoverable: s.isRecoverable,
+            chargeId,
+          });
+        }
+        finalSplitState = finalRows;
+      }
+
+      // Derive denormalised beneficiary fields from the post-diff split set.
+      // 1-row split → primary beneficiary; multi-row → null (Q5).
+      const derivedBeneficiary =
+        finalSplitState && finalSplitState.length === 1
+          ? finalSplitState[0].contactId
+          : finalSplitState && finalSplitState.length > 1
+            ? null
+            : undefined;
+      const derivedChargeType: MemberChargeType | undefined = finalSplitState
+        ? finalSplitState.length === 0
+          ? MemberChargeType.NONE
+          : finalSplitState.some((r) => r.isRecoverable)
+            ? MemberChargeType.RECOVERABLE
+            : MemberChargeType.GIFT
+        : undefined;
+
       await tx.transaction.update({
         where: { id },
         data: {
@@ -381,13 +646,17 @@ const body = await request.json();
               ? t.categoryId
               : parsed.data.categoryId,
           beneficiaryContactId:
-            parsed.data.beneficiaryContactId === undefined
-              ? t.beneficiaryContactId
-              : parsed.data.beneficiaryContactId,
+            derivedBeneficiary !== undefined
+              ? derivedBeneficiary
+              : parsed.data.beneficiaryContactId === undefined
+                ? t.beneficiaryContactId
+                : parsed.data.beneficiaryContactId,
           memberChargeType:
-            parsed.data.memberChargeType !== undefined
-              ? (parsed.data.memberChargeType as MemberChargeType)
-              : t.memberChargeType,
+            derivedChargeType !== undefined
+              ? derivedChargeType
+              : parsed.data.memberChargeType !== undefined
+                ? (parsed.data.memberChargeType as MemberChargeType)
+                : t.memberChargeType,
           vehicleId:
             parsed.data.vehicleId === undefined ? t.vehicleId : parsed.data.vehicleId,
           claimId:
@@ -594,19 +863,42 @@ export async function DELETE(
         await tx.vaccinationLog.delete({ where: { id: t.vaccinationLog.id } });
       }
 
-      // ── Member charge: pre-existing behaviour. Drop the charge if no
-      // settlements yet, otherwise mark it written-off.
-      if (t.memberChargeId) {
-        const settlements = await tx.memberChargeSettlement.count({
-          where: { chargeId: t.memberChargeId },
+      // ── Member charges: iterate every split's linked charge.
+      // - WRITTEN_OFF / SETTLED → leave alone (closed loop, user kept the
+      //   audit trail intentionally).
+      // - OUTSTANDING / PARTIAL with no settlements → delete (nothing else
+      //   refers to it now that the transaction is gone).
+      // - OUTSTANDING / PARTIAL with settlements → mark WRITTEN_OFF so the
+      //   settlements remain attributable.
+      // TransactionSplit rows cascade-delete with the transaction itself.
+      const splitCharges = await tx.transactionSplit.findMany({
+        where: { transactionId: id },
+        select: { memberChargeId: true },
+      });
+      const chargeIds = new Set<string>();
+      for (const s of splitCharges) {
+        if (s.memberChargeId) chargeIds.add(s.memberChargeId);
+      }
+      for (const chargeId of chargeIds) {
+        const c = await tx.memberCharge.findUnique({
+          where: { id: chargeId },
+          select: {
+            status: true,
+            _count: { select: { settlements: true } },
+          },
         });
-        if (settlements === 0) {
-          await tx.memberCharge.delete({
-            where: { id: t.memberChargeId },
-          });
+        if (!c) continue;
+        if (
+          c.status === MemberChargeStatus.WRITTEN_OFF ||
+          c.status === MemberChargeStatus.SETTLED
+        ) {
+          continue;
+        }
+        if (c._count.settlements === 0) {
+          await tx.memberCharge.delete({ where: { id: chargeId } });
         } else {
           await tx.memberCharge.update({
-            where: { id: t.memberChargeId },
+            where: { id: chargeId },
             data: { status: MemberChargeStatus.WRITTEN_OFF },
           });
         }

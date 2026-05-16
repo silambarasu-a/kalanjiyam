@@ -379,6 +379,7 @@ model Workspace {
   cards               Card[]
   cardStatements      CardStatement[]
   transactions        Transaction[]
+  transactionSplits   TransactionSplit[]
   transfers           Transfer[]
   memberCharges       MemberCharge[]
   lands               Land[]
@@ -490,19 +491,20 @@ model Contact {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  ownedAccounts      Account[]         @relation("AccountContactOwner")
-  ownedCards         Card[]            @relation("CardContactOwner")
-  beneficiaryTxns    Transaction[]     @relation("TransactionBeneficiary")
-  sentTransfers      Transfer[]        @relation("TransferFromContact")
-  receivedTransfers  Transfer[]        @relation("TransferToContact")
+  ownedAccounts      Account[]          @relation("AccountContactOwner")
+  ownedCards         Card[]             @relation("CardContactOwner")
+  beneficiaryTxns    Transaction[]      @relation("TransactionBeneficiary")
+  transactionSplits  TransactionSplit[] @relation("ContactSplits")
+  sentTransfers      Transfer[]         @relation("TransferFromContact")
+  receivedTransfers  Transfer[]         @relation("TransferToContact")
   memberCharges      MemberCharge[]
-  lessorLeases       Lease[]           @relation("LeaseLessor")
-  lesseeLeases       Lease[]           @relation("LeaseLessee")
-  lenderLoans        Loan[]            @relation("LoanLenderContact")
-  insuredMemberships InsuredMember[]   @relation("InsuredMemberContact")
-  ownedVehicles      Vehicle[]         @relation("VehicleOwner")
-  vehiclesBought     Vehicle[]         @relation("VehicleDisposalBuyer")
-  hospitalizations   Hospitalization[] @relation("HospitalizationPatient")
+  lessorLeases       Lease[]            @relation("LeaseLessor")
+  lesseeLeases       Lease[]            @relation("LeaseLessee")
+  lenderLoans        Loan[]             @relation("LoanLenderContact")
+  insuredMemberships InsuredMember[]    @relation("InsuredMemberContact")
+  ownedVehicles      Vehicle[]          @relation("VehicleOwner")
+  vehiclesBought     Vehicle[]          @relation("VehicleDisposalBuyer")
+  hospitalizations   Hospitalization[]  @relation("HospitalizationPatient")
 
   @@index([workspaceId, active])
 }
@@ -649,22 +651,22 @@ model Transfer {
 //
 
 model Category {
-  id           String            @id @default(uuid())
-  name         String
-  types        TransactionType[]
-  group        String?
-  icon         String?
-  isDefault    Boolean           @default(false)
-  workspaceId  String?
-  workspace    Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id               String            @id @default(uuid())
+  name             String
+  types            TransactionType[]
+  group            String?
+  icon             String?
+  isDefault        Boolean           @default(false)
+  workspaceId      String?
+  workspace        Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // Two-level hierarchy: parents have parentCategoryId = null,
   // children point at their parent. Three-level nesting is rejected
   // at the API layer, not the DB.
   parentCategoryId String?
-  parent           Category?  @relation("CategoryChildren", fields: [parentCategoryId], references: [id], onDelete: SetNull)
-  children         Category[] @relation("CategoryChildren")
-  transactions Transaction[]
-  createdAt    DateTime          @default(now())
+  parent           Category?         @relation("CategoryChildren", fields: [parentCategoryId], references: [id], onDelete: SetNull)
+  children         Category[]        @relation("CategoryChildren")
+  transactions     Transaction[]
+  createdAt        DateTime          @default(now())
 
   @@index([name])
   @@index([workspaceId])
@@ -733,8 +735,6 @@ model Transaction {
   beneficiaryContactId String?
   beneficiaryContact   Contact?         @relation("TransactionBeneficiary", fields: [beneficiaryContactId], references: [id], onDelete: SetNull)
   memberChargeType     MemberChargeType @default(NONE)
-  memberChargeId       String?          @unique
-  memberCharge         MemberCharge?    @relation("ChargeOriginTxn", fields: [memberChargeId], references: [id], onDelete: SetNull)
 
   claimId String?
   claim   InsuranceClaim? @relation("TransactionClaim", fields: [claimId], references: [id], onDelete: SetNull)
@@ -774,6 +774,7 @@ model Transaction {
   vaccinationLog          VaccinationLog?
   memberChargeSettlements MemberChargeSettlement[]
   reminderConfirmation    InvestmentReminder?      @relation("ReminderConfirmation")
+  splits                  TransactionSplit[]       @relation("TransactionSplits")
 
   @@index([workspaceId, date])
   @@index([workspaceId, categoryId])
@@ -799,18 +800,43 @@ model MemberCharge {
   workspaceId          String
   workspace            Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   beneficiaryContactId String
-  beneficiaryContact   Contact                  @relation(fields: [beneficiaryContactId], references: [id], onDelete: Cascade)
+  beneficiaryContact   Contact                  @relation(fields: [beneficiaryContactId], references: [id], onDelete: Restrict)
   amount               Decimal                  @db.Decimal(14, 2)
   settledAmount        Decimal                  @default(0) @db.Decimal(14, 2)
   status               MemberChargeStatus       @default(OUTSTANDING)
   lastSettlementAt     DateTime?
   notes                String?
-  originTransaction    Transaction?             @relation("ChargeOriginTxn")
+  originSplit          TransactionSplit?        @relation("SplitCharge")
   settlements          MemberChargeSettlement[]
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
   @@index([workspaceId, beneficiaryContactId, status])
+}
+
+// One row per contact a transaction is shared with. Replaces the legacy
+// single-beneficiary model on Transaction. Each split optionally links to
+// a MemberCharge (when the share is recoverable). Splits sum to <= the
+// parent transaction amount; the remainder is the author's own share.
+model TransactionSplit {
+  id             String        @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  transactionId  String
+  transaction    Transaction   @relation("TransactionSplits", fields: [transactionId], references: [id], onDelete: Cascade)
+  contactId      String
+  contact        Contact       @relation("ContactSplits", fields: [contactId], references: [id], onDelete: Restrict)
+  amount         Decimal       @db.Decimal(14, 2)
+  sharePercent   Decimal?      @db.Decimal(6, 3)
+  isRecoverable  Boolean       @default(false)
+  memberChargeId String?       @unique
+  memberCharge   MemberCharge? @relation("SplitCharge", fields: [memberChargeId], references: [id], onDelete: SetNull)
+  notes          String?
+  createdAt      DateTime      @default(now())
+
+  @@unique([transactionId, contactId])
+  @@index([workspaceId, contactId])
+  @@index([transactionId])
 }
 
 model MemberChargeSettlement {
@@ -1427,17 +1453,17 @@ model Vehicle {
 }
 
 model VehicleDocument {
-  id        String              @id @default(uuid())
-  workspaceId String
-  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  vehicleId String
-  vehicle   Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  kind      VehicleDocumentKind
-  label     String? // free-form (e.g. "RC for new card", "PUC Bangalore")
-  number    String? // document reference number printed on the doc
-  issuedAt  DateTime?
-  expiryAt  DateTime? // the date that drives renewal reminders
-  notes     String?
+  id                 String              @id @default(uuid())
+  workspaceId        String
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  vehicleId          String
+  vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  kind               VehicleDocumentKind
+  label              String? // free-form (e.g. "RC for new card", "PUC Bangalore")
+  number             String? // document reference number printed on the doc
+  issuedAt           DateTime?
+  expiryAt           DateTime? // the date that drives renewal reminders
+  notes              String?
   // Legacy inline attachment columns — kept for one release while the
   // generic Attachment model takes over. After backfill these are
   // read-only mirrors; new uploads only land in Attachment.
@@ -1445,8 +1471,8 @@ model VehicleDocument {
   attachmentFilename String?
   attachmentMimeType String?
   attachmentSize     Int?
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   reminders InvestmentReminder[] @relation("ReminderVehicleDocument")
 
@@ -1486,27 +1512,27 @@ enum AttachmentOwnerKind {
 // model — no new table required.
 //
 enum EventKind {
-  TRIP      // vacations, day trips, pilgrimages
-  FUNCTION  // wedding, birthday, anniversary
-  FESTIVAL  // Diwali, Pongal, Christmas
-  PROJECT   // home renovation, garden setup
-  MEDICAL   // surgery + recovery period
+  TRIP // vacations, day trips, pilgrimages
+  FUNCTION // wedding, birthday, anniversary
+  FESTIVAL // Diwali, Pongal, Christmas
+  PROJECT // home renovation, garden setup
+  MEDICAL // surgery + recovery period
   OTHER
 }
 
 model Event {
-  id          String     @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
-  kind        EventKind  @default(TRIP)
+  kind        EventKind @default(TRIP)
   startedAt   DateTime
   endedAt     DateTime?
   notes       String?
-  budget      Decimal?   @db.Decimal(14, 2)
-  active      Boolean    @default(true)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  budget      Decimal?  @db.Decimal(14, 2)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   transactions Transaction[] @relation("EventTransaction")
 
@@ -1515,27 +1541,27 @@ model Event {
 }
 
 model Attachment {
-  id          String              @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  ownerKind   AttachmentOwnerKind
-  ownerId     String
+  ownerKind AttachmentOwnerKind
+  ownerId   String
 
   // S3 bucket-relative key. Globally unique so a deleted-and-recreated
   // row can't collide with a stale presigned URL.
-  s3Key       String              @unique
-  filename    String
-  mimeType    String
-  sizeBytes   Int
+  s3Key     String  @unique
+  filename  String
+  mimeType  String
+  sizeBytes Int
   // SHA-256 of the object body, optional. Populated by the client when
   // it can; used to detect S3-side corruption / silent re-writes.
-  checksum    String?
+  checksum  String?
 
   // Audit: WHO uploaded this, and (if applicable) who archived it.
   uploadedByUserId String
-  uploadedBy       User      @relation("AttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
-  uploadedAt       DateTime  @default(now())
+  uploadedBy       User     @relation("AttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  uploadedAt       DateTime @default(now())
 
   archivedAt       DateTime?
   archivedByUserId String?

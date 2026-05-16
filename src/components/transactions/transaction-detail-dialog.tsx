@@ -51,12 +51,20 @@ type DetailResponse = {
     card: { id: string; name: string } | null;
     beneficiary: { id: string; name: string } | null;
     memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
-    memberCharge: {
+    splits: Array<{
       id: string;
-      status: string;
+      contact: { id: string; name: string };
       amount: number;
-      settledAmount: number;
-    } | null;
+      sharePercent: number | null;
+      isRecoverable: boolean;
+      notes: string | null;
+      charge: {
+        id: string;
+        status: string;
+        amount: number;
+        settledAmount: number;
+      } | null;
+    }>;
     vehicle: { id: string; name: string; registrationNo: string | null } | null;
     event: { id: string; name: string; kind: string } | null;
     hospitalization: {
@@ -181,7 +189,7 @@ export function TransactionDetailDialog({
                 />
               )}
               {tx.card && <Field label="Card" value={tx.card.name} />}
-              {tx.beneficiary && (
+              {tx.beneficiary && tx.splits.length === 0 && (
                 <Field
                   label={
                     tx.memberChargeType === "RECOVERABLE"
@@ -224,17 +232,48 @@ export function TransactionDetailDialog({
               {tx.author && <Field label="Logged by" value={tx.author.name} />}
             </div>
 
-            {/* Member-charge settle state */}
-            {tx.memberCharge && tx.memberCharge.status !== "WRITTEN_OFF" && (
-              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-                <div className="font-medium">Recoverable from contact</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  {formatINR(tx.memberCharge.settledAmount)} settled of{" "}
-                  {formatINR(tx.memberCharge.amount)} ·{" "}
-                  <span className="uppercase">
-                    {tx.memberCharge.status.replace(/_/g, " ")}
-                  </span>
+            {/* Splits — listed when the expense is shared with one or more
+                contacts. Single split renders as a 1-row list with the
+                same layout as multi-contact splits. */}
+            {tx.splits.length > 0 && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
+                <div className="font-medium">
+                  {tx.splits.length === 1
+                    ? "Split with 1 contact"
+                    : `Split between ${tx.splits.length} contacts`}
                 </div>
+                <div className="divide-y divide-border/60">
+                  {tx.splits.map((s) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between gap-3 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm truncate">{s.contact.name}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {s.isRecoverable
+                            ? s.charge
+                              ? `${formatINR(s.charge.settledAmount)} settled of ${formatINR(s.charge.amount)} · ${s.charge.status.replace(/_/g, " ").toLowerCase()}`
+                              : "recoverable"
+                            : "tag only"}
+                        </div>
+                      </div>
+                      <div className="text-sm font-medium tabular-nums">
+                        {formatINR(s.amount)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {(() => {
+                  const sumSplits = tx.splits.reduce((a, s) => a + s.amount, 0);
+                  const yourShare = tx.amount - sumSplits;
+                  if (yourShare <= 0.005) return null;
+                  return (
+                    <div className="text-[11px] text-muted-foreground border-t pt-2">
+                      Your share: {formatINR(yourShare)}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
