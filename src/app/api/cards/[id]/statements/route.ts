@@ -53,7 +53,11 @@ export async function GET(
         id: true,
         periodStart: true,
         periodEnd: true,
+        dueDate: true,
+        totalDue: true,
         closedAt: true,
+        manuallyEdited: true,
+        manuallyEditedAt: true,
       },
     });
     return NextResponse.json({
@@ -61,7 +65,11 @@ export async function GET(
         id: s.id,
         periodStart: s.periodStart.toISOString(),
         periodEnd: s.periodEnd.toISOString(),
+        dueDate: s.dueDate.toISOString(),
+        totalDue: Number(s.totalDue),
         closedAt: s.closedAt?.toISOString() ?? null,
+        manuallyEdited: s.manuallyEdited,
+        manuallyEditedAt: s.manuallyEditedAt?.toISOString() ?? null,
       })),
     });
   } catch (e) {

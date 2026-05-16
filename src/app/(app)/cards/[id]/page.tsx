@@ -30,6 +30,7 @@ import {
   PayBillButton,
   PayBillAutoOpener,
 } from "@/components/cards/card-bill-payer";
+import { EditStatementButton } from "@/components/cards/edit-statement-dialog";
 
 export default async function CardDetailPage({
   params,
@@ -62,6 +63,9 @@ export default async function CardDetailPage({
   });
   if (!card || card.workspaceId !== session?.user.activeWorkspaceId) notFound();
   if (!canAccessRecord(session, card)) notFound();
+  const role = session?.user.role ?? null;
+  const canEditStatements =
+    role === "OWNER" || role === "ADMIN" || role === "SUPER_ADMIN";
 
   // ── CREDIT-only metrics ──────────────────────────────────────────────
   const isCredit = card.kind === "CREDIT";
@@ -712,8 +716,22 @@ export default async function CardDetailPage({
                 <li key={s.id} className="px-4 sm:px-5 py-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-3">
                     <div>
-                      <div className="text-sm font-medium tabular-nums">
-                        {formatDate(s.periodStart)} — {formatDate(s.periodEnd)}
+                      <div className="flex items-center gap-2 text-sm font-medium tabular-nums">
+                        <span>
+                          {formatDate(s.periodStart)} — {formatDate(s.periodEnd)}
+                        </span>
+                        {s.manuallyEdited && (
+                          <span
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground"
+                            title={
+                              s.manuallyEditedAt
+                                ? `Edited ${formatDate(s.manuallyEditedAt)}`
+                                : "Edited"
+                            }
+                          >
+                            edited
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-muted-foreground tabular-nums">
                         Due {formatDate(s.dueDate)}
@@ -745,6 +763,15 @@ export default async function CardDetailPage({
                               : "Settled"}
                         </div>
                       </div>
+                      {canEditStatements && (
+                        <EditStatementButton
+                          cardId={card.id}
+                          statementId={s.id}
+                          currentTotalDue={totalDue}
+                          currentDueDate={s.dueDate.toISOString()}
+                          periodLabel={`${formatDate(s.periodStart)} — ${formatDate(s.periodEnd)}`}
+                        />
+                      )}
                       {!isPaid && remaining > 0 && card.accountId && (
                         <PayBillButton
                           cardName={card.name}
