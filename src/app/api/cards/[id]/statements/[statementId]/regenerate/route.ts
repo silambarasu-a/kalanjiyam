@@ -70,6 +70,7 @@ export async function POST(
         workspaceId: true,
         periodStart: true,
         periodEnd: true,
+        paidAt: true,
       },
     });
     if (
@@ -78,6 +79,12 @@ export async function POST(
       stmt.accountId !== card.accountId
     ) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    if (stmt.paidAt) {
+      return NextResponse.json(
+        { error: "This statement is already paid and locked." },
+        { status: 423 },
+      );
     }
 
     const account = await prisma.account.findUnique({

@@ -75,6 +75,7 @@ export async function PATCH(
         accountId: true,
         workspaceId: true,
         closedAt: true,
+        paidAt: true,
       },
     });
     if (
@@ -88,6 +89,12 @@ export async function PATCH(
       return NextResponse.json(
         { error: "Only materialised (closed) statements can be edited." },
         { status: 400 },
+      );
+    }
+    if (stmt.paidAt) {
+      return NextResponse.json(
+        { error: "This statement is already paid and locked." },
+        { status: 423 },
       );
     }
 
