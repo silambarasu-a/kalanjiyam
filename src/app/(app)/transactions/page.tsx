@@ -366,7 +366,7 @@ export default function TransactionsPage() {
                               confirmLabel="Delete"
                               busyLabel="Deleting…"
                               onConfirm={async () => {
-                                const res = await fetch(
+                                let res = await fetch(
                                   `/api/transactions/${t.id}`,
                                   { method: "DELETE" },
                                 );
@@ -374,8 +374,32 @@ export default function TransactionsPage() {
                                   const body = await res
                                     .json()
                                     .catch(() => ({}));
-                                  toast.error(body.error ?? "Failed");
-                                  throw new Error(body.error ?? "Failed");
+                                  // 423 with canForce → offer to bypass the
+                                  // statement-close / loan-closed lock for
+                                  // Owners and Admins. Same override path the
+                                  // Edit dialog surfaces via "Edit anyway".
+                                  if (
+                                    res.status === 423 &&
+                                    body.canForce &&
+                                    window.confirm(
+                                      `${body.error ?? "Locked."}\n\nDelete anyway?`,
+                                    )
+                                  ) {
+                                    res = await fetch(
+                                      `/api/transactions/${t.id}?force=1`,
+                                      { method: "DELETE" },
+                                    );
+                                    if (!res.ok) {
+                                      const body2 = await res
+                                        .json()
+                                        .catch(() => ({}));
+                                      toast.error(body2.error ?? "Failed");
+                                      throw new Error(body2.error ?? "Failed");
+                                    }
+                                  } else {
+                                    toast.error(body.error ?? "Failed");
+                                    throw new Error(body.error ?? "Failed");
+                                  }
                                 }
                                 toast.success("Transaction deleted");
                                 mutateList();
