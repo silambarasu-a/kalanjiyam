@@ -30,7 +30,10 @@ import {
   PayBillButton,
   PayBillAutoOpener,
 } from "@/components/cards/card-bill-payer";
-import { EditStatementButton } from "@/components/cards/edit-statement-dialog";
+import {
+  EditStatementButton,
+  RegenerateStatementButton,
+} from "@/components/cards/edit-statement-dialog";
 
 export default async function CardDetailPage({
   params,
@@ -763,6 +766,12 @@ export default async function CardDetailPage({
                               : "Settled"}
                         </div>
                       </div>
+                      {canEditStatements && s.manuallyEdited && (
+                        <RegenerateStatementButton
+                          cardId={card.id}
+                          statementId={s.id}
+                        />
+                      )}
                       {canEditStatements && (
                         <EditStatementButton
                           cardId={card.id}
