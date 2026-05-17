@@ -324,7 +324,7 @@ export async function getLiquidByMember(args: {
 export async function getDashboardCashflow(args: {
   workspaceId: string;
   today: Date;
-  in30Days: Date;
+  windowEnd: Date;
   monthStart: Date;
   nextMonthBegin: Date;
   isNearMonthEnd: boolean;
@@ -332,7 +332,7 @@ export async function getDashboardCashflow(args: {
   const {
     workspaceId,
     today,
-    in30Days,
+    windowEnd,
     monthStart,
     nextMonthBegin,
     isNearMonthEnd,
@@ -365,7 +365,7 @@ export async function getDashboardCashflow(args: {
       },
     }),
     prisma.investmentReminder.findMany({
-      where: { workspaceId: wsId, status: "UPCOMING", dueDate: { lte: in30Days } },
+      where: { workspaceId: wsId, status: "UPCOMING", dueDate: { lte: windowEnd } },
       orderBy: { dueDate: "asc" },
       take: 20,
       include: {
@@ -383,7 +383,7 @@ export async function getDashboardCashflow(args: {
       where: {
         workspaceId: wsId,
         active: true,
-        nextDueDate: { gte: today, lte: in30Days },
+        nextDueDate: { gte: today, lte: windowEnd },
       },
       orderBy: { nextDueDate: "asc" },
       take: 20,
@@ -400,7 +400,7 @@ export async function getDashboardCashflow(args: {
     prisma.leasePaymentSchedule.findMany({
       where: {
         status: "UPCOMING",
-        dueDate: { gte: today, lte: in30Days },
+        dueDate: { gte: today, lte: windowEnd },
         lease: { workspaceId: wsId },
       },
       orderBy: { dueDate: "asc" },
@@ -419,7 +419,7 @@ export async function getDashboardCashflow(args: {
       },
     }),
     prisma.cardStatement.findMany({
-      where: { workspaceId: wsId, paidAt: null, dueDate: { lte: in30Days } },
+      where: { workspaceId: wsId, paidAt: null, dueDate: { lte: windowEnd } },
       orderBy: { dueDate: "asc" },
       take: 20,
       include: {
@@ -686,7 +686,7 @@ export async function getDashboardCashflow(args: {
       manualDue &&
       manualAmount != null &&
       manualAmount > 0 &&
-      manualDue.getTime() <= in30Days.getTime()
+      manualDue.getTime() <= windowEnd.getTime()
     ) {
       const paidUntagged = await untaggedPaymentsToCard(a.id, manualDue);
       const outstanding = Math.max(0, manualAmount - paidUntagged);
@@ -730,7 +730,7 @@ export async function getDashboardCashflow(args: {
       Date.UTC(closeY, closeM, Math.min(sd, monthLastDay)),
     );
     const computedDue = new Date(lastClose.getTime() + grace * 86400000);
-    if (computedDue.getTime() > in30Days.getTime()) continue;
+    if (computedDue.getTime() > windowEnd.getTime()) continue;
     // Match the card-balance "owed" definition: EXPENSE + INVESTMENT BUY.
     // Without INVESTMENT here, a gold/jewel buy posted after the close
     // sits in `cardBalanceNow` but isn't subtracted out, inflating the

@@ -477,7 +477,7 @@ function UpcomingDues({ dues }: { dues: Due[] | null }) {
         <div className="py-6 text-sm text-muted-foreground text-center">Loading…</div>
       ) : dues.length === 0 ? (
         <div className="py-6 text-sm text-muted-foreground text-center">
-          Nothing due in the next 30 days.
+          Nothing due in the coming weeks.
         </div>
       ) : (
         <div className="space-y-4">

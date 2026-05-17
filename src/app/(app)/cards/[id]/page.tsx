@@ -766,20 +766,20 @@ export default async function CardDetailPage({
                               : "Settled"}
                         </div>
                       </div>
-                      {canEditStatements && s.manuallyEdited && (
-                        <RegenerateStatementButton
-                          cardId={card.id}
-                          statementId={s.id}
-                        />
-                      )}
                       {canEditStatements && (
-                        <EditStatementButton
-                          cardId={card.id}
-                          statementId={s.id}
-                          currentTotalDue={totalDue}
-                          currentDueDate={s.dueDate.toISOString()}
-                          periodLabel={`${formatDate(s.periodStart)} — ${formatDate(s.periodEnd)}`}
-                        />
+                        <>
+                          <RegenerateStatementButton
+                            cardId={card.id}
+                            statementId={s.id}
+                          />
+                          <EditStatementButton
+                            cardId={card.id}
+                            statementId={s.id}
+                            currentTotalDue={totalDue}
+                            currentDueDate={s.dueDate.toISOString()}
+                            periodLabel={`${formatDate(s.periodStart)} — ${formatDate(s.periodEnd)}`}
+                          />
+                        </>
                       )}
                       {!isPaid && remaining > 0 && card.accountId && (
                         <PayBillButton
