@@ -99,6 +99,10 @@ export function EditTransactionDialog({
   const [editNote, setEditNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server returns 423 with `canForce: true` — surface an
+  // "Edit anyway" button so an Owner/Admin can re-submit with force=true
+  // instead of dead-ending on the lock message.
+  const [canOverride, setCanOverride] = useState(false);
   // Splits state — only meaningful for EXPENSE rows. Hydrated from the
   // detail GET when the dialog opens; `splitsTouched` guards against
   // sending a stale [] on PATCH for unrelated edits.
@@ -230,9 +234,10 @@ export function EditTransactionDialog({
     setSplitsTouched(true);
   }
 
-  async function submit() {
+  async function submit(force = false) {
     if (!transaction) return;
     setError(null);
+    setCanOverride(false);
     const amt = Number(amount);
     if (!amt || amt <= 0) {
       setError("Enter an amount");
@@ -286,6 +291,7 @@ export function EditTransactionDialog({
               }
             : {}),
           editNote: editNote.trim() || undefined,
+          ...(force ? { force: true } : {}),
           ...(splitsTouched && isExpense
             ? {
                 splits: (() => {
@@ -308,9 +314,12 @@ export function EditTransactionDialog({
             : {}),
         }),
       });
-      const body = await res.json().catch(() => ({}) as { error?: string });
+      const body = await res
+        .json()
+        .catch(() => ({}) as { error?: string; canForce?: boolean });
       if (!res.ok) {
         setError(body.error ?? "Failed to update");
+        if (res.status === 423 && body.canForce) setCanOverride(true);
         return;
       }
       toast.success("Transaction updated");
@@ -591,9 +600,20 @@ export function EditTransactionDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={submitting}>
-            {submitting ? "Saving…" : "Save"}
-          </Button>
+          {canOverride ? (
+            <Button
+              variant="destructive"
+              onClick={() => submit(true)}
+              disabled={submitting}
+              title="Bypass the closed-statement lock and save anyway. The bill snapshot won't follow this edit — regenerate the affected statement if you need it back in sync."
+            >
+              {submitting ? "Saving…" : "Edit anyway"}
+            </Button>
+          ) : (
+            <Button onClick={() => submit()} disabled={submitting}>
+              {submitting ? "Saving…" : "Save"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
