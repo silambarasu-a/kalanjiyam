@@ -766,7 +766,7 @@ export default async function CardDetailPage({
                               : "Settled"}
                         </div>
                       </div>
-                      {canEditStatements && (
+                      {canEditStatements && !isPaid && (
                         <>
                           <RegenerateStatementButton
                             cardId={card.id}
