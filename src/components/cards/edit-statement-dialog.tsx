@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Pencil } from "lucide-react";
+import { Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
@@ -147,5 +147,62 @@ export function EditStatementButton({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * Discards a manual edit on a statement and re-snapshots totalDue + dueDate
+ * from the current transaction ledger. Pairs with EditStatementButton — only
+ * shown when the row was previously hand-edited.
+ */
+export function RegenerateStatementButton({
+  cardId,
+  statementId,
+}: {
+  cardId: string;
+  statementId: string;
+}) {
+  const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+
+  async function regenerate() {
+    if (
+      !window.confirm(
+        "Discard your manual edit and recompute this statement from the transaction ledger?",
+      )
+    ) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/cards/${cardId}/statements/${statementId}/regenerate`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Failed to regenerate");
+        return;
+      }
+      toast.success("Statement regenerated");
+      await mutateBalances();
+      router.refresh();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Button
+      onClick={regenerate}
+      size="sm"
+      variant="ghost"
+      className="gap-1.5"
+      disabled={submitting}
+      title="Discard manual edit and recompute from transactions"
+    >
+      <RotateCcw className="h-3.5 w-3.5" />
+      {submitting ? "Regenerating…" : "Regenerate"}
+    </Button>
   );
 }

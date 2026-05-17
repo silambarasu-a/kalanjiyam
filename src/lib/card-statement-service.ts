@@ -25,6 +25,47 @@ import { createNotification } from "@/lib/notifications";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Compute the bill total for a single (account, [start, end]) period from
+ * the live transaction ledger. Matches the materializer's "owed" definition:
+ * EXPENSE plus INVESTMENT BUY (e.g. a gold purchase swiped on the card both
+ * grows the card outstanding), minus INCOME (refunds back to the card).
+ * Bill-payment transfers are excluded — they're tracked via Transfer.statementId.
+ */
+export async function computeStatementTotalDue(
+  accountId: string,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<number> {
+  const periodFilter = {
+    accountId,
+    date: { gte: periodStart, lt: new Date(periodEnd.getTime() + ONE_DAY_MS) },
+  };
+  const [expenseAgg, incomeAgg] = await Promise.all([
+    prisma.transaction.aggregate({
+      where: {
+        ...periodFilter,
+        OR: [
+          { type: "EXPENSE" as const, transferId: null },
+          {
+            type: "INVESTMENT" as const,
+            investmentAction: "BUY" as const,
+            transferId: null,
+          },
+        ],
+      },
+      _sum: { amount: true },
+    }),
+    prisma.transaction.aggregate({
+      where: { ...periodFilter, type: "INCOME" as const, transferId: null },
+      _sum: { amount: true },
+    }),
+  ]);
+  const expense = Number(expenseAgg._sum.amount ?? 0);
+  const income = Number(incomeAgg._sum.amount ?? 0);
+  return Math.max(0, expense - income);
+}
+
 function utcDay(year: number, month: number, day: number): Date {
   return new Date(Date.UTC(year, month, day));
 }
@@ -134,82 +175,56 @@ export async function materializeStatementsFor(
     const cycle = cycleEndingIn(cursorY, cursorM, sd);
     if (cycle.end.getTime() >= openCloseEnd.getTime()) break;
 
-    // totalDue = sum of expense-side activity in [start, end] inclusive.
-    // Mirrors `computeAccountBalance`'s "owed" definition: EXPENSE plus
-    // INVESTMENT BUY (e.g. gold/jewel purchases swiped on the card both
-    // grow the card outstanding). Bill-payment transfers are NOT
-    // subtracted here — they're tracked via Transfer.statementId so the
-    // user can see partial payments separately. Refunds recorded as
-    // INCOME on the card reduce the period's net spend, so we subtract
-    // them.
-    const periodFilter = {
-      accountId,
-      date: { gte: cycle.start, lt: new Date(cycle.end.getTime() + ONE_DAY_MS) },
-    };
-    const [expenseAgg, incomeAgg] = await Promise.all([
-      prisma.transaction.aggregate({
-        where: {
-          ...periodFilter,
-          OR: [
-            { type: "EXPENSE", transferId: null },
-            { type: "INVESTMENT", investmentAction: "BUY", transferId: null },
-          ],
-        },
-        _sum: { amount: true },
-      }),
-      prisma.transaction.aggregate({
-        where: { ...periodFilter, type: "INCOME", transferId: null },
-        _sum: { amount: true },
-      }),
-    ]);
-    const expense = Number(expenseAgg._sum.amount ?? 0);
-    const income = Number(incomeAgg._sum.amount ?? 0);
-    const totalDue = Math.max(0, expense - income);
-
-    const dueDate = new Date(cycle.end.getTime() + grace * ONE_DAY_MS);
-
     // Explicit find→create/update (instead of upsert) so we know with
     // certainty whether this iteration produced a new row. The new-row
     // signal drives the statement-generated notification below.
+    // Look the row up FIRST so we can skip the aggregate queries entirely
+    // for manually-edited rows we wouldn't overwrite anyway.
     const existing = await prisma.cardStatement.findUnique({
       where: {
         accountId_periodStart: { accountId, periodStart: cycle.start },
       },
       select: { id: true, manuallyEdited: true },
     });
-    if (existing) {
-      // Re-snapshot the totals every time we materialise — guards
-      // against the rare edge where a transaction was back-dated into
-      // a closed period before the lock kicked in.
-      // Exception: rows the user has hand-edited (totalDue / dueDate
-      // corrected via the edit-statement dialog) are owned by the user;
-      // overwriting them here would wipe their fix on the next cron tick.
-      if (!existing.manuallyEdited) {
+    // Rows the user has hand-edited (totalDue / dueDate corrected via the
+    // edit-statement dialog) are owned by the user; overwriting them here
+    // would wipe their fix on the next cron tick.
+    if (!existing?.manuallyEdited) {
+      const totalDue = await computeStatementTotalDue(
+        accountId,
+        cycle.start,
+        cycle.end,
+      );
+      const dueDate = new Date(cycle.end.getTime() + grace * ONE_DAY_MS);
+      if (existing) {
+        // Re-snapshot the totals every time we materialise — guards
+        // against the rare edge where a transaction was back-dated into
+        // a closed period before the lock kicked in.
         await prisma.cardStatement.update({
           where: { id: existing.id },
           data: { periodEnd: cycle.end, dueDate, totalDue },
         });
-      }
-    } else {
-      await prisma.cardStatement.create({
-        data: {
-          workspaceId: account.workspaceId,
-          accountId,
+      } else {
+        await prisma.cardStatement.create({
+          data: {
+            workspaceId: account.workspaceId,
+            accountId,
+            periodStart: cycle.start,
+            periodEnd: cycle.end,
+            dueDate,
+            totalDue,
+            closedAt: cycle.end,
+          },
+          select: { id: true },
+        });
+        created += 1;
+        newlyCreated.push({
           periodStart: cycle.start,
           periodEnd: cycle.end,
           dueDate,
           totalDue,
-          closedAt: cycle.end,
-        },
-        select: { id: true },
-      });
-      created += 1;
-      newlyCreated.push({
-        periodStart: cycle.start,
-        periodEnd: cycle.end,
-        dueDate,
-        totalDue,
-      });
+        });
+      }
     }
 
     // Step forward one month.
