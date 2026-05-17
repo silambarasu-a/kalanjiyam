@@ -22,8 +22,6 @@ export async function GET() {
 
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
-    const in30Days = new Date(today);
-    in30Days.setUTCDate(in30Days.getUTCDate() + TIMING.dashboardUpcomingDuesDays);
     const monthStart = new Date(
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
     );
@@ -34,11 +32,23 @@ export async function GET() {
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0),
     ).getUTCDate();
     const isNearMonthEnd = today.getUTCDate() > daysInThisMonth - 7;
+    // Window: at least `dashboardUpcomingDuesDays` ahead, but also through
+    // end of next calendar month. Otherwise a bill due late in the next
+    // month (typical for a credit card whose statementDate is after today's
+    // date-of-month) silently falls off the dashboard and the user sees
+    // "nothing due" while a real bill is looming.
+    const rolling = new Date(today);
+    rolling.setUTCDate(rolling.getUTCDate() + TIMING.dashboardUpcomingDuesDays);
+    const endOfNextMonth = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 2, 0),
+    );
+    const windowEnd =
+      rolling.getTime() > endOfNextMonth.getTime() ? rolling : endOfNextMonth;
 
     const cashflow = await getDashboardCashflow({
       workspaceId: ctx.workspaceId,
       today,
-      in30Days,
+      windowEnd,
       monthStart,
       nextMonthBegin,
       isNearMonthEnd,

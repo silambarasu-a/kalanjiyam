@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ export function PayBillDialog({
   dueDate?: string | null;
   contextLabel?: string | null;
 }) {
+  const router = useRouter();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const { data: accountsData } = useSWR<{ accounts: Account[] }>(
     open ? "/api/accounts" : null,
@@ -111,6 +113,7 @@ export function PayBillDialog({
           : `Paid ${formatINR(amt)} · ${formatINR(outstanding - amt)} remaining`,
       );
       await mutateBalances();
+      router.refresh();
       onClose();
     } finally {
       setSubmitting(false);
