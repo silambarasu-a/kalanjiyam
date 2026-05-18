@@ -20,7 +20,9 @@ export type AttachmentOwnerKind =
   | "CROP_BATCH_BILL"
   | "LOAN_DOCUMENT"
   | "INCOME_PROOF"
-  | "EVENT_DOCUMENT";
+  | "EVENT_DOCUMENT"
+  | "UTILITY_BILL"
+  | "SUBSCRIPTION_DOCUMENT";
 
 export type AttachmentPolicy = {
   /** S3 path segment for this owner kind. Stable; never rename. */
@@ -90,6 +92,20 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     feature: "events",
     mime: ["application/pdf", "image/*"],
     maxMB: 25,
+    sensitive: false,
+  },
+  UTILITY_BILL: {
+    entityPath: "utility-bills",
+    feature: "bills",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 20,
+    sensitive: false,
+  },
+  SUBSCRIPTION_DOCUMENT: {
+    entityPath: "subscriptions",
+    feature: "subscriptions",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 10,
     sensitive: false,
   },
 };

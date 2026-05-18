@@ -76,6 +76,20 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "UTILITY_BILL": {
+      const row = await prisma.utilityBill.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
+    case "SUBSCRIPTION_DOCUMENT": {
+      const row = await prisma.subscription.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     default: {
       const exhaustive: never = ownerKind;
       void exhaustive;

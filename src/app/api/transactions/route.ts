@@ -25,9 +25,14 @@ export async function GET(request: Request) {
     const session = await auth();
     const url = new URL(request.url);
     const type = url.searchParams.get("type");
+    const kind = url.searchParams.get("kind");
     const accountId = url.searchParams.get("accountId");
     const cardId = url.searchParams.get("cardId");
     const beneficiaryContactId = url.searchParams.get("beneficiaryContactId");
+    const utilityProviderId = url.searchParams.get("utilityProviderId");
+    const subscriptionId = url.searchParams.get("subscriptionId");
+    const categoryId = url.searchParams.get("categoryId");
+    const search = url.searchParams.get("search");
     const limitParam = Number(url.searchParams.get("limit") ?? "50");
     const limit = Math.min(Math.max(limitParam, 1), 200);
     const offsetParam = Number(url.searchParams.get("offset") ?? "0");
@@ -37,9 +42,16 @@ export async function GET(request: Request) {
 
     const where: Record<string, unknown> = { workspaceId: ctx.workspaceId };
     if (type) where.type = type;
+    if (kind) where.kind = kind;
     if (accountId) where.accountId = accountId;
     if (cardId) where.cardId = cardId;
     if (beneficiaryContactId) where.beneficiaryContactId = beneficiaryContactId;
+    if (utilityProviderId) where.utilityProviderId = utilityProviderId;
+    if (subscriptionId) where.subscriptionId = subscriptionId;
+    if (categoryId) where.categoryId = categoryId;
+    if (search) {
+      where.description = { contains: search, mode: "insensitive" };
+    }
     // Date-range filter — both bounds inclusive, applied at the SQL
     // layer. `from` defaults to epoch start, `to` defaults to "now".
     // Skipped entirely when neither is set so an unfiltered listing
@@ -421,6 +433,9 @@ export async function POST(request: Request) {
 
       const txn = await tx.transaction.create({
         data: {
+          // Honor client-minted UUID when the form pre-generated one
+          // for the instant-upload flow; otherwise Prisma's default.
+          ...(data.clientId ? { id: data.clientId } : {}),
           workspaceId: ctx.workspaceId,
           type: data.type as TransactionType,
           kind: data.kind ?? null,

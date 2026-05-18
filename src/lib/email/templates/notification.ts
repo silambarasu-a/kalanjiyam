@@ -80,6 +80,9 @@ const KIND_LABELS: Record<string, string> = {
   CLAIM_STATUS_CHANGED: "Claim status",
   CARD_STATEMENT_DUE: "Card statement",
   LOAN_EMI_DUE: "Loan EMI",
+  SUBSCRIPTION_RENEWAL_DUE: "Subscription renewal",
+  UTILITY_BILL_DUE_SOON: "Utility bill due",
+  UTILITY_BILL_OVERDUE: "Utility bill overdue",
   GENERIC: "Reminder",
 };
 

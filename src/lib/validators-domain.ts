@@ -121,6 +121,10 @@ export const transactionSplitInputSchema = z.object({
 
 export const transactionCreateSchema = z
   .object({
+    // Optional client-minted UUID. When supplied, used as the row's id
+    // so the instant-upload flow's draft attachments link without a
+    // second round-trip. Server ignores if omitted (Prisma generates).
+    clientId: z.string().uuid().optional().nullable(),
     type: z.enum(["INCOME", "EXPENSE", "INVESTMENT"]),
     kind: transactionKindEnum.optional().nullable(),
     amount: z.number().positive(),
@@ -883,6 +887,8 @@ const attachmentOwnerKindEnum = z.enum([
   "LOAN_DOCUMENT",
   "INCOME_PROOF",
   "EVENT_DOCUMENT",
+  "UTILITY_BILL",
+  "SUBSCRIPTION_DOCUMENT",
 ]);
 
 export const attachmentUploadUrlSchema = z.object({
@@ -892,6 +898,10 @@ export const attachmentUploadUrlSchema = z.object({
   contentType: z.string().trim().min(1).max(100),
   // Hard ceiling 50 MB; per-kind policy enforces tighter limits server-side.
   size: z.number().int().positive().max(50_000_000),
+  // When true, skip the owner-exists check. Used by the instant-upload
+  // flow where the client mints a UUID up-front and uses it both as the
+  // attachment owner and as the row id of the not-yet-created parent.
+  draft: z.boolean().optional(),
 });
 
 export const attachmentFinalizeSchema = z.object({
@@ -902,6 +912,7 @@ export const attachmentFinalizeSchema = z.object({
   mimeType: z.string().trim().min(1).max(100),
   sizeBytes: z.number().int().positive().max(50_000_000),
   checksum: z.string().trim().min(1).max(128).optional().nullable(),
+  draft: z.boolean().optional(),
 });
 
 export const attachmentListQuerySchema = z.object({
@@ -949,3 +960,168 @@ export const eventUpdateSchema = z
     (v) => !v.startedAt || !v.endedAt || new Date(v.endedAt) >= new Date(v.startedAt),
     { message: "End date can't be before start date", path: ["endedAt"] },
   );
+
+/* ---------------- Subscription schemas ---------------- */
+
+const subscriptionCycleEnum = z.enum([
+  "WEEKLY",
+  "MONTHLY",
+  "QUARTERLY",
+  "HALF_YEARLY",
+  "YEARLY",
+]);
+
+const subscriptionStatusEnum = z.enum(["ACTIVE", "PAUSED", "CANCELLED"]);
+
+const subscriptionBase = z.object({
+  name: z.string().trim().min(1).max(120),
+  amount: z.number().positive().max(10_000_000),
+  cycle: subscriptionCycleEnum,
+  nextBillingDate: z.string().min(1),
+  startedOn: z.string().min(1),
+  endsOn: z.string().optional().nullable(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  autoPay: z.boolean().optional().default(false),
+  categoryId: z.string().uuid().optional().nullable(),
+  logoUrl: z.string().trim().max(500).optional().nullable(),
+  notes: z.string().trim().max(1000).optional().nullable(),
+  status: subscriptionStatusEnum.optional().default("ACTIVE"),
+});
+
+export const subscriptionCreateSchema = subscriptionBase
+  .refine((d) => !!d.accountId !== !!d.cardId, {
+    message: "Pick exactly one payment source — account or card",
+    path: ["accountId"],
+  })
+  .refine((d) => !d.endsOn || new Date(d.endsOn) >= new Date(d.startedOn), {
+    message: "End date can't be before start date",
+    path: ["endsOn"],
+  });
+
+export const subscriptionUpdateSchema = subscriptionBase
+  .partial()
+  .refine(
+    (d) => {
+      if (d.accountId === undefined && d.cardId === undefined) return true;
+      const acc = !!d.accountId;
+      const card = !!d.cardId;
+      return acc !== card;
+    },
+    { message: "Pick exactly one payment source", path: ["accountId"] },
+  );
+
+export const subscriptionPaySchema = z.object({
+  // The schedule row being confirmed. Optional — server falls back to
+  // the soonest UPCOMING row when omitted.
+  scheduleId: z.string().uuid().optional().nullable(),
+  // Optional override of the master amount (e.g. pro-rated charge).
+  amount: z.number().positive().max(10_000_000).optional(),
+  // Optional override of the payment source.
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  paidOn: z.string().optional().nullable(),
+  notes: z.string().trim().max(200).optional().nullable(),
+});
+
+export const subscriptionSkipSchema = z.object({
+  scheduleId: z.string().uuid().optional().nullable(),
+  reason: z.string().trim().max(200).optional().nullable(),
+});
+
+export const subscriptionListQuerySchema = z.object({
+  status: subscriptionStatusEnum.optional(),
+  cycle: subscriptionCycleEnum.optional(),
+  search: z.string().trim().max(120).optional(),
+});
+
+/* ---------------- Utility provider / bill schemas ---------------- */
+
+const utilityKindEnum = z.enum([
+  "ELECTRICITY",
+  "INTERNET",
+  "MOBILE_POSTPAID",
+  "MOBILE_PREPAID",
+  "DTH",
+  "GAS",
+  "WATER",
+  "OTHER",
+]);
+
+const utilityProviderStatusEnum = z.enum(["ACTIVE", "INACTIVE"]);
+
+const utilityProviderBase = z.object({
+  kind: utilityKindEnum,
+  providerName: z.string().trim().min(1).max(120),
+  connectionNumber: z.string().trim().max(80).optional().nullable(),
+  addressLine: z.string().trim().max(240).optional().nullable(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  autoPay: z.boolean().optional().default(false),
+  defaultDueDay: z.number().int().min(1).max(31).optional().nullable(),
+  status: utilityProviderStatusEnum.optional().default("ACTIVE"),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+export const utilityProviderCreateSchema = utilityProviderBase.refine(
+  (d) => {
+    if (!d.accountId && !d.cardId) return true; // default source is optional
+    return !!d.accountId !== !!d.cardId;
+  },
+  { message: "Pick exactly one default source — account or card", path: ["accountId"] },
+);
+
+export const utilityProviderUpdateSchema = utilityProviderBase.partial();
+
+export const utilityAdvanceCreateSchema = z
+  .object({
+    amount: z.number().positive().max(10_000_000),
+    date: z.string().min(1),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    notes: z.string().trim().max(200).optional().nullable(),
+  })
+  .refine((d) => !!d.accountId !== !!d.cardId, {
+    message: "Pick exactly one source — account or card",
+    path: ["accountId"],
+  });
+
+export const utilityBillCreateSchema = z.object({
+  clientId: z.string().uuid().optional().nullable(),
+  providerId: z.string().uuid(),
+  billDate: z.string().min(1),
+  dueDate: z.string().min(1),
+  billAmount: z.number().positive().max(10_000_000),
+  previousReading: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  currentReading: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+export const utilityBillUpdateSchema = utilityBillCreateSchema.partial();
+
+export const utilityBillPaySchema = z
+  .object({
+    advanceApplied: z.number().nonnegative().max(10_000_000).optional().default(0),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    paidOn: z.string().optional().nullable(),
+    notes: z.string().trim().max(200).optional().nullable(),
+  })
+  .refine(
+    (d) => !d.accountId || !d.cardId,
+    { message: "Pick at most one source", path: ["accountId"] },
+  );
+
+export const utilityBillListQuerySchema = z.object({
+  providerId: z.string().uuid().optional(),
+  status: z.enum(["paid", "unpaid", "overdue"]).optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  search: z.string().trim().max(120).optional(),
+});
+
+export const utilityProviderListQuerySchema = z.object({
+  kind: utilityKindEnum.optional(),
+  status: utilityProviderStatusEnum.optional(),
+  search: z.string().trim().max(120).optional(),
+});

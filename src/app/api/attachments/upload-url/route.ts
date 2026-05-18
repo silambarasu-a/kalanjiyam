@@ -43,7 +43,7 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const { ownerKind, ownerId, filename, contentType, size } = parsed.data;
+    const { ownerKind, ownerId, filename, contentType, size, draft } = parsed.data;
     const policy = getAttachmentPolicy(ownerKind);
     const ctx = await requireWorkspace(policy.feature, "write");
 
@@ -62,13 +62,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const ownerOk = await assertOwnerInWorkspace(
-      ownerKind,
-      ownerId,
-      ctx.workspaceId,
-    );
-    if (!ownerOk) {
-      return NextResponse.json({ error: "Owner not found" }, { status: 404 });
+    // Draft uploads (instant-upload before parent row exists) skip the
+    // owner check — the client mints the parent's UUID up-front and
+    // uses it as ownerId. The orphan-GC cron sweeps any drafts where
+    // the parent row never materializes.
+    if (!draft) {
+      const ownerOk = await assertOwnerInWorkspace(
+        ownerKind,
+        ownerId,
+        ctx.workspaceId,
+      );
+      if (!ownerOk) {
+        return NextResponse.json({ error: "Owner not found" }, { status: 404 });
+      }
     }
 
     const key = buildAttachmentKey({

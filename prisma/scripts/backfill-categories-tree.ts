@@ -124,14 +124,17 @@ async function main() {
   ][]) {
     for (const [parentName, childNames] of Object.entries(parents)) {
       // Step 1 — find or create the top-level parent (workspaceId=null, isDefault=true)
-      let parent = await prisma.category.findFirst({
+      // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+      let parent = (await (prisma.category.findFirst as unknown as (
+        a: unknown,
+      ) => Promise<{ id: string } | null>)({
         where: {
           name: parentName,
           isDefault: true,
           workspaceId: null,
           types: { has: type },
         },
-      });
+      })) as { id: string; parentCategoryId?: string | null } | null;
       if (!parent) {
         parent = await prisma.category.create({
           data: {

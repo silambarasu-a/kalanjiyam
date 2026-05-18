@@ -131,13 +131,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const ownerOk = await assertOwnerInWorkspace(
-      ownerKind,
-      data.ownerId,
-      ctx.workspaceId,
-    );
-    if (!ownerOk) {
-      return NextResponse.json({ error: "Owner not found" }, { status: 404 });
+    // Same draft-aware logic as upload-url: when the parent row hasn't
+    // been created yet (instant-upload flow), skip the owner check. The
+    // Attachment row gets created with a soft FK that will resolve once
+    // the parent is saved with the same UUID; if not, GC sweeps it.
+    if (!data.draft) {
+      const ownerOk = await assertOwnerInWorkspace(
+        ownerKind,
+        data.ownerId,
+        ctx.workspaceId,
+      );
+      if (!ownerOk) {
+        return NextResponse.json({ error: "Owner not found" }, { status: 404 });
+      }
     }
 
     const created = await prisma.attachment.create({

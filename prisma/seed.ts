@@ -39,6 +39,7 @@ const TREE: Record<TransactionType, Record<string, string[]>> = {
       "Internet / Broadband",
       "Mobile / Phone",
       "DTH / Cable",
+      "Gas",
     ],
     Education: ["Fees", "Books / Stationery", "Coaching / Tuition", "Online courses"],
     "Food & Dining": ["Restaurant", "Takeaway / Delivery", "Cafe / Snacks"],

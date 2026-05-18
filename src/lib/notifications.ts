@@ -48,6 +48,9 @@ const KIND_FEATURES: Record<NotificationKind, Feature[] | null> = {
   CLAIM_STATUS_CHANGED: ["insurance"],
   CARD_STATEMENT_DUE: ["cards"],
   LOAN_EMI_DUE: ["bank_loans", "hand_loans", "card_emi"],
+  SUBSCRIPTION_RENEWAL_DUE: ["subscriptions"],
+  UTILITY_BILL_DUE_SOON: ["bills"],
+  UTILITY_BILL_OVERDUE: ["bills"],
   GENERIC: null,
 };
 

@@ -45,6 +45,42 @@ export async function POST(
     if (reminder.status !== "UPCOMING") {
       return NextResponse.json({ error: "Already processed" }, { status: 400 });
     }
+    // Subscription / utility-bill reminders have their own pay routes
+    // that also handle advance-balance math and schedule rollover. The
+    // generic confirm flow would silently mark them confirmed without
+    // recording a transaction or advancing the cycle — reject with a
+    // clear pointer so the UI can route the user correctly.
+    if (reminder.kind === ReminderKind.SUBSCRIPTION_RENEWAL) {
+      return NextResponse.json(
+        {
+          error:
+            "Pay this subscription from its detail page so the cycle rolls forward correctly.",
+          link: reminder.subscriptionId
+            ? `/subscriptions/${reminder.subscriptionId}`
+            : "/subscriptions",
+        },
+        { status: 400 },
+      );
+    }
+    if (reminder.kind === ReminderKind.UTILITY_BILL_DUE) {
+      // Look up the bill's provider so we can deep-link to the right page.
+      const bill = reminder.utilityBillId
+        ? await prisma.utilityBill.findUnique({
+            where: { id: reminder.utilityBillId },
+            select: { providerId: true },
+          })
+        : null;
+      return NextResponse.json(
+        {
+          error:
+            "Pay this bill from the provider's page so advance balance updates correctly.",
+          link: bill?.providerId
+            ? `/bills/providers/${bill.providerId}`
+            : "/bills",
+        },
+        { status: 400 },
+      );
+    }
     const body = await request.json();
     const parsed = reminderConfirmSchema.safeParse(body);
     if (!parsed.success) {

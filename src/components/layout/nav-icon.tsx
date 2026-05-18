@@ -25,6 +25,8 @@ import {
   BarChart3,
   Building2,
   Settings,
+  Repeat,
+  Zap,
 } from "lucide-react";
 import type { IconName } from "./nav-config";
 
@@ -49,6 +51,8 @@ const MAP: Record<IconName, React.ComponentType<{ className?: string }>> = {
   vehicles: Car,
   medical: Stethoscope,
   events: Calendar,
+  subscriptions: Repeat,
+  bills: Zap,
   reminders: Bell,
   notifications: BellRing,
   inbox: Inbox,

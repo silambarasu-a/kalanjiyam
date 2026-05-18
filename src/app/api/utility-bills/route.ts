@@ -1,0 +1,219 @@
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import {
+  utilityBillCreateSchema,
+  utilityBillListQuerySchema,
+} from "@/lib/validators-domain";
+import {
+  ReminderKind,
+  type Prisma,
+  type UtilityProvider,
+} from "@/generated/prisma/client";
+
+function err(e: unknown) {
+  if (e instanceof WorkspaceAccessError) {
+    return NextResponse.json({ error: e.message }, { status: e.status });
+  }
+  console.error("[utility-bills]", e);
+  return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+}
+
+function parseDate(value: string): Date {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime()))
+    throw new WorkspaceAccessError(400, "Invalid date");
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+export async function GET(request: Request) {
+  try {
+    const ctx = await requireWorkspace("bills", "read");
+    const { searchParams } = new URL(request.url);
+    const parsed = utilityBillListQuerySchema.safeParse({
+      providerId: searchParams.get("providerId") ?? undefined,
+      status: searchParams.get("status") ?? undefined,
+      from: searchParams.get("from") ?? undefined,
+      to: searchParams.get("to") ?? undefined,
+      search: searchParams.get("search") ?? undefined,
+    });
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0].message },
+        { status: 400 },
+      );
+    }
+    const q = parsed.data;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const where: Prisma.UtilityBillWhereInput = {
+      workspaceId: ctx.workspaceId,
+    };
+    if (q.providerId) where.providerId = q.providerId;
+    if (q.status === "paid") where.paidAt = { not: null };
+    if (q.status === "unpaid") where.paidAt = null;
+    if (q.status === "overdue") {
+      where.paidAt = null;
+      where.dueDate = { lt: today };
+    }
+    if (q.from || q.to) {
+      where.dueDate = {
+        ...(typeof where.dueDate === "object" && where.dueDate
+          ? where.dueDate
+          : {}),
+        ...(q.from ? { gte: parseDate(q.from) } : {}),
+        ...(q.to ? { lte: parseDate(q.to) } : {}),
+      };
+    }
+    if (q.search) {
+      where.provider = {
+        OR: [
+          { providerName: { contains: q.search, mode: "insensitive" } },
+          { connectionNumber: { contains: q.search, mode: "insensitive" } },
+        ],
+      };
+    }
+
+    const rows = await prisma.utilityBill.findMany({
+      where,
+      orderBy: [{ dueDate: "desc" }, { createdAt: "desc" }],
+      include: {
+        provider: {
+          select: {
+            id: true,
+            providerName: true,
+            kind: true,
+            connectionNumber: true,
+          },
+        },
+        paidTransaction: {
+          select: {
+            id: true,
+            amount: true,
+            account: { select: { id: true, name: true, kind: true } },
+            card: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const billIds = rows.map((r) => r.id);
+    const attachCounts = billIds.length
+      ? await prisma.attachment.groupBy({
+          by: ["ownerId"],
+          where: {
+            ownerKind: "UTILITY_BILL",
+            ownerId: { in: billIds },
+            archivedAt: null,
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const countByOwner = new Map(
+      attachCounts.map((c) => [c.ownerId, c._count._all]),
+    );
+
+    return NextResponse.json({
+      bills: rows.map((b) => ({
+        id: b.id,
+        providerId: b.providerId,
+        provider: b.provider,
+        billDate: b.billDate.toISOString(),
+        dueDate: b.dueDate.toISOString(),
+        billAmount: Number(b.billAmount),
+        previousReading: b.previousReading ? Number(b.previousReading) : null,
+        currentReading: b.currentReading ? Number(b.currentReading) : null,
+        unitsConsumed: b.unitsConsumed ? Number(b.unitsConsumed) : null,
+        advanceApplied: Number(b.advanceApplied),
+        paidAt: b.paidAt?.toISOString() ?? null,
+        paidTransactionId: b.paidTransactionId,
+        paidTransaction: b.paidTransaction
+          ? {
+              id: b.paidTransaction.id,
+              amount: Number(b.paidTransaction.amount),
+              account: b.paidTransaction.account,
+              card: b.paidTransaction.card,
+            }
+          : null,
+        notes: b.notes,
+        attachmentCount: countByOwner.get(b.id) ?? 0,
+      })),
+    });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const ctx = await requireWorkspace("bills", "write");
+    const body = await request.json();
+    const parsed = utilityBillCreateSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0].message },
+        { status: 400 },
+      );
+    }
+    const d = parsed.data;
+    // Cast through `unknown` to dodge a Prisma 7 deep-instantiation
+    // quirk that fires once the schema grows past a threshold.
+    const provider = (await (
+      prisma.utilityProvider.findFirst as unknown as (a: {
+        where: { id: string; workspaceId: string };
+      }) => Promise<UtilityProvider | null>
+    )({ where: { id: d.providerId, workspaceId: ctx.workspaceId } }));
+    if (!provider) {
+      return NextResponse.json({ error: "Provider not found" }, { status: 404 });
+    }
+
+    const billDate = parseDate(d.billDate);
+    const dueDate = parseDate(d.dueDate);
+
+    // Auto-compute units consumed for ELECTRICITY when both readings present.
+    let unitsConsumed: number | null = null;
+    if (
+      provider.kind === "ELECTRICITY" &&
+      d.previousReading != null &&
+      d.currentReading != null
+    ) {
+      unitsConsumed = Number(d.currentReading) - Number(d.previousReading);
+      // Allow meter-reset case (negative diff) but flag in notes; we
+      // store the absolute value so charts don't get confused.
+      if (unitsConsumed < 0) unitsConsumed = Math.abs(unitsConsumed);
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const bill = await tx.utilityBill.create({
+        data: {
+          ...(d.clientId ? { id: d.clientId } : {}),
+          workspaceId: ctx.workspaceId,
+          providerId: provider.id,
+          billDate,
+          dueDate,
+          billAmount: d.billAmount,
+          previousReading: d.previousReading ?? null,
+          currentReading: d.currentReading ?? null,
+          unitsConsumed,
+          notes: d.notes ?? null,
+        },
+      });
+      await tx.investmentReminder.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          utilityBillId: bill.id,
+          kind: ReminderKind.UTILITY_BILL_DUE,
+          dueDate,
+          amount: d.billAmount,
+        },
+      });
+      return bill;
+    });
+
+    return NextResponse.json({ id: result.id });
+  } catch (e) {
+    return err(e);
+  }
+}

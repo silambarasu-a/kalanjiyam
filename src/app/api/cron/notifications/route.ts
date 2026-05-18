@@ -28,6 +28,8 @@ const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   FD_INTEREST: NotificationKind.GENERIC,
   LEASE_PAYMENT: NotificationKind.GENERIC,
   VEHICLE_DOC_RENEWAL: NotificationKind.GENERIC,
+  SUBSCRIPTION_RENEWAL: NotificationKind.SUBSCRIPTION_RENEWAL_DUE,
+  UTILITY_BILL_DUE: NotificationKind.UTILITY_BILL_DUE_SOON,
 };
 
 const VEHICLE_DOC_KIND_LABEL: Record<string, string> = {
@@ -90,6 +92,15 @@ async function run() {
           vehicle: { select: { id: true, name: true, registrationNo: true } },
         },
       },
+      subscription: { select: { id: true, name: true } },
+      utilityBill: {
+        select: {
+          id: true,
+          dueDate: true,
+          billAmount: true,
+          provider: { select: { id: true, providerName: true, kind: true } },
+        },
+      },
     },
   });
 
@@ -109,7 +120,11 @@ async function run() {
         ? daysOut <= 0
           ? NotificationKind.PREMIUM_OVERDUE
           : NotificationKind.PREMIUM_DUE_SOON
-        : baseKind;
+        : r.kind === ReminderKind.UTILITY_BILL_DUE
+          ? daysOut < 0
+            ? NotificationKind.UTILITY_BILL_OVERDUE
+            : NotificationKind.UTILITY_BILL_DUE_SOON
+          : baseKind;
 
     let label: string;
     if (r.kind === ReminderKind.VEHICLE_DOC_RENEWAL && r.vehicleDocument) {
@@ -122,6 +137,10 @@ async function run() {
         r.vehicleDocument.vehicle?.registrationNo ??
         "vehicle";
       label = `${docLabel} (${vehicleLabel})`;
+    } else if (r.kind === ReminderKind.SUBSCRIPTION_RENEWAL && r.subscription) {
+      label = r.subscription.name;
+    } else if (r.kind === ReminderKind.UTILITY_BILL_DUE && r.utilityBill) {
+      label = `${r.utilityBill.provider.providerName} bill`;
     } else {
       label =
         r.investment?.name ??
@@ -144,13 +163,17 @@ async function run() {
             : `${label} due in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
     const link = r.vehicleDocument?.vehicleId
       ? `/vehicles/${r.vehicleDocument.vehicleId}`
-      : r.investment?.id
-        ? r.investment.kind === "INSURANCE"
-          ? `/insurance/${r.investment.id}`
-          : `/investments/${r.investment.id}`
-        : r.loan?.id
-          ? `/loans/${r.loan.id}`
-          : "/notifications";
+      : r.subscription?.id
+        ? `/subscriptions/${r.subscription.id}`
+        : r.utilityBill?.provider?.id
+          ? `/bills/providers/${r.utilityBill.provider.id}`
+          : r.investment?.id
+            ? r.investment.kind === "INSURANCE"
+              ? `/insurance/${r.investment.id}`
+              : `/investments/${r.investment.id}`
+            : r.loan?.id
+              ? `/loans/${r.loan.id}`
+              : "/notifications";
 
     const body = isExpiry
       ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`
@@ -212,14 +235,22 @@ async function run() {
         ? `${p.name} matures today`
         : `${p.name} matures in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
     // Title-based dedup since no reminderId exists for maturity events.
-    const existing = await prisma.notification.findFirst({
+    // Dodge a Prisma 7 deep-instantiation quirk that fires once the
+    // schema grows past a threshold — local typing keeps the result
+    // shape predictable for the `if (existing)` check.
+    const dedupArgs = {
       where: {
         workspaceId: p.workspaceId,
         kind: NotificationKind.POLICY_RENEWING,
         title,
       },
       select: { id: true },
-    });
+    } as const;
+    const existing = (await (
+      prisma.notification.findFirst as unknown as (
+        a: typeof dedupArgs,
+      ) => Promise<{ id: string } | null>
+    )(dedupArgs));
     if (existing) {
       maturitySkipped++;
       continue;

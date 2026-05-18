@@ -44,10 +44,13 @@ async function main() {
     }
     let ownerId = workspaceOwners.get(d.workspaceId);
     if (!ownerId) {
-      const ws = await prisma.workspace.findUnique({
+      // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+      const ws = (await (prisma.workspace.findUnique as unknown as (
+        a: unknown,
+      ) => Promise<{ ownerUserId: string } | null>)({
         where: { id: d.workspaceId },
         select: { ownerUserId: true },
-      });
+      }));
       if (!ws) {
         console.warn(
           `[backfill] vehicle doc ${d.id} has no workspace; skipping`,

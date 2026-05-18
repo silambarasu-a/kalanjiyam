@@ -17,6 +17,11 @@ import {
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 import { isS3Configured, presignGet } from "@/lib/s3";
+import {
+  revertSubscriptionPay,
+  revertUtilityAdvance,
+  revertUtilityBillPay,
+} from "@/lib/cascades";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -61,7 +66,11 @@ export async function GET(
   try {
     const ctx = await requireWorkspace("transactions", "read");
     const { id } = await context.params;
-    const t = await prisma.transaction.findUnique({
+    // Cast through unknown to dodge Prisma 7 deep-instantiation quirk
+    // that fires once the schema grows past a threshold.
+    const t = (await (prisma.transaction.findUnique as unknown as (
+      a: unknown,
+    ) => Promise<Record<string, unknown> | null>)({
       where: { id },
       include: {
         category: {
@@ -107,7 +116,40 @@ export async function GET(
         },
         user: { select: { id: true, name: true } },
       },
-    });
+    })) as unknown as Awaited<ReturnType<typeof prisma.transaction.findUnique>> & {
+      category: { id: string; name: string; parent: { id: string; name: string } | null } | null;
+      account: { id: string; name: string; kind: string } | null;
+      card: { id: string; name: string } | null;
+      beneficiaryContact: { id: string; name: string } | null;
+      splits: Array<{
+        id: string;
+        amount: unknown;
+        sharePercent: unknown;
+        isRecoverable: boolean;
+        notes: string | null;
+        contact: { id: string; name: string };
+        memberCharge: {
+          id: string;
+          status: string;
+          amount: unknown;
+          settledAmount: unknown;
+        } | null;
+      }>;
+      vehicle: { id: string; name: string | null; registrationNo: string | null } | null;
+      event: { id: string; name: string; kind: string } | null;
+      hospitalization: {
+        id: string;
+        hospitalName: string;
+        patientContact: { id: string; name: string };
+      } | null;
+      transfer: {
+        fromAccount: { id: string; name: string; kind: string } | null;
+        toAccount: { id: string; name: string; kind: string } | null;
+        fromContact: { id: string; name: string } | null;
+        toContact: { id: string; name: string } | null;
+      } | null;
+      user: { id: string; name: string };
+    };
     if (!t || t.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -901,6 +943,30 @@ export async function DELETE(
             where: { id: chargeId },
             data: { status: MemberChargeStatus.WRITTEN_OFF },
           });
+        }
+      }
+
+      // ── Subscription pay: reopen the schedule + reminder, roll back
+      // nextBillingDate if this was the most-recent pay.
+      if (t.kind === "SUBSCRIPTION" && t.subscriptionScheduleId) {
+        await revertSubscriptionPay(tx, t.id);
+      }
+
+      // ── Utility bill pay: refund advanceApplied back to the provider,
+      // mark the bill unpaid, reopen its reminder.
+      if (t.kind === "UTILITY_BILL" && t.utilityBillId) {
+        await revertUtilityBillPay(tx, t.id);
+      }
+
+      // ── Utility advance deposit: subtract from advance balance, but
+      // refuse if subsequent bills have already consumed it.
+      if (t.kind === "UTILITY_ADVANCE" && t.utilityProviderId) {
+        const r = await revertUtilityAdvance(tx, t.id);
+        if (!r.ok) {
+          // Abort the entire delete so the user sees a useful error.
+          // 400 (closest accepted status) — the UI converts the message
+          // body into a toast either way.
+          throw new WorkspaceAccessError(400, r.reason);
         }
       }
 

@@ -457,6 +457,9 @@ const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   CLAIM_STATUS_CHANGED: "Claim status changed",
   CARD_STATEMENT_DUE: "Card statement due",
   LOAN_EMI_DUE: "Loan EMI due",
+  SUBSCRIPTION_RENEWAL_DUE: "Subscription renewal due",
+  UTILITY_BILL_DUE_SOON: "Utility bill due soon",
+  UTILITY_BILL_OVERDUE: "Utility bill overdue",
   GENERIC: "Other reminders",
 };
 

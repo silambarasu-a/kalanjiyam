@@ -1,0 +1,208 @@
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { utilityBillUpdateSchema } from "@/lib/validators-domain";
+import { revertUtilityBillPay } from "@/lib/cascades";
+import type { UtilityBill } from "@/generated/prisma/client";
+
+function err(e: unknown) {
+  if (e instanceof WorkspaceAccessError) {
+    return NextResponse.json({ error: e.message }, { status: e.status });
+  }
+  console.error("[utility-bills/[id]]", e);
+  return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+}
+
+function parseDate(value: string): Date {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime()))
+    throw new WorkspaceAccessError(400, "Invalid date");
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+async function loadBill(id: string, workspaceId: string) {
+  return (await (
+    prisma.utilityBill.findFirst as unknown as (a: {
+      where: { id: string; workspaceId: string };
+    }) => Promise<UtilityBill | null>
+  )({ where: { id, workspaceId } }));
+}
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await requireWorkspace("bills", "read");
+    const { id } = await context.params;
+    type BillRow = UtilityBill & {
+      provider: {
+        id: string;
+        providerName: string;
+        kind: string;
+        connectionNumber: string | null;
+        advanceBalance: number | string;
+        account: { id: string; name: string; kind: string } | null;
+        card: { id: string; name: string } | null;
+      } | null;
+      paidTransaction: {
+        id: string;
+        amount: number | string;
+        account: { id: string; name: string } | null;
+        card: { id: string; name: string } | null;
+      } | null;
+    };
+    const bill = (await (
+      prisma.utilityBill.findFirst as unknown as (a: unknown) => Promise<BillRow | null>
+    )({
+      where: { id, workspaceId: ctx.workspaceId },
+      include: {
+        provider: {
+          select: {
+            id: true,
+            providerName: true,
+            kind: true,
+            connectionNumber: true,
+            advanceBalance: true,
+            account: { select: { id: true, name: true, kind: true } },
+            card: { select: { id: true, name: true } },
+          },
+        },
+        paidTransaction: {
+          select: {
+            id: true,
+            amount: true,
+            account: { select: { id: true, name: true } },
+            card: { select: { id: true, name: true } },
+          },
+        },
+      },
+    }));
+    if (!bill) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    return NextResponse.json({
+      bill: {
+        id: bill.id,
+        providerId: bill.providerId,
+        provider: bill.provider
+          ? {
+              ...bill.provider,
+              advanceBalance: Number(bill.provider.advanceBalance),
+            }
+          : null,
+        billDate: bill.billDate.toISOString(),
+        dueDate: bill.dueDate.toISOString(),
+        billAmount: Number(bill.billAmount),
+        previousReading: bill.previousReading ? Number(bill.previousReading) : null,
+        currentReading: bill.currentReading ? Number(bill.currentReading) : null,
+        unitsConsumed: bill.unitsConsumed ? Number(bill.unitsConsumed) : null,
+        advanceApplied: Number(bill.advanceApplied),
+        paidAt: bill.paidAt?.toISOString() ?? null,
+        paidTransactionId: bill.paidTransactionId,
+        paidTransaction: bill.paidTransaction
+          ? {
+              ...bill.paidTransaction,
+              amount: Number(bill.paidTransaction.amount),
+            }
+          : null,
+        notes: bill.notes,
+      },
+    });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await requireWorkspace("bills", "write");
+    const { id } = await context.params;
+    const bill = await loadBill(id, ctx.workspaceId);
+    if (!bill) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (bill.paidAt) {
+      return NextResponse.json(
+        {
+          error:
+            "Bill is already paid. Delete the linked payment first to edit amount/readings.",
+        },
+        { status: 423 },
+      );
+    }
+    const body = await request.json();
+    const parsed = utilityBillUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.issues[0].message },
+        { status: 400 },
+      );
+    }
+    const d = parsed.data;
+    const billDate = d.billDate ? parseDate(d.billDate) : undefined;
+    const dueDate = d.dueDate ? parseDate(d.dueDate) : undefined;
+    let unitsConsumed: number | null | undefined = undefined;
+    if (
+      d.previousReading !== undefined ||
+      d.currentReading !== undefined
+    ) {
+      const prev = d.previousReading ?? Number(bill.previousReading ?? 0);
+      const curr = d.currentReading ?? Number(bill.currentReading ?? 0);
+      unitsConsumed = Math.abs(curr - prev);
+    }
+    await prisma.utilityBill.update({
+      where: { id },
+      data: {
+        billDate,
+        dueDate,
+        billAmount: d.billAmount ?? undefined,
+        previousReading:
+          d.previousReading === undefined ? undefined : d.previousReading,
+        currentReading:
+          d.currentReading === undefined ? undefined : d.currentReading,
+        unitsConsumed,
+        notes: d.notes === undefined ? undefined : d.notes,
+      },
+    });
+    // Sync the reminder due date if it changed.
+    if (dueDate) {
+      await prisma.investmentReminder.updateMany({
+        where: { utilityBillId: id, status: "UPCOMING" },
+        data: { dueDate, amount: d.billAmount ?? bill.billAmount },
+      });
+    }
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await requireWorkspace("bills", "write");
+    const { id } = await context.params;
+    const bill = await loadBill(id, ctx.workspaceId);
+    if (!bill) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    await prisma.$transaction(async (tx) => {
+      // If the bill is paid, undo the payment first — this refunds any
+      // advanceApplied, clears the paidTransactionId, and re-opens the
+      // reminder. Then delete the linked Transaction.
+      if (bill.paidTransactionId) {
+        await revertUtilityBillPay(tx, bill.paidTransactionId);
+        await tx.transaction.delete({ where: { id: bill.paidTransactionId } });
+      }
+      await tx.investmentReminder.deleteMany({ where: { utilityBillId: id } });
+      await tx.utilityBill.delete({ where: { id } });
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return err(e);
+  }
+}

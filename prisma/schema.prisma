@@ -42,6 +42,9 @@ enum TransactionKind {
   LOAN_PAYMENT
   OTHER_EXPENSE
   REFUND
+  SUBSCRIPTION
+  UTILITY_BILL
+  UTILITY_ADVANCE
 }
 
 enum MemberChargeType {
@@ -220,6 +223,9 @@ enum NotificationKind {
   CLAIM_STATUS_CHANGED
   CARD_STATEMENT_DUE
   LOAN_EMI_DUE
+  SUBSCRIPTION_RENEWAL_DUE
+  UTILITY_BILL_DUE_SOON
+  UTILITY_BILL_OVERDUE
   GENERIC
 }
 
@@ -304,6 +310,8 @@ enum ReminderKind {
   LOAN_EMI
   CARD_STATEMENT
   VEHICLE_DOC_RENEWAL
+  SUBSCRIPTION_RENEWAL
+  UTILITY_BILL_DUE
 }
 
 enum ReminderStatus {
@@ -311,6 +319,36 @@ enum ReminderStatus {
   CONFIRMED
   SKIPPED
   MISSED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum SubscriptionCycle {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum UtilityKind {
+  ELECTRICITY
+  INTERNET
+  MOBILE_POSTPAID
+  MOBILE_PREPAID
+  DTH
+  GAS
+  WATER
+  OTHER
+}
+
+enum UtilityProviderStatus {
+  ACTIVE
+  INACTIVE
 }
 
 //
@@ -340,6 +378,8 @@ model User {
   ownedLoans                Loan[]             @relation("LoanOwner")
   ownedInvestments          Investment[]       @relation("InvestmentOwner")
   ownedStockWishlist        StockWishlist[]    @relation("StockWishlistOwner")
+  ownedSubscriptions        Subscription[]     @relation("SubscriptionOwner")
+  ownedUtilityProviders     UtilityProvider[]  @relation("UtilityProviderOwner")
   transactions              Transaction[]      @relation("TransactionAuthor")
   createdTransactions       Transaction[]      @relation("TransactionCreatedBy")
   editedTransactions        Transaction[]      @relation("TransactionEditedBy")
@@ -402,6 +442,9 @@ model Workspace {
   attachments         Attachment[]
   stockWishlist       StockWishlist[]
   auditLogs           AuditLog[]
+  subscriptions       Subscription[]
+  utilityProviders    UtilityProvider[]
+  utilityBills        UtilityBill[]
 
   @@index([ownerUserId])
 }
@@ -539,13 +582,15 @@ model Account {
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
-  transactions   Transaction[]
-  loans          Loan[]
-  transfersFrom  Transfer[]      @relation("TransferFrom")
-  transfersTo    Transfer[]      @relation("TransferTo")
-  cardsAsParent  Card[]          @relation("CardParentAccount")
-  linkedCard     Card?           @relation("CardAccount")
-  cardStatements CardStatement[]
+  transactions     Transaction[]
+  loans            Loan[]
+  transfersFrom    Transfer[]        @relation("TransferFrom")
+  transfersTo      Transfer[]        @relation("TransferTo")
+  cardsAsParent    Card[]            @relation("CardParentAccount")
+  linkedCard       Card?             @relation("CardAccount")
+  cardStatements   CardStatement[]
+  subscriptions    Subscription[]    @relation("SubscriptionAccount")
+  utilityProviders UtilityProvider[] @relation("UtilityProviderAccount")
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
@@ -578,8 +623,10 @@ model Card {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  transactions Transaction[]
-  emiLoans     Loan[]        @relation("CardEmiLoan")
+  transactions     Transaction[]
+  emiLoans         Loan[]            @relation("CardEmiLoan")
+  subscriptions    Subscription[]    @relation("SubscriptionCard")
+  utilityProviders UtilityProvider[] @relation("UtilityProviderCard")
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
@@ -588,32 +635,32 @@ model Card {
 }
 
 model CardStatement {
-  id          String               @id @default(uuid())
-  workspaceId String
-  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  accountId   String
-  account     Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  periodStart DateTime             @db.Date
-  periodEnd   DateTime             @db.Date
-  dueDate     DateTime             @db.Date
-  totalDue    Decimal              @db.Decimal(14, 2)
-  paidAt      DateTime?
+  id                 String               @id @default(uuid())
+  workspaceId        String
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accountId          String
+  account            Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  periodStart        DateTime             @db.Date
+  periodEnd          DateTime             @db.Date
+  dueDate            DateTime             @db.Date
+  totalDue           Decimal              @db.Decimal(14, 2)
+  paidAt             DateTime?
   // Many transfers can pay down one statement (partial payments). The
   // earlier `paidTransfer` 1-to-1 relation modelled "the single transfer
   // that closed this bill" but real-world bills are often paid in
   // instalments, so it's been replaced with this 1-to-many.
-  payments    Transfer[]           @relation("StatementPayments")
-  closedAt    DateTime?
-  reminders   InvestmentReminder[] @relation("ReminderCardStatement")
+  payments           Transfer[]           @relation("StatementPayments")
+  closedAt           DateTime?
+  reminders          InvestmentReminder[] @relation("ReminderCardStatement")
   // When set, the row was hand-edited (`totalDue` / `dueDate` corrected by
   // a user). The materializer must NOT re-snapshot these fields on its
   // next run — see `card-statement-service.ts`.
-  manuallyEdited     Boolean   @default(false)
+  manuallyEdited     Boolean              @default(false)
   manuallyEditedAt   DateTime?
   manuallyEditedById String?
-  manuallyEditedBy   User?     @relation("CardStatementEditor", fields: [manuallyEditedById], references: [id], onDelete: SetNull)
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
+  manuallyEditedBy   User?                @relation("CardStatementEditor", fields: [manuallyEditedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   @@unique([accountId, periodStart])
   @@index([accountId, periodEnd])
@@ -674,6 +721,7 @@ model Category {
   parent           Category?         @relation("CategoryChildren", fields: [parentCategoryId], references: [id], onDelete: SetNull)
   children         Category[]        @relation("CategoryChildren")
   transactions     Transaction[]
+  subscriptions    Subscription[]    @relation("SubscriptionCategory")
   createdAt        DateTime          @default(now())
 
   @@index([name])
@@ -770,6 +818,19 @@ model Transaction {
   eventId String?
   event   Event?  @relation("EventTransaction", fields: [eventId], references: [id], onDelete: SetNull)
 
+  // Subscription pay (kind=SUBSCRIPTION). subscriptionId is the master
+  // config; subscriptionScheduleId is the specific cycle this txn paid.
+  subscriptionId         String?
+  subscription           Subscription?         @relation("SubscriptionTransaction", fields: [subscriptionId], references: [id], onDelete: SetNull)
+  subscriptionScheduleId String?               @unique
+  subscriptionSchedule   SubscriptionSchedule? @relation("SubscriptionScheduleConfirmedTxn", fields: [subscriptionScheduleId], references: [id], onDelete: SetNull)
+
+  // Utility bill pay (kind=UTILITY_BILL) or advance deposit (kind=UTILITY_ADVANCE).
+  utilityProviderId String?
+  utilityProvider   UtilityProvider? @relation("UtilityProviderTransaction", fields: [utilityProviderId], references: [id], onDelete: SetNull)
+  utilityBillId     String?          @unique
+  utilityBill       UtilityBill?     @relation("UtilityBillPaidTxn", fields: [utilityBillId], references: [id], onDelete: SetNull)
+
   goldForm GoldForm?
 
   createdAt DateTime @default(now())
@@ -801,6 +862,8 @@ model Transaction {
   @@index([vehicleId])
   @@index([hospitalizationId])
   @@index([eventId])
+  @@index([subscriptionId])
+  @@index([utilityProviderId])
 }
 
 model MemberCharge {
@@ -1072,6 +1135,140 @@ model LeasePaymentSchedule {
 }
 
 //
+// SUBSCRIPTIONS — Netflix, Spotify, etc. Header-level config with a
+// single rolling "next cycle" schedule row (like Loan.nextDueDate) and
+// a per-cycle reminder. Each Pay creates a Transaction (kind=SUBSCRIPTION),
+// confirms the schedule + reminder, advances nextBillingDate, and creates
+// the next schedule + reminder.
+//
+model Subscription {
+  id                String             @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  owner             User?              @relation("SubscriptionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]           @default([])
+  name              String
+  amount            Decimal            @db.Decimal(14, 2)
+  cycle             SubscriptionCycle
+  nextBillingDate   DateTime           @db.Date
+  startedOn         DateTime           @db.Date
+  endsOn            DateTime?          @db.Date
+  // Payment source: exactly one of accountId or cardId (Zod-enforced).
+  accountId         String?
+  account           Account?           @relation("SubscriptionAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  cardId            String?
+  card              Card?              @relation("SubscriptionCard", fields: [cardId], references: [id], onDelete: SetNull)
+  autoPay           Boolean            @default(false)
+  categoryId        String?
+  category          Category?          @relation("SubscriptionCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  logoUrl           String?
+  notes             String?
+  status            SubscriptionStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  schedules    SubscriptionSchedule[]
+  reminders    InvestmentReminder[]   @relation("ReminderSubscription")
+  transactions Transaction[]          @relation("SubscriptionTransaction")
+
+  @@index([workspaceId, status, nextBillingDate])
+  @@index([workspaceId, ownerUserId])
+}
+
+model SubscriptionSchedule {
+  id             String               @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription         @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  dueDate        DateTime             @db.Date
+  amount         Decimal              @db.Decimal(14, 2)
+  status         ReminderStatus       @default(UPCOMING)
+  skippedReason  String?
+  confirmedTxn   Transaction?         @relation("SubscriptionScheduleConfirmedTxn")
+  reminders      InvestmentReminder[] @relation("ReminderSubscriptionSchedule")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([subscriptionId, dueDate])
+  @@index([status, dueDate])
+}
+
+//
+// UTILITIES — providers (TNEB, ACT, Jio, etc.) and their bills. A
+// provider can hold an `advanceBalance`; each bill pulls from it first,
+// and the cash shortfall (if any) goes from a chosen account/card. For
+// ELECTRICITY we track meter readings and units consumed.
+//
+model UtilityProvider {
+  id                String                @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId       String?
+  owner             User?                 @relation("UtilityProviderOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[]              @default([])
+  kind              UtilityKind
+  providerName      String
+  connectionNumber  String?
+  addressLine       String?
+  // Default payment source: exactly one of accountId or cardId
+  // (Zod-enforced). Bills inherit this unless overridden at pay time.
+  accountId         String?
+  account           Account?              @relation("UtilityProviderAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  cardId            String?
+  card              Card?                 @relation("UtilityProviderCard", fields: [cardId], references: [id], onDelete: SetNull)
+  autoPay           Boolean               @default(false)
+  defaultDueDay     Int?
+  // Running advance balance. Increased by UTILITY_ADVANCE transactions;
+  // decreased by UtilityBill.advanceApplied on Pay. Never negative.
+  advanceBalance    Decimal               @default(0) @db.Decimal(14, 2)
+  status            UtilityProviderStatus @default(ACTIVE)
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bills        UtilityBill[]
+  transactions Transaction[] @relation("UtilityProviderTransaction")
+
+  @@unique([workspaceId, kind, providerName, connectionNumber])
+  @@index([workspaceId, status, kind])
+  @@index([workspaceId, ownerUserId])
+}
+
+model UtilityBill {
+  id                String          @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  providerId        String
+  provider          UtilityProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  billDate          DateTime        @db.Date
+  dueDate           DateTime        @db.Date
+  billAmount        Decimal         @db.Decimal(14, 2)
+  // Meter readings — required for ELECTRICITY, optional otherwise.
+  // unitsConsumed = currentReading - previousReading when both present.
+  previousReading   Decimal?        @db.Decimal(12, 3)
+  currentReading    Decimal?        @db.Decimal(12, 3)
+  unitsConsumed     Decimal?        @db.Decimal(12, 3)
+  // How much of billAmount was paid from the provider's advance balance.
+  // 0 = pure cash pay; equal to billAmount = fully paid from advance.
+  advanceApplied    Decimal         @default(0) @db.Decimal(14, 2)
+  paidAt            DateTime?
+  paidTransactionId String?         @unique
+  paidTransaction   Transaction?    @relation("UtilityBillPaidTxn")
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reminders InvestmentReminder[] @relation("ReminderUtilityBill")
+
+  @@index([providerId, billDate])
+  @@index([workspaceId, paidAt])
+  @@index([workspaceId, dueDate])
+}
+
+//
 // LOANS
 //
 
@@ -1280,6 +1477,12 @@ model InvestmentReminder {
   cardStatement          CardStatement?        @relation("ReminderCardStatement", fields: [cardStatementId], references: [id], onDelete: Cascade)
   vehicleDocumentId      String?
   vehicleDocument        VehicleDocument?      @relation("ReminderVehicleDocument", fields: [vehicleDocumentId], references: [id], onDelete: Cascade)
+  subscriptionId         String?
+  subscription           Subscription?         @relation("ReminderSubscription", fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscriptionScheduleId String?
+  subscriptionSchedule   SubscriptionSchedule? @relation("ReminderSubscriptionSchedule", fields: [subscriptionScheduleId], references: [id], onDelete: Cascade)
+  utilityBillId          String?
+  utilityBill            UtilityBill?          @relation("ReminderUtilityBill", fields: [utilityBillId], references: [id], onDelete: Cascade)
   kind                   ReminderKind
   dueDate                DateTime              @db.Date
   amount                 Decimal?              @db.Decimal(14, 2)
@@ -1295,6 +1498,9 @@ model InvestmentReminder {
   @@index([insuredMemberId])
   @@index([loanId])
   @@index([vehicleDocumentId])
+  @@index([subscriptionId])
+  @@index([subscriptionScheduleId])
+  @@index([utilityBillId])
 }
 
 model InsuredMember {
@@ -1510,6 +1716,8 @@ enum AttachmentOwnerKind {
   LOAN_DOCUMENT
   INCOME_PROOF
   EVENT_DOCUMENT
+  UTILITY_BILL
+  SUBSCRIPTION_DOCUMENT
 }
 
 //

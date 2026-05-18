@@ -33,6 +33,8 @@ export type IconName =
   | "vehicles"
   | "medical"
   | "events"
+  | "subscriptions"
+  | "bills"
   | "inbox"
   | "reminders"
   | "notifications"
@@ -50,6 +52,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Transactions", href: "/transactions", feature: "transactions", icon: "transactions" },
       { label: "Transfers", href: "/transfers", feature: "transfers", icon: "transfers" },
+      { label: "Subscriptions", href: "/subscriptions", feature: "subscriptions", icon: "subscriptions" },
+      { label: "Bills", href: "/bills", feature: "bills", icon: "bills" },
       { label: "Accounts", href: "/accounts", feature: "accounts", icon: "accounts" },
       { label: "Cards", href: "/cards", feature: "cards", icon: "cards" },
       { label: "Categories", href: "/categories", feature: "categories", icon: "categories" },

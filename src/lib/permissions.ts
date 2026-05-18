@@ -22,6 +22,8 @@ export const FEATURES = [
   "vehicles",
   "medical",
   "events",
+  "subscriptions",
+  "bills",
   "reminders",
   "reports",
   "settings",
@@ -48,6 +50,8 @@ const OWNERSHIP_FEATURES: readonly Feature[] = [
   "card_emi",
   "investments",
   "insurance",
+  "subscriptions",
+  "bills",
   "reports",
 ] as const;
 
@@ -73,6 +77,8 @@ const DEFAULT_MEMBER_PERMISSIONS: Record<Feature, PermissionLevel> = {
   vehicles: "view",
   medical: "view",
   events: "view",
+  subscriptions: "own",
+  bills: "own",
   reminders: "own",
   reports: "own",
   settings: "own",
