@@ -11,6 +11,7 @@ import {
 } from "@/components/reports/report-filters";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   id: string;
@@ -36,7 +37,6 @@ type Payload = {
   };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function PnLReportPage() {
   const [preset, setPreset] = useState<DatePreset>("this-month");

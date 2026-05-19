@@ -9,6 +9,7 @@ import { NavigatingCard } from "@/components/ui/navigating-card";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   Dialog,
   DialogContent,
@@ -59,7 +60,6 @@ type Vehicle = {
   };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_OPTIONS: { value: VehicleKind; label: string }[] = [
   { value: "CAR", label: "Car" },

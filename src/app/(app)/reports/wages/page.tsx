@@ -12,6 +12,7 @@ import {
 } from "@/components/reports/report-filters";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   id: string;
@@ -31,7 +32,6 @@ type Payload = {
   totals: Omit<Row, "id" | "name" | "active" | "dailyRate">;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function WagesReportPage() {
   const [preset, setPreset] = useState<DatePreset>("this-month");

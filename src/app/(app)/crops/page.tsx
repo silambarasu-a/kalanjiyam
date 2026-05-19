@@ -8,6 +8,7 @@ import { Plus, Pencil, Trash2, Sprout } from "lucide-react";
 import { FarmSubNav } from "@/components/layout/farm-sub-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   Dialog,
   DialogContent,
@@ -25,7 +26,6 @@ type Crop = {
   activeBatchCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function CropsPage() {
   const { data, isLoading } = useSWR<{ crops: Crop[] }>("/api/crops", fetcher);

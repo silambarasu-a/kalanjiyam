@@ -42,6 +42,7 @@ import { formatINR } from "@/lib/utils";
 import { SubscriptionForm } from "@/components/subscriptions/subscription-form";
 import { PaySubscriptionDialog } from "@/components/subscriptions/pay-subscription-dialog";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Schedule = {
   id: string;
@@ -69,7 +70,6 @@ type Subscription = {
   schedules: Schedule[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function SubscriptionDetailPage({
   params,

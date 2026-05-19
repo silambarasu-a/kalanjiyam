@@ -49,6 +49,7 @@ import { AddAdvanceDialog } from "@/components/bills/add-advance-dialog";
 import { UtilityBillForm } from "@/components/bills/utility-bill-form";
 import { PayBillDialog } from "@/components/bills/pay-bill-dialog";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Provider = {
   id: string;
@@ -87,7 +88,6 @@ type Bill = {
   attachmentCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-IN", {
@@ -624,12 +624,28 @@ function BillsTable({
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    const res = await fetch(`/api/utility-bills/${deleteTarget.id}`, {
+    // Optimistic: drop from the list cache immediately so the row
+    // disappears without a refetch flash. The bills array is owned by
+    // the parent's SWR hook — we use globalMutate on the same key to
+    // patch it in place, then revalidate in the background.
+    const targetId = deleteTarget.id;
+    globalMutate(
+      `/api/utility-bills?providerId=${provider.id}`,
+      (current?: { bills: Bill[] }) =>
+        current
+          ? { ...current, bills: current.bills.filter((b) => b.id !== targetId) }
+          : current,
+      { revalidate: false },
+    );
+    setDeleteTarget(null);
+    const res = await fetch(`/api/utility-bills/${targetId}`, {
       method: "DELETE",
     });
     if (res.ok) {
-      setDeleteTarget(null);
       onChanged();
+    } else {
+      // Roll back by refetching.
+      globalMutate(`/api/utility-bills?providerId=${provider.id}`);
     }
   }
 

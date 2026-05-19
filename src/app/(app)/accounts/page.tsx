@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { CardForm } from "@/components/cards/card-form";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = {
   id: string;
@@ -43,7 +44,6 @@ const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
 
 type DialogMode = null | { kind: "new" } | { kind: "newCard" } | { kind: "edit"; account: Account };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_META = {
   BANK: { label: "Bank", Icon: Banknote },

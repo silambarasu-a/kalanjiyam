@@ -19,6 +19,7 @@ import {
 import { formatINR } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Cadence = "AS_NEEDED" | "WEEKLY" | "MONTHLY" | "CUSTOM";
 
@@ -41,7 +42,6 @@ const CADENCE_LABELS: Record<Cadence, string> = {
   CUSTOM: "Custom",
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function WorkersPage() {
   const { data, isLoading } = useSWR<{ workers: Worker[] }>("/api/workers", fetcher);

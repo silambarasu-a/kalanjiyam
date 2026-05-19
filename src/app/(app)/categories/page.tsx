@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Category = {
   id: string;
@@ -26,7 +27,6 @@ type Category = {
   parentCategoryId: string | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 const TYPES = [
   { value: "INCOME", label: "Income" },
   { value: "EXPENSE", label: "Expense" },

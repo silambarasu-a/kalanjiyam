@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   id: string;
@@ -21,7 +22,6 @@ type Payload = {
   totals: { totalCharged: number; totalSettled: number; outstanding: number };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function MembersReportPage() {
   const { data } = useSWR<Payload>("/api/reports/member-ledger", fetcher);

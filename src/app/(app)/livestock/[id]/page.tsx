@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatDate, groupAccountOptions } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Batch = {
   id: string;
@@ -43,7 +44,6 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function LivestockDetailPage() {
   const params = useParams<{ id: string }>();

@@ -11,6 +11,7 @@ import {
 } from "@/components/reports/report-filters";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Series = {
   month: string;
@@ -33,7 +34,6 @@ type Payload = {
   topExpense: CategoryRow[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function CashflowReportPage() {
   const [preset, setPreset] = useState<DatePreset>("last-12m");

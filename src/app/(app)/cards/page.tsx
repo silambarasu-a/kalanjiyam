@@ -16,6 +16,7 @@ import { CardForm, type CardSnapshot } from "@/components/cards/card-form";
 import { PayBillButton } from "@/components/cards/card-bill-payer";
 import { formatINR } from "@/lib/utils";
 import { MoneyValue } from "@/components/ui/money-tone";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Card = CardSnapshot & {
   active: boolean;
@@ -30,7 +31,6 @@ type Card = CardSnapshot & {
   sharedWithUserIds: string[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function CardsPage() {
   const { data, isLoading } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);

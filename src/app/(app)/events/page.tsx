@@ -11,6 +11,7 @@ import { NavigatingCard } from "@/components/ui/navigating-card";
 import { EventDialog } from "@/components/events/event-dialog";
 import { hasPermission } from "@/lib/permissions";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type EventRow = {
   id: string;
@@ -24,7 +25,6 @@ type EventRow = {
   txnCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_LABEL: Record<EventRow["kind"], string> = {
   TRIP: "Trip",

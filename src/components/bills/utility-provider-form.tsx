@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { UTILITY_KINDS, type UtilityKindValue } from "@/components/bills/utility-kind";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = { id: string; name: string; kind: string };
 type Card = { id: string; name: string };
@@ -28,7 +29,6 @@ type Props = {
   onCancel: () => void;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const isEdit = !!initial;

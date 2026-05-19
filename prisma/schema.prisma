@@ -549,6 +549,7 @@ model Contact {
   ownedAccounts      Account[]          @relation("AccountContactOwner")
   ownedCards         Card[]             @relation("CardContactOwner")
   beneficiaryTxns    Transaction[]      @relation("TransactionBeneficiary")
+  paidByTxns         Transaction[]      @relation("TransactionPaidBy")
   transactionSplits  TransactionSplit[] @relation("ContactSplits")
   sentTransfers      Transfer[]         @relation("TransferFromContact")
   receivedTransfers  Transfer[]         @relation("TransferToContact")
@@ -808,6 +809,15 @@ model Transaction {
   beneficiaryContact   Contact?         @relation("TransactionBeneficiary", fields: [beneficiaryContactId], references: [id], onDelete: SetNull)
   memberChargeType     MemberChargeType @default(NONE)
 
+  // When a contact paid this expense for the workspace owner. The
+  // expense is still recorded in the owner's books (categorized,
+  // counted in cashflow) but no account/card balance is touched.
+  // Combined with `memberChargeType = RECOVERABLE`, a MemberCharge
+  // with direction = USER_OWES is created so the owner can settle it
+  // later. GIFT means the contact won't be paid back.
+  paidByContactId String?
+  paidByContact   Contact? @relation("TransactionPaidBy", fields: [paidByContactId], references: [id], onDelete: SetNull)
+
   claimId String?
   claim   InsuranceClaim? @relation("TransactionClaim", fields: [claimId], references: [id], onDelete: SetNull)
 
@@ -873,6 +883,7 @@ model Transaction {
   @@index([investmentId])
   @@index([transferId])
   @@index([beneficiaryContactId])
+  @@index([paidByContactId])
   @@index([refundForTransactionId])
   @@index([claimId])
   @@index([vehicleId])

@@ -145,6 +145,11 @@ export const transactionCreateSchema = z
     refundForTransactionId: z.string().uuid().optional().nullable(),
     beneficiaryContactId: z.string().uuid().optional().nullable(),
     memberChargeType: z.enum(["NONE", "RECOVERABLE", "GIFT"]).optional().default("NONE"),
+    // When the workspace owner is recording an EXPENSE that a contact
+    // actually paid (e.g. a friend covered dinner). No account / card
+    // balance moves. When memberChargeType=RECOVERABLE, a MemberCharge
+    // with direction=USER_OWES is created so the user can settle later.
+    paidByContactId: z.string().uuid().optional().nullable(),
     vehicleId: z.string().uuid().optional().nullable(),
     claimId: z.string().uuid().optional().nullable(),
     hospitalizationId: z.string().uuid().optional().nullable(),
@@ -163,10 +168,36 @@ export const transactionCreateSchema = z
       .nullable(),
     splits: z.array(transactionSplitInputSchema).max(50).optional().default([]),
   })
-  .refine((d) => !!d.accountId || !!d.cardId, {
-    message: "Pick an account or a card",
-    path: ["accountId"],
-  })
+  .refine(
+    (d) => !!d.accountId || !!d.cardId || !!d.paidByContactId,
+    {
+      message: "Pick an account, a card, or a contact who paid for it",
+      path: ["accountId"],
+    },
+  )
+  .refine(
+    (d) => !d.paidByContactId || (!d.accountId && !d.cardId),
+    {
+      message:
+        "When a contact paid for it, leave account and card empty — no balance moves on your side",
+      path: ["paidByContactId"],
+    },
+  )
+  .refine(
+    (d) => !d.paidByContactId || d.type === "EXPENSE",
+    {
+      message: "Only expenses can be paid by a contact",
+      path: ["paidByContactId"],
+    },
+  )
+  .refine(
+    (d) => !(d.paidByContactId && d.splits.length > 0),
+    {
+      message:
+        "Splits and 'paid by contact' don't combine — pick one. If a friend paid AND others share the cost, record their settlements separately on the contact pages.",
+      path: ["paidByContactId"],
+    },
+  )
   .refine((d) => !(d.memberChargeType === "RECOVERABLE" && !d.beneficiaryContactId), {
     message: "Pick a beneficiary for recoverable charges",
     path: ["beneficiaryContactId"],

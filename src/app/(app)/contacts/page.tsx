@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Contact = {
   id: string;
@@ -27,7 +28,6 @@ type Contact = {
   totals: { outstanding: number; settled: number };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function ContactsPage() {
   const { data, isLoading } = useSWR<{ members: Contact[] }>("/api/contacts", fetcher);

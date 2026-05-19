@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type WorkspaceRow = {
   id: string;
@@ -13,7 +14,6 @@ type WorkspaceRow = {
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function WorkspaceSwitcher() {
   const { data: session, update } = useSession();

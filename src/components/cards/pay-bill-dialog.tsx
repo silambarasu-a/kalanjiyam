@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, groupAccountOptions } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = {
   id: string;
@@ -27,7 +28,6 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 /**
  * Focused dialog for paying down a credit-card bill. Source = any non-card

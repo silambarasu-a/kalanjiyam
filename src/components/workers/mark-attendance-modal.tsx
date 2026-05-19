@@ -18,6 +18,7 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Worker = {
   id: string;
@@ -46,7 +47,6 @@ type Entry = {
   selected: boolean;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function todayIso() {
   const d = new Date();

@@ -6,6 +6,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { CheckCheck, Inbox, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Notification = {
   id: string;
@@ -17,7 +18,6 @@ type Notification = {
   createdAt: string;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function InboxPage() {
   const [filter, setFilter] = useState<"all" | "unread">("all");

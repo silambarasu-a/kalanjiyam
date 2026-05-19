@@ -23,6 +23,7 @@ import {
   type LoanFrequency,
 } from "@/lib/loan-math";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type GoldItem = {
   id: string;
@@ -60,7 +61,6 @@ const FREQUENCY_LABEL: Record<LoanFrequency, { tenureUnit: string; emi: string }
   YEARLY: { tenureUnit: "yr", emi: "yearly" },
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function computeEmiProgress(
   l: Pick<

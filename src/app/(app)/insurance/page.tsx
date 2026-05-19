@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type PolicyType =
   | "LIFE"
@@ -55,7 +56,6 @@ type Policy = {
   claimCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const TABS: { value: "ALL" | PolicyType; label: string }[] = [
   { value: "ALL", label: "All" },

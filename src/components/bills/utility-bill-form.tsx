@@ -14,6 +14,7 @@ import {
   type InstantAttachmentUploaderHandle,
 } from "@/components/attachments/instant-attachment-uploader";
 import type { UtilityKindValue } from "@/components/bills/utility-kind";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Provider = {
   id: string;
@@ -29,7 +30,6 @@ type Props = {
   onCancel: () => void;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 /**
  * Read-only detail view for a single transaction. Opened by the View
@@ -96,7 +97,6 @@ type DetailResponse = {
   }[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function TransactionDetailDialog({
   transactionId,

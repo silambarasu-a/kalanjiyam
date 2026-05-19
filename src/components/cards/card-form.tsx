@@ -9,6 +9,7 @@ import { DateInput } from "@/components/ui/date-input";
 import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
 import { mutateBalances } from "@/lib/mutate-balances";
+import { fetcher } from "@/lib/swr-fetcher";
 
 export type CardSnapshot = {
   id: string;
@@ -39,7 +40,6 @@ type CardRow = {
   creditLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 const NETWORKS = ["VISA", "MASTERCARD", "RUPAY", "AMEX", "DINERS", "OTHER"] as const;
 
 /**

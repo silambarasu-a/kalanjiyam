@@ -16,6 +16,7 @@ import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math"
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type ChargeRow = { label: string; amount: string };
 const DEFAULT_CHARGE_ROWS: ChargeRow[] = [
@@ -90,7 +91,6 @@ const KIND_LABEL: Record<LoanKind, string> = {
   OTHER: "Other",
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export type LoanFormHandle = {
   /** Trigger a submit from outside the component (e.g. a sibling DialogFooter button). */

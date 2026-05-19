@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { cn, formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Snap = {
   month: string;
@@ -24,7 +25,6 @@ type Payload = {
   changePct: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function NetWorthReportPage() {
   const [months, setMonths] = useState(12);

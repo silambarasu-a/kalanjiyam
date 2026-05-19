@@ -56,6 +56,7 @@ import {
 } from "@/components/transactions/split-rows";
 import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   useTransactionDialog,
   type TransactionDefault,
@@ -98,7 +99,6 @@ type LivestockBatch = {
   livestock: { id: string; name: string };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 // uploadReceiptsToAttachment was extracted to
 // @/components/transactions/receipt-stager so the helper can be shared
@@ -344,7 +344,19 @@ function IncomeExpenseForm({
   // Inline "+ New category" creation triggered from the CategoryCombobox.
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [quickCreateName, setQuickCreateName] = useState("");
-  const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" or "card:<id>"
+  const [paymentSource, setPaymentSource] = useState<string>(""); // "account:<id>" | "card:<id>" | "contact:<id>"
+  // When paymentSource = "contact:<id>" — whether the workspace owner
+  // intends to pay the contact back. true → creates MemberCharge
+  // USER_OWES; false → gift (just informational, no obligation).
+  const [oweContactBack, setOweContactBack] = useState<boolean>(true);
+  // "contact:<id>" is EXPENSE-only. If the user picked a contact then
+  // switched type to INCOME, we ignore the stale state at render-time
+  // rather than clearing it — that way switching back to EXPENSE
+  // restores the prior selection without re-picking the contact.
+  const effectivePaymentSource =
+    paymentSource.startsWith("contact:") && type !== "EXPENSE"
+      ? ""
+      : paymentSource;
   const [splits, setSplits] = useState<SplitDraft[]>([]);
   const [expenseSplitMode, setExpenseSplitMode] = useState<SplitMode>("equal");
   const [expenseSplitUnit, setExpenseSplitUnit] = useState<SplitUnit>("amount");
@@ -487,12 +499,16 @@ function IncomeExpenseForm({
   // than a flat alphabetical list.
   const sources = useMemo(() => {
     type Item = { value: string; label: string; sub: string; disabled: boolean };
-    const buckets: Record<"BANK" | "WALLET" | "CASH" | "DEBIT" | "CREDIT", Item[]> = {
+    const buckets: Record<
+      "BANK" | "WALLET" | "CASH" | "DEBIT" | "CREDIT" | "CONTACT",
+      Item[]
+    > = {
       BANK: [],
       WALLET: [],
       CASH: [],
       DEBIT: [],
       CREDIT: [],
+      CONTACT: [],
     };
     for (const a of accounts) {
       if (a.kind === "CARD") continue; // companion card-accounts are surfaced via /api/cards
@@ -532,12 +548,27 @@ function IncomeExpenseForm({
         }
       }
     }
+    // EXPENSE only: a contact can pay for me. The transaction is still
+    // recorded in my books (categorized, counted in cashflow) but no
+    // account/card balance moves. A toggle below decides whether I owe
+    // them back (creates a USER_OWES MemberCharge) or it's a gift.
+    if (type === "EXPENSE") {
+      for (const c of contacts) {
+        buckets.CONTACT.push({
+          value: `contact:${c.id}`,
+          label: c.name,
+          sub: "they paid",
+          disabled: false,
+        });
+      }
+    }
     const groupOrder: { key: keyof typeof buckets; label: string }[] = [
       { key: "BANK", label: "Bank" },
       { key: "WALLET", label: "Wallet" },
       { key: "CASH", label: "Cash" },
       { key: "DEBIT", label: "Debit Card" },
       { key: "CREDIT", label: "Credit Card" },
+      { key: "CONTACT", label: "Paid by contact" },
     ];
     return groupOrder
       .filter((g) => buckets[g.key].length > 0)
@@ -550,7 +581,7 @@ function IncomeExpenseForm({
           disabled: it.disabled,
         })),
       }));
-  }, [accounts, cards, type, amtNum]);
+  }, [accounts, cards, contacts, type, amtNum]);
 
   async function submit() {
     setError(null);
@@ -559,11 +590,11 @@ function IncomeExpenseForm({
       setError("Enter an amount");
       return;
     }
-    if (!paymentSource) {
+    if (!effectivePaymentSource) {
       setError("Pick an account or card");
       return;
     }
-    const [kind, sid] = paymentSource.split(":");
+    const [kind, sid] = effectivePaymentSource.split(":");
 
     // Wage mode → fan out to /api/wage-payments, one call per worker.
     if (isWageMode) {
@@ -653,6 +684,12 @@ function IncomeExpenseForm({
         categoryId: categoryId || null,
         accountId: kind === "account" ? sid : null,
         cardId: kind === "card" ? sid : null,
+        ...(kind === "contact"
+          ? {
+              paidByContactId: sid,
+              memberChargeType: oweContactBack ? "RECOVERABLE" : "GIFT",
+            }
+          : {}),
       };
       if (type === "EXPENSE" && displaySplits.length > 0) {
         const ready = displaySplits.filter((s) => s.contactId && s.amount > 0);
@@ -812,11 +849,33 @@ function IncomeExpenseForm({
           </span>
           <div className="mt-1">
             <NativeSelect
-              value={paymentSource}
+              value={effectivePaymentSource}
               onChange={setPaymentSource}
               options={sources}
             />
           </div>
+          {effectivePaymentSource.startsWith("contact:") && (
+            <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5 text-xs">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={oweContactBack}
+                  onChange={(e) => setOweContactBack(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                />
+                <div className="space-y-0.5">
+                  <span className="block font-medium">
+                    I&rsquo;ll pay them back
+                  </span>
+                  <span className="text-muted-foreground">
+                    {oweContactBack
+                      ? "Adds to 'You owe them' on the contact's page — settle later."
+                      : "Gift / treat — recorded for history, no obligation."}
+                  </span>
+                </div>
+              </label>
+            </div>
+          )}
         </label>
         <div className="block">
           <span className="text-xs font-medium">Category</span>

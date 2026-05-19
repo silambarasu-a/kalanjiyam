@@ -20,6 +20,7 @@ import {
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Txn = {
   id: string;
@@ -57,7 +58,6 @@ type Txn = {
   attachmentCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 /**
  * Fetch the transaction's detail (which includes presigned attachment
@@ -366,6 +366,31 @@ export default function TransactionsPage() {
                               confirmLabel="Delete"
                               busyLabel="Deleting…"
                               onConfirm={async () => {
+                                // Optimistic update: drop the row from
+                                // the SWR cache immediately so the table
+                                // doesn't blink while the DELETE round-
+                                // trips. On hard failure we re-fetch to
+                                // re-add the row.
+                                const removedAmount = t.amount;
+                                mutateList(
+                                  (current) => {
+                                    if (!current) return current;
+                                    return {
+                                      ...current,
+                                      transactions: current.transactions.filter(
+                                        (x) => x.id !== t.id,
+                                      ),
+                                      pagination: {
+                                        ...current.pagination,
+                                        total: Math.max(
+                                          0,
+                                          current.pagination.total - 1,
+                                        ),
+                                      },
+                                    };
+                                  },
+                                  { revalidate: false },
+                                );
                                 let res = await fetch(
                                   `/api/transactions/${t.id}`,
                                   { method: "DELETE" },
@@ -394,16 +419,25 @@ export default function TransactionsPage() {
                                         .json()
                                         .catch(() => ({}));
                                       toast.error(body2.error ?? "Failed");
+                                      // Roll back the optimistic delete.
+                                      mutateList();
                                       throw new Error(body2.error ?? "Failed");
                                     }
                                   } else {
                                     toast.error(body.error ?? "Failed");
+                                    mutateList();
                                     throw new Error(body.error ?? "Failed");
                                   }
                                 }
                                 toast.success("Transaction deleted");
+                                // Server may have cascade-reverted linked
+                                // subscription / bill / loan / advance
+                                // records — revalidate in background so
+                                // the running totals are correct. The row
+                                // is already gone visually.
                                 mutateList();
                                 await mutateBalances();
+                                void removedAmount;
                               }}
                               trigger={
                                 <Button

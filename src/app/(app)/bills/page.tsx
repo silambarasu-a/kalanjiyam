@@ -29,6 +29,7 @@ import {
   type UtilityKindValue,
 } from "@/components/bills/utility-kind";
 import { UtilityProviderForm } from "@/components/bills/utility-provider-form";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Provider = {
   id: string;
@@ -48,7 +49,6 @@ type Provider = {
   };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function BillsPage() {
   const { data, isLoading } = useSWR<{ providers: Provider[] }>(

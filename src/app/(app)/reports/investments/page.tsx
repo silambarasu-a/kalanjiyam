@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   id: string;
@@ -34,7 +35,6 @@ type Payload = {
   };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function InvestmentsReportPage() {
   const { data } = useSWR<Payload>("/api/reports/investments", fetcher);

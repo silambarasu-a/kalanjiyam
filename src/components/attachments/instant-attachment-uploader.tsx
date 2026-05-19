@@ -98,23 +98,44 @@ export const InstantAttachmentUploader = forwardRef<
     onChange?.(rows);
   }, [rows, onChange]);
 
-  // Refresh-protection: when we're in draft mode and have at least one
-  // S3-resident file the parent hasn't submitted yet, warn before unload.
-  // The orphan-GC cron eventually cleans abandoned uploads (24h), but
-  // this avoids surprise data loss for the in-progress user. Manual
-  // navigation inside the SPA isn't affected — only refresh / close.
+  // Refresh-protection for draft uploads (no parent row exists yet):
+  //  1. Warn before unload so accidental refresh is recoverable.
+  //  2. If the user confirms unload, fire a sendBeacon to wipe the
+  //     uploaded files from S3 immediately. The beacon carries the
+  //     session cookie automatically, survives `pagehide`, and doesn't
+  //     block the unload — so the browser closes the tab cleanly.
+  // Manual SPA navigation is handled separately by parent forms calling
+  // discardAll() on their Cancel handlers.
   useEffect(() => {
     if (!draft) return;
     const hasPending = rows.some((r) => r.status === "ready" || r.status === "uploading");
     if (!hasPending) return;
     function onBeforeUnload(e: BeforeUnloadEvent) {
       e.preventDefault();
-      // Modern browsers ignore the message; the prompt is generic.
       e.returnValue = "";
     }
+    function onPageHide() {
+      // Final chance to clean up — sendBeacon is queued by the browser
+      // and survives page destruction. Hard-delete every pending row
+      // server-side so S3 doesn't accumulate orphans while the GC cron
+      // catches up nightly.
+      try {
+        const blob = new Blob(
+          [JSON.stringify({ ownerKind, ownerId })],
+          { type: "application/json" },
+        );
+        navigator.sendBeacon("/api/attachments/draft-cleanup", blob);
+      } catch {
+        // sendBeacon may not be available (rare); GC cron is the safety net.
+      }
+    }
     window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [draft, rows]);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [draft, rows, ownerKind, ownerId]);
 
   const updateRow = useCallback(
     (id: string, patch: Partial<InstantAttachmentRow>) => {

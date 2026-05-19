@@ -47,6 +47,14 @@ export function SessionLockDialog() {
       if (res.ok) {
         await update();
         setPassword("");
+        // Give Set-Cookie from the session update a tick to land in the
+        // jar before SWR fires its revalidation flood. Without this the
+        // race shows up as "after unlock, dropdowns load empty" — the
+        // first batch of refetches goes out with the still-locked cookie
+        // and the proxy returns 423 again, caching the error. 150 ms
+        // covers slow mobile devices where cookie parsing isn't sub-50ms;
+        // users don't perceive a delay this short.
+        await new Promise((resolve) => setTimeout(resolve, 150));
         // The dialog covered every dashboard / list page for the full
         // idle window, so any SWR-cached data the user is about to see
         // is stale (transactions added from another tab, statements

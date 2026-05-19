@@ -136,7 +136,10 @@ async function main() {
         },
       })) as { id: string; parentCategoryId?: string | null } | null;
       if (!parent) {
-        parent = await prisma.category.create({
+        // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+        parent = (await (prisma.category.create as unknown as (
+          a: unknown,
+        ) => Promise<{ id: string; parentCategoryId?: string | null }>)({
           data: {
             name: parentName,
             isDefault: true,
@@ -147,7 +150,7 @@ async function main() {
             group: type === "EXPENSE" ? "Expense" : type === "INCOME" ? "Income" : "Investment",
             parentCategoryId: null,
           },
-        });
+        }));
         createdParents++;
       }
 

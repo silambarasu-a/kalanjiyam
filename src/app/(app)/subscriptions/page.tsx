@@ -26,6 +26,7 @@ import {
 import { formatINR } from "@/lib/utils";
 import { SubscriptionForm } from "@/components/subscriptions/subscription-form";
 import { PaySubscriptionDialog } from "@/components/subscriptions/pay-subscription-dialog";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Sub = {
   id: string;
@@ -40,7 +41,6 @@ type Sub = {
   category: { id: string; name: string } | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const STATUS_TABS: { value: "ALL" | Sub["status"]; label: string }[] = [
   { value: "ALL", label: "All" },

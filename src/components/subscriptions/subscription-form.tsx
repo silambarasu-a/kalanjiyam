@@ -8,6 +8,7 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   InstantAttachmentUploader,
   useInstantAttachmentOwnerId,
@@ -44,7 +45,6 @@ type Props = {
   onCancel: () => void;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function todayIso() {
   const d = new Date();

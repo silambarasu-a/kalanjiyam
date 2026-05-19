@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Hospitalization = {
   id: string;
@@ -29,7 +30,6 @@ type Hospitalization = {
   transactionCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function MedicalPage() {
   const { data, isLoading } = useSWR<{ hospitalizations: Hospitalization[] }>(

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Lease = {
   id: string;
@@ -58,7 +59,6 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function LeaseDetailPage() {
   const params = useParams<{ id: string }>();

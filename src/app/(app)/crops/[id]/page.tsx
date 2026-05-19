@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type CropDetail = { id: string; name: string };
 type Batch = {
@@ -34,7 +35,6 @@ type Batch = {
 };
 // type Land = { id: string; name: string };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function CropDetailPage() {
   const params = useParams<{ id: string }>();

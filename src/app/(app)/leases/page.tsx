@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type LeaseRow = {
   id: string;
@@ -47,7 +48,6 @@ type Contact = { id: string; name: string };
 type CropBatch = { id: string; name: string; crop: { id: string; name: string } };
 type LivestockBatch = { id: string; name: string; livestock: { id: string; name: string } };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function LeasesPage() {
   const { data, isLoading } = useSWR<{ leases: LeaseRow[] }>("/api/leases", fetcher);

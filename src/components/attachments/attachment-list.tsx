@@ -5,6 +5,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { Download, FileText, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 /**
  * Workspace-scoped, owner-bound file list. Drop in anywhere a domain
@@ -42,7 +43,6 @@ type Props = {
   emptyMessage?: string;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function AttachmentList({
   ownerKind,

@@ -14,6 +14,7 @@ import {
 } from "@/components/reports/report-filters";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Balance = {
   workerId: string;
@@ -78,7 +79,6 @@ type Payload = {
   settlements: SettlementRow[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function WorkerWagesReportPage() {
   const params = useParams<{ workerId: string }>();

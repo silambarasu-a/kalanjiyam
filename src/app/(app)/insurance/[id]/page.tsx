@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Contact = { id: string; name: string; relationship: string | null };
 
@@ -107,7 +108,6 @@ function isLifeFamily(t: string | null): boolean {
   return t === "LIFE" || t === "TERM" || t === "ULIP" || t === "ENDOWMENT";
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const FREQUENCIES = ["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"];
 

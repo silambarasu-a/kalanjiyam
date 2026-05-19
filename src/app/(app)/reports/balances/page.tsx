@@ -6,6 +6,7 @@ import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { DateInput } from "@/components/ui/date-input";
 import { formatINR } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   id: string;
@@ -25,7 +26,6 @@ type Payload = {
   totals: { assets: number; liabilities: number; net: number };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function AccountBalancesReportPage() {
   const today = new Date().toISOString().slice(0, 10);

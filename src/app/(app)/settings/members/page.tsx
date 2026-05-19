@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { FEATURES, type PermissionLevel } from "@/lib/permissions";
 import { formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Member = {
   id: string;
@@ -28,7 +29,6 @@ type Member = {
 
 type Invite = { id: string; email: string; role: string; expiresAt: string };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 const LEVELS: PermissionLevel[] = ["hidden", "own", "view", "full"];
 
 export default function MembersPage() {

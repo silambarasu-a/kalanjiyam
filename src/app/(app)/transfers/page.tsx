@@ -16,6 +16,7 @@ import {
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = { id: string; name: string; kind: string };
 type Member = { id: string; name: string };
@@ -31,7 +32,6 @@ type Transfer = {
   toContact: Member | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function PartyLabel({
   account,

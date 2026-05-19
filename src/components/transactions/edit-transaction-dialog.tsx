@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   TransactionSplitEditor,
   recalcEqual,
@@ -74,7 +75,6 @@ type EventLite = {
   startedAt: string;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function EditTransactionDialog({
   transaction,
@@ -161,11 +161,15 @@ export function EditTransactionDialog({
 
   // Splits + contacts only fetched for EXPENSE rows.
   const isExpense = txType === "EXPENSE";
-  const { data: contactsData } = useSWR<{ contacts: { id: string; name: string }[] }>(
+  // The /api/contacts endpoint returns rows under `members` (legacy
+  // alias from when contacts were called "members"). Easy to typo:
+  // the wrong field name silently returns `[]`, and the split editor
+  // renders blank dropdowns with no error.
+  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
     open && isExpense ? "/api/contacts" : null,
     fetcher,
   );
-  const contacts = contactsData?.contacts ?? [];
+  const contacts = contactsData?.members ?? [];
   const { data: detailData } = useSWR<{
     transaction: {
       splits: Array<{

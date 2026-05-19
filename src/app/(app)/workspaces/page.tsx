@@ -8,6 +8,7 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type WorkspaceRow = {
   id: string;
@@ -15,7 +16,6 @@ type WorkspaceRow = {
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function WorkspacesPage() {
   const { data: session, update } = useSession();

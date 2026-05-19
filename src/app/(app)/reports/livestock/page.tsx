@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Row = {
   batchId: string;
@@ -22,7 +23,6 @@ type Payload = {
   totals: { income: number; expense: number; net: number };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function LivestockReportPage() {
   const { data } = useSWR<Payload>("/api/reports/livestock-pnl", fetcher);

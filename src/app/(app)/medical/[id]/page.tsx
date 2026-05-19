@@ -5,6 +5,7 @@ import { use, useMemo } from "react";
 import useSWR from "swr";
 import { ArrowLeft } from "lucide-react";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Txn = {
   id: string;
@@ -43,7 +44,6 @@ type Hospitalization = {
   transactions: Txn[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const STAGE_LABEL: Record<"PRE" | "DURING" | "POST", string> = {
   PRE: "Pre-hospitalization",

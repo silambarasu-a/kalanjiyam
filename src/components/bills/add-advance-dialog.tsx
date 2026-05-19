@@ -15,6 +15,7 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Props = {
   open: boolean;
@@ -23,7 +24,6 @@ type Props = {
   onSaved: () => void;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);

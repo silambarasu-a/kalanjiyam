@@ -18,6 +18,7 @@ import { AttachmentList } from "@/components/attachments/attachment-list";
 import { EventDialog } from "@/components/events/event-dialog";
 import { hasPermission } from "@/lib/permissions";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type EventDetail = {
   event: {
@@ -53,7 +54,6 @@ type EventDetail = {
   }[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_COLOUR: Record<EventDetail["event"]["kind"], string> = {
   TRIP: "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",

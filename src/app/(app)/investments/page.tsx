@@ -17,6 +17,7 @@ import { formatINR, formatDate, cn } from "@/lib/utils";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 import { InvestmentActions } from "@/components/investments/investment-actions";
 import type { StockQuote } from "@/app/api/market/quote/route";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Investment = {
   id: string;
@@ -41,7 +42,6 @@ type Investment = {
   notes: string | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const KIND_OPTIONS: { value: Investment["kind"]; label: string }[] = [
   { value: "STOCK", label: "Stock" },

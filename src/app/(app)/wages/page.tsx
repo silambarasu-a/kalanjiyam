@@ -14,6 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { formatINR, formatDate, accountSpendable, groupAccountOptions } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Worker = {
   id: string;
@@ -58,7 +59,6 @@ type CropBatch = {
   crop: { id: string; name: string };
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function isoDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

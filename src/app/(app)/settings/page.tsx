@@ -20,6 +20,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Profile = {
   id: string;
@@ -36,7 +37,6 @@ type Profile = {
   }>;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function ProfilePage() {
   const { data, isLoading } = useSWR<Profile>("/api/auth/profile", fetcher);

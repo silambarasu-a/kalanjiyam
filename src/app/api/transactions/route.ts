@@ -457,6 +457,7 @@ export async function POST(request: Request) {
           refundForTransactionId: data.refundForTransactionId ?? null,
           beneficiaryContactId: primaryContactId,
           memberChargeType: derivedChargeType,
+          paidByContactId: data.paidByContactId ?? null,
           vehicleId: data.vehicleId ?? null,
           claimId: data.claimId ?? null,
           hospitalizationId: data.hospitalizationId ?? null,
@@ -484,6 +485,27 @@ export async function POST(request: Request) {
             memberChargeId: chargeByIndex.get(i) ?? null,
             notes: s.notes,
           })),
+        });
+      }
+
+      // "Contact paid for me" obligation. When the workspace owner
+      // records an expense someone else paid AND wants to settle later,
+      // create a MemberCharge with direction=USER_OWES so the contact
+      // shows up in the "You owe them" totals on their detail page.
+      // GIFT means no obligation — just informational.
+      if (
+        data.paidByContactId &&
+        derivedChargeType === MemberChargeType.RECOVERABLE
+      ) {
+        await tx.memberCharge.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            beneficiaryContactId: data.paidByContactId,
+            amount: data.amount,
+            status: MemberChargeStatus.OUTSTANDING,
+            direction: "USER_OWES",
+            notes: data.description ?? null,
+          },
         });
       }
       // Side effect: update the linked investment's summary fields.

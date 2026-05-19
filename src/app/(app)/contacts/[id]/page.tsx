@@ -27,6 +27,7 @@ import {
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
 type Charge = {
@@ -96,7 +97,6 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function MemberLedgerDetail() {
   const params = useParams<{ id: string }>();

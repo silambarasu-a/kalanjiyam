@@ -24,6 +24,7 @@ import {
   type LoanFrequency,
 } from "@/lib/loan-math";
 import { TIMING } from "@/lib/timing";
+import { fetcher } from "@/lib/swr-fetcher";
 
 export type LoanForPayment = {
   id: string;
@@ -43,7 +44,6 @@ type Account = {
   availableLimit: number | null;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function LoanPayDialog({
   loan,

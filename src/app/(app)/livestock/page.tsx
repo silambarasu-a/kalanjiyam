@@ -8,6 +8,7 @@ import { Plus, Pencil, Trash2, PawPrint } from "lucide-react";
 import { FarmSubNav } from "@/components/layout/farm-sub-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { fetcher } from "@/lib/swr-fetcher";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +27,6 @@ type Livestock = {
   totalCount: number;
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function LivestockPage() {
   const { data, isLoading } = useSWR<{ livestock: Livestock[] }>("/api/livestock", fetcher);

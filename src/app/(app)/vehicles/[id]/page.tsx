@@ -53,6 +53,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fetcher } from "@/lib/swr-fetcher";
 
 type Insurance = {
   id: string;
@@ -139,7 +140,6 @@ type Vehicle = {
   transactions: Txn[];
 };
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function VehicleDetailPage({
   params,
