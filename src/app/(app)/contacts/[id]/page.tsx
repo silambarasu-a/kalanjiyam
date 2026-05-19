@@ -88,6 +88,21 @@ type Ledger = {
   transfers: Transfer[];
   expenses: SpentExpense[];
   loans: LinkedLoan[];
+  /** Expenses THIS contact paid for the workspace owner (paidByContactId
+   *  flow). RECOVERABLE rows are mirrored as a USER_OWES MemberCharge
+   *  under `charges`; GIFT rows live only here (informational). */
+  paidForMe?: {
+    id: string;
+    amount: number;
+    date: string;
+    description: string;
+    memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
+    category: {
+      id: string;
+      name: string;
+      parent: { id: string; name: string } | null;
+    } | null;
+  }[];
 };
 type Account = {
   id: string;
@@ -234,6 +249,14 @@ export default function MemberLedgerDetail() {
               Spent on them
               <span className="ml-1 text-[10px] text-muted-foreground">
                 ({data.expenses.length})
+              </span>
+            </TabsTrigger>
+          )}
+          {(data.paidForMe?.length ?? 0) > 0 && (
+            <TabsTrigger value="paidForMe">
+              They paid for me
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                ({data.paidForMe?.length})
               </span>
             </TabsTrigger>
           )}
@@ -526,6 +549,45 @@ export default function MemberLedgerDetail() {
                   </div>
                   <div className="text-sm font-semibold tabular-nums">
                     {formatINR(e.amount)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </TabsContent>
+        )}
+
+        {(data.paidForMe?.length ?? 0) > 0 && (
+          <TabsContent value="paidForMe">
+            <p className="text-xs text-muted-foreground mb-2">
+              Expenses {data.member.name} paid on your behalf. RECOVERABLE
+              rows are mirrored as an obligation under <strong>Charges</strong>;
+              GIFT rows are informational only.
+            </p>
+            <div className="rounded-lg border bg-card divide-y">
+              {data.paidForMe!.map((p) => (
+                <div key={p.id} className="flex items-center gap-3 px-5 py-2.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">
+                      {p.description}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {formatDate(p.date)}
+                      {p.category
+                        ? ` · ${
+                            p.category.parent
+                              ? `${p.category.parent.name} › ${p.category.name}`
+                              : p.category.name
+                          }`
+                        : ""}
+                      {p.memberChargeType === "RECOVERABLE"
+                        ? " · you owe back"
+                        : p.memberChargeType === "GIFT"
+                          ? " · gift"
+                          : ""}
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold tabular-nums">
+                    {formatINR(p.amount)}
                   </div>
                 </div>
               ))}

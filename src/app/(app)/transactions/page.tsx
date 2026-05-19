@@ -38,6 +38,7 @@ type Txn = {
   account: { id: string; name: string; kind: string } | null;
   card: { id: string; name: string } | null;
   beneficiary: { id: string; name: string } | null;
+  paidByContact: { id: string; name: string } | null;
   memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
   splits: Array<{
     id: string;
@@ -221,7 +222,11 @@ export default function TransactionsPage() {
                       ? "text-destructive"
                       : "text-muted-foreground";
                   const displayAmount = Math.abs(t.amount);
-                  const accountLabel = t.account?.name ?? t.card?.name ?? "—";
+                  // "Paid by Friend" prefix in the source column when a
+                  // contact paid the expense for us (no account/card moves).
+                  const accountLabel = t.paidByContact
+                    ? `Paid by ${t.paidByContact.name}`
+                    : t.account?.name ?? t.card?.name ?? "—";
                   return (
                     <tr
                       key={t.id}
@@ -251,6 +256,15 @@ export default function TransactionsPage() {
                           <div className="text-[11px] text-muted-foreground truncate">
                             split {t.splits.length} ways
                             {t.splits.some((s) => s.isRecoverable) ? " (recover)" : ""}
+                          </div>
+                        ) : t.paidByContact ? (
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            paid by {t.paidByContact.name}
+                            {t.memberChargeType === "RECOVERABLE"
+                              ? " (you owe back)"
+                              : t.memberChargeType === "GIFT"
+                                ? " (gift)"
+                                : ""}
                           </div>
                         ) : (
                           (t.beneficiary ||

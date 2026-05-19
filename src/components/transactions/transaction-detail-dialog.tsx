@@ -51,6 +51,8 @@ type DetailResponse = {
     account: { id: string; name: string; kind: string } | null;
     card: { id: string; name: string } | null;
     beneficiary: { id: string; name: string } | null;
+    paidByContact: { id: string; name: string } | null;
+    paidByContactId: string | null;
     memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
     splits: Array<{
       id: string;
@@ -193,6 +195,18 @@ export function TransactionDetailDialog({
                 />
               )}
               {tx.card && <Field label="Card" value={tx.card.name} />}
+              {tx.paidByContact && (
+                <Field
+                  label={
+                    tx.memberChargeType === "RECOVERABLE"
+                      ? "Paid by (you owe back)"
+                      : tx.memberChargeType === "GIFT"
+                        ? "Paid by (gift)"
+                        : "Paid by"
+                  }
+                  value={tx.paidByContact.name}
+                />
+              )}
               {tx.beneficiary && tx.splits.length === 0 && (
                 <Field
                   label={

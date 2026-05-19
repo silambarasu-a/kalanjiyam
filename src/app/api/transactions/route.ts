@@ -29,6 +29,7 @@ export async function GET(request: Request) {
     const accountId = url.searchParams.get("accountId");
     const cardId = url.searchParams.get("cardId");
     const beneficiaryContactId = url.searchParams.get("beneficiaryContactId");
+    const paidByContactId = url.searchParams.get("paidByContactId");
     const utilityProviderId = url.searchParams.get("utilityProviderId");
     const subscriptionId = url.searchParams.get("subscriptionId");
     const categoryId = url.searchParams.get("categoryId");
@@ -46,6 +47,7 @@ export async function GET(request: Request) {
     if (accountId) where.accountId = accountId;
     if (cardId) where.cardId = cardId;
     if (beneficiaryContactId) where.beneficiaryContactId = beneficiaryContactId;
+    if (paidByContactId) where.paidByContactId = paidByContactId;
     if (utilityProviderId) where.utilityProviderId = utilityProviderId;
     if (subscriptionId) where.subscriptionId = subscriptionId;
     if (categoryId) where.categoryId = categoryId;
@@ -104,6 +106,7 @@ export async function GET(request: Request) {
         account: { select: { id: true, name: true, kind: true } },
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
+        paidByContact: { select: { id: true, name: true } },
         splits: {
           select: {
             id: true,
@@ -186,6 +189,7 @@ export async function GET(request: Request) {
           account: t.account,
           card: t.card,
           beneficiary: t.beneficiaryContact,
+          paidByContact: t.paidByContact,
           memberChargeType: t.memberChargeType,
           splits: t.splits.map((s) => ({
             id: s.id,

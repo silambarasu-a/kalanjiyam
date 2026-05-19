@@ -22,7 +22,7 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const [charges, transfers, expenses, loans] = await Promise.all([
+    const [charges, transfers, expenses, loans, paidForMe] = await Promise.all([
       prisma.memberCharge.findMany({
         where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
         orderBy: { createdAt: "desc" },
@@ -90,6 +90,33 @@ export async function GET(
           active: true,
           emiAmount: true,
           interestRate: true,
+        },
+      }),
+      // Expenses this contact paid for the workspace owner (the new
+      // paidByContactId flow). Each row is one of "they paid, I owe
+      // back" (memberChargeType=RECOVERABLE → a USER_OWES charge
+      // exists under `charges` above) or "gift / treat" (no obligation).
+      prisma.transaction.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          paidByContactId: id,
+          type: "EXPENSE",
+        },
+        orderBy: { date: "desc" },
+        take: 100,
+        select: {
+          id: true,
+          amount: true,
+          date: true,
+          description: true,
+          memberChargeType: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+              parent: { select: { id: true, name: true } },
+            },
+          },
         },
       }),
     ]);
@@ -194,6 +221,20 @@ export async function GET(
         active: l.active,
         emiAmount: l.emiAmount == null ? null : Number(l.emiAmount),
         interestRate: l.interestRate == null ? null : Number(l.interestRate),
+      })),
+      paidForMe: paidForMe.map((t) => ({
+        id: t.id,
+        amount: Number(t.amount),
+        date: t.date.toISOString(),
+        description: t.description,
+        memberChargeType: t.memberChargeType,
+        category: t.category
+          ? {
+              id: t.category.id,
+              name: t.category.name,
+              parent: t.category.parent,
+            }
+          : null,
       })),
     });
   } catch (e) {
