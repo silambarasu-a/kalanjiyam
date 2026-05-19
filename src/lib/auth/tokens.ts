@@ -23,7 +23,12 @@ export async function createEmailVerificationToken(userId: string) {
 
 export async function consumeEmailVerificationToken(raw: string) {
   const tokenHash = hashToken(raw);
-  const token = await prisma.emailVerificationToken.findUnique({ where: { tokenHash } });
+  // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+  const token = (await (
+    prisma.emailVerificationToken.findUnique as unknown as (
+      a: unknown,
+    ) => Promise<{ userId: string; tokenHash: string; expiresAt: Date } | null>
+  )({ where: { tokenHash } }));
   if (!token) return { ok: false as const, reason: "invalid" as const };
   if (token.expiresAt.getTime() < Date.now()) {
     await prisma.emailVerificationToken.delete({ where: { tokenHash } });

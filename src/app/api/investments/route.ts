@@ -211,6 +211,12 @@ export async function POST(request: Request) {
         } else if (data.accountId) {
           await tx.transaction.create({
             data: {
+              // Use the client-minted UUID so receipts the user
+              // uploaded against `clientId` (instant-upload) link to
+              // this seed BUY transaction without a second round trip.
+              // Only valid in the single-account path — split-tender
+              // creates many txns, none of which is THE one to anchor.
+              ...(data.clientId ? { id: data.clientId } : {}),
               workspaceId: ctx.workspaceId,
               type: TransactionType.INVESTMENT,
               amount: data.amount,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
@@ -32,10 +32,12 @@ import {
 } from "@/components/insurance/policy-extras-fields";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { CategoryQuickCreateDialog } from "@/components/categories/category-quick-create-dialog";
+import { uploadReceiptsToAttachment } from "@/components/transactions/receipt-stager";
 import {
-  ReceiptStager,
-  uploadReceiptsToAttachment,
-} from "@/components/transactions/receipt-stager";
+  InstantAttachmentUploader,
+  useInstantAttachmentOwnerId,
+  type InstantAttachmentUploaderHandle,
+} from "@/components/attachments/instant-attachment-uploader";
 import {
   Dialog,
   DialogContent,
@@ -397,9 +399,12 @@ function IncomeExpenseForm({
   // creates a VehicleDocument tied to the picked vehicle so the system
   // schedules the next renewal reminder. Receipt PDF can be attached
   // afterwards from either the transaction edit dialog or the doc row.
-  // Staged receipt files — uploaded post-save to the most useful owner
-  // (VehicleDocument > Event > Transaction). Held client-side as
-  // File objects until we have the row id to anchor the Attachment.
+  // Instant-upload pre-mints the transaction id, so receipts hit S3 the
+  // moment the user picks them. We still keep `receiptFiles` for the
+  // rare VEHICLE_DOCUMENT / EVENT_DOCUMENT branches (where the eventual
+  // owner is only known after submit).
+  const txnClientId = useInstantAttachmentOwnerId();
+  const instantUploaderRef = useRef<InstantAttachmentUploaderHandle | null>(null);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   // Per-kind cap is enforced server-side; we duplicate the same table
   // here for friendlier inline validation. Keep in sync with
@@ -418,6 +423,20 @@ function IncomeExpenseForm({
   >("PUC");
   const [vehicleDocExpiryAt, setVehicleDocExpiryAt] = useState("");
   const [vehicleDocNumber, setVehicleDocNumber] = useState("");
+
+  // When the user enables "Also log this as a vehicle doc" or picks an
+  // Event tag after already uploading receipts, the destination flips
+  // away from TRANSACTION_RECEIPT and the instant uploader unmounts —
+  // the already-uploaded files would orphan in S3. Discard them so the
+  // user has a clean slate to re-attach to the new (vehicle/event) owner.
+  useEffect(() => {
+    const willAttachToTxn =
+      !(createVehicleDoc && vehicleDocExpiryAt) &&
+      !tagSource.startsWith("event:");
+    if (!willAttachToTxn) {
+      instantUploaderRef.current?.discardAll();
+    }
+  }, [createVehicleDoc, vehicleDocExpiryAt, tagSource]);
 
   // Fuel-fill metadata — surfaced when the Fuel category is selected
   // AND a vehicle is picked. Quantity unit is inferred from the
@@ -619,7 +638,14 @@ function IncomeExpenseForm({
     }
     setSubmitting(true);
     try {
+      // Whether the in-form instant uploader has any pending/ready
+      // attachments — if so, anchor the new transaction's id on the
+      // pre-minted UUID so they link without a second round-trip.
+      const willAttachToTxn =
+        !(isVehicleMode && vehicleId && createVehicleDoc && vehicleDocExpiryAt) &&
+        !tagSource.startsWith("event:");
       const payload: Record<string, unknown> = {
+        ...(willAttachToTxn ? { clientId: txnClientId } : {}),
         type,
         amount: amt,
         description: description || (type === "INCOME" ? "Income" : "Expense"),
@@ -1178,8 +1204,11 @@ function IncomeExpenseForm({
       </label>
 
       {(() => {
-        // Predict where the receipt will land so we can show the right
-        // size cap inline (matches what the server will enforce).
+        // Predict the eventual owner so we can show a meaningful hint
+        // and pick the right uploader. TRANSACTION_RECEIPT (the common
+        // case) uses instant-upload — files hit S3 immediately.
+        // VEHICLE_DOCUMENT and EVENT_DOCUMENT keep the legacy stage-and-
+        // upload pattern because their owner row only exists after submit.
         const willAttachTo: keyof typeof ATTACHMENT_MAX_MB =
           isVehicleMode && vehicleId && createVehicleDoc && vehicleDocExpiryAt
             ? "VEHICLE_DOCUMENT"
@@ -1193,6 +1222,18 @@ function IncomeExpenseForm({
             : willAttachTo === "EVENT_DOCUMENT"
               ? "the linked event (visible on /events)"
               : "this transaction (visible on its edit dialog)";
+        if (willAttachTo === "TRANSACTION_RECEIPT") {
+          return (
+            <InstantAttachmentUploader
+              ref={instantUploaderRef}
+              ownerKind="TRANSACTION_RECEIPT"
+              ownerId={txnClientId}
+              draft
+              maxFiles={5}
+              hint="Files upload instantly to S3. Remove to delete from S3."
+            />
+          );
+        }
         return (
           <div className="rounded-md border bg-muted/30 p-3 space-y-2">
             <div className="text-xs font-medium">
@@ -1244,7 +1285,7 @@ function IncomeExpenseForm({
               className="block w-full text-xs file:mr-2 file:rounded-md file:border file:bg-background file:px-2 file:py-1 file:text-xs file:font-medium"
             />
             <p className="text-[10px] text-muted-foreground">
-              Will attach to {destinationHint}. Max {maxMB} MB per file.
+              Will attach to {destinationHint} after save. Max {maxMB} MB per file.
             </p>
           </div>
         );
@@ -1253,7 +1294,18 @@ function IncomeExpenseForm({
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            // Drop any instant-uploaded receipts before closing — they
+            // were attached to a clientId UUID that's never going to
+            // become a real Transaction.
+            await instantUploaderRef.current?.discardAll();
+            onClose();
+          }}
+        >
+          Cancel
+        </Button>
         <Button
           onClick={submit}
           disabled={
@@ -1667,6 +1719,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
   const [expectBack, setExpectBack] = useState(false);
+  const [oweBack, setOweBack] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1748,6 +1801,8 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           notes: notes.trim() || undefined,
           expectBack:
             destinationKind === "MEMBER" && direction === "SENT" && expectBack,
+          oweBack:
+            destinationKind === "MEMBER" && direction === "RECEIVED" && oweBack,
         }),
       });
       const body = await res.json();
@@ -1978,6 +2033,26 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           </div>
         </label>
       )}
+      {destinationKind === "MEMBER" && direction === "RECEIVED" && (
+        <label className="flex items-start gap-2.5 cursor-pointer rounded-md border bg-card p-3">
+          <input
+            type="checkbox"
+            checked={oweBack}
+            onChange={(e) => setOweBack(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-primary"
+          />
+          <div className="space-y-0.5">
+            <span className="text-sm font-medium block">
+              I&rsquo;ll pay this back to {personName.trim() || "them"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {oweBack
+                ? "Tracked as money you owe — settle later from the contact page."
+                : "Money received with no obligation (gift, salary, reimbursement)."}
+            </span>
+          </div>
+        </label>
+      )}
       <label className="block">
         <span className="text-xs text-muted-foreground">Notes</span>
         <Input
@@ -2053,7 +2128,10 @@ function LoanEmiForm({
   const [paidAt, setPaidAt] = useState(today);
   const [accountId, setAccountId] = useState("");
   const [notes, setNotes] = useState("");
-  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  // Pre-mint the future txn id so attached receipts hit S3 instantly
+  // and link cleanly when the loan-pay POST creates the row.
+  const loanPayClientId = useInstantAttachmentOwnerId();
+  const loanPayUploaderRef = useRef<InstantAttachmentUploaderHandle | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2097,6 +2175,7 @@ function LoanEmiForm({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          clientId: loanPayClientId,
           amount: amt,
           paidAt,
           accountId,
@@ -2113,20 +2192,8 @@ function LoanEmiForm({
       globalMutate(
         (k) => typeof k === "string" && k.startsWith("/api/loans"),
       );
-      // Optional receipts — attach to the auto-created loan-payment
-      // transaction. Failures surface as a warning toast.
-      if (receiptFiles.length > 0 && body.transactionId) {
-        const result = await uploadReceiptsToAttachment({
-          files: receiptFiles,
-          ownerKind: "TRANSACTION_RECEIPT",
-          ownerId: body.transactionId,
-        });
-        if (result.errors.length > 0) {
-          toast.warning(
-            `EMI paid, but ${result.errors.length} of ${receiptFiles.length} file(s) failed: ${result.errors.join("; ")}`,
-          );
-        }
-      }
+      // Receipts already in S3 via the instant uploader — they linked
+      // to the txn via `clientId`. Nothing else to do.
       await mutateBalances();
       onClose();
     } finally {
@@ -2213,18 +2280,25 @@ function LoanEmiForm({
         if you need to override.
       </p>
 
-      <ReceiptStager
-        value={receiptFiles}
-        onChange={setReceiptFiles}
+      <InstantAttachmentUploader
+        ref={loanPayUploaderRef}
         ownerKind="TRANSACTION_RECEIPT"
-        destinationHint="Attaches to the auto-created loan-payment transaction."
-        onError={setError}
+        ownerId={loanPayClientId}
+        draft
+        maxFiles={5}
+        hint="Receipts upload instantly. They link to the loan-payment transaction on save."
       />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            await loanPayUploaderRef.current?.discardAll();
+            onClose();
+          }}
+        >
           Cancel
         </Button>
         <Button onClick={submit} disabled={submitting}>
@@ -2317,10 +2391,9 @@ function InvestmentForm({
   // kind/name/symbol fields and submit posts to /api/investments which
   // creates the holding + initial BUY transaction in one shot.
   const [creatingNew, setCreatingNew] = useState(defaultCreatingNew);
-  // Optional receipt staged before save — attaches to the auto-created
-  // BUY/SELL transaction (or the new holding's seed transaction). Edit
-  // flows can attach via the transaction edit dialog as before.
-  const [investReceiptFiles, setInvestReceiptFiles] = useState<File[]>([]);
+  // Pre-mint the txn id so receipt uploads hit S3 instantly.
+  const investClientId = useInstantAttachmentOwnerId();
+  const investUploaderRef = useRef<InstantAttachmentUploaderHandle | null>(null);
   const [newKind, setNewKind] = useState<
     "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
   >("STOCK");
@@ -2997,6 +3070,10 @@ function InvestmentForm({
             method: isEditing ? "PATCH" : "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
+            // Pass clientId on CREATE only — the seed BUY transaction
+            // adopts this id so any receipts uploaded under it link
+            // automatically. PATCH doesn't create a transaction.
+            ...(isEditing ? {} : { clientId: investClientId }),
             ...insuranceExtraPayload,
             kind: newKind,
             name: newName.trim(),
@@ -3185,6 +3262,7 @@ function InvestmentForm({
         return;
       }
       const payload: Record<string, unknown> = {
+        clientId: investClientId,
         type: "INVESTMENT",
         amount: amt,
         description:
@@ -3211,18 +3289,8 @@ function InvestmentForm({
         return;
       }
       toast.success(action === "BUY" ? "Investment purchase recorded" : "Investment sale recorded");
-      if (investReceiptFiles.length > 0 && body.id) {
-        const result = await uploadReceiptsToAttachment({
-          files: investReceiptFiles,
-          ownerKind: "TRANSACTION_RECEIPT",
-          ownerId: body.id,
-        });
-        if (result.errors.length > 0) {
-          toast.warning(
-            `Saved, but ${result.errors.length} of ${investReceiptFiles.length} file(s) failed: ${result.errors.join("; ")}`,
-          );
-        }
-      }
+      // Instant uploader already pushed receipts to S3 under `clientId`,
+      // which is now the saved txn's id. Nothing else to do.
       await mutateBalances();
       onClose();
     } finally {
@@ -4310,20 +4378,32 @@ function InvestmentForm({
           : "Reduces the holding's invested amount and quantity (clamped at 0)."}
       </p>
 
-      {!creatingNew && (
-        <ReceiptStager
-          value={investReceiptFiles}
-          onChange={setInvestReceiptFiles}
+      {/* Single-account new-holding creations and existing-holding pays
+          both anchor receipts on the same `investClientId` via the API's
+          `clientId` plumbing. GOLD split-tender creates many BUY txns —
+          attaching to a single one isn't meaningful, so the receipts
+          orphan and the daily GC sweep cleans them up. */}
+      {!isGoldCreate && (
+        <InstantAttachmentUploader
+          ref={investUploaderRef}
           ownerKind="TRANSACTION_RECEIPT"
-          destinationHint="Attaches to the BUY/SELL transaction (broker contract note, mutual-fund statement, etc.)."
-          onError={setError}
+          ownerId={investClientId}
+          draft
+          maxFiles={5}
+          hint="Broker contract note, MF statement, etc. Uploads instantly to S3."
         />
       )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            await investUploaderRef.current?.discardAll();
+            onClose();
+          }}
+        >
           Cancel
         </Button>
         <Button onClick={submit} disabled={submitting}>

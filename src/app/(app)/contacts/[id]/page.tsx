@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/tabs";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
 type Charge = {
@@ -33,8 +34,10 @@ type Charge = {
   amount: number;
   settledAmount: number;
   status: "OUTSTANDING" | "PARTIAL" | "SETTLED" | "WRITTEN_OFF";
+  direction: "OWED_TO_USER" | "USER_OWES";
   notes: string | null;
   createdAt: string;
+  sourceTransferId: string | null;
   origin: { id: string; description: string; date: string } | null;
   settlements: Settlement[];
 };
@@ -71,6 +74,8 @@ type Ledger = {
   member: { id: string; name: string };
   totals: {
     outstanding: number;
+    owedToUser: number;
+    userOwes: number;
     settled: number;
     sentToContact: number;
     receivedFromContact: number;
@@ -114,6 +119,9 @@ export default function MemberLedgerDetail() {
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
   const [forgivingChargeId, setForgivingChargeId] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState<"SEND" | "RECEIVE" | null>(null);
+  const [bulkSettleDirection, setBulkSettleDirection] = useState<
+    "OWED_TO_USER" | "USER_OWES" | null
+  >(null);
 
   async function forgiveCharge(chargeId: string) {
     setForgivingChargeId(chargeId);
@@ -157,8 +165,17 @@ export default function MemberLedgerDetail() {
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.member.name}</h1>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Outstanding" value={formatINR(data.totals.outstanding)} highlight />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <Stat
+          label="They owe you"
+          value={formatINR(data.totals.owedToUser ?? 0)}
+          highlight={(data.totals.owedToUser ?? 0) > 0}
+        />
+        <Stat
+          label="You owe them"
+          value={formatINR(data.totals.userOwes ?? 0)}
+          highlight={(data.totals.userOwes ?? 0) > 0}
+        />
         <Stat label="Settled to date" value={formatINR(data.totals.settled)} />
         <Stat
           label="Net transferred"
@@ -239,6 +256,43 @@ export default function MemberLedgerDetail() {
         </TabsList>
 
         <TabsContent value="charges">
+          {(() => {
+            const oweMeOpen = openCharges.filter(
+              (c) => c.direction === "OWED_TO_USER",
+            );
+            const owedOpen = openCharges.filter(
+              (c) => c.direction === "USER_OWES",
+            );
+            return (
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {oweMeOpen.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => setBulkSettleDirection("OWED_TO_USER")}
+                    className="gap-1.5"
+                  >
+                    Receive from {data.member.name}
+                    <span className="text-[10px] opacity-80">
+                      ({oweMeOpen.length})
+                    </span>
+                  </Button>
+                )}
+                {owedOpen.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setBulkSettleDirection("USER_OWES")}
+                    className="gap-1.5"
+                  >
+                    Pay {data.member.name}
+                    <span className="text-[10px] opacity-80">
+                      ({owedOpen.length})
+                    </span>
+                  </Button>
+                )}
+              </div>
+            );
+          })()}
           <div className="rounded-lg border bg-card divide-y">
             {openCharges.map((c) => {
               const remaining = c.amount - c.settledAmount;
@@ -579,6 +633,23 @@ export default function MemberLedgerDetail() {
         accounts={accounts}
         onClose={() => setSettleCharge(null)}
       />
+
+      {bulkSettleDirection && (
+        <BulkSettleDialog
+          open={!!bulkSettleDirection}
+          onOpenChange={(o) => !o && setBulkSettleDirection(null)}
+          contactId={id!}
+          contactName={data.member.name}
+          direction={bulkSettleDirection}
+          charges={openCharges.filter(
+            (c) => c.direction === bulkSettleDirection,
+          )}
+          onSaved={() => {
+            globalMutate(`/api/contacts/${id}/ledger`);
+            mutateBalances();
+          }}
+        />
+      )}
     </div>
   );
 }

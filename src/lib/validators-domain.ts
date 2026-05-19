@@ -235,12 +235,30 @@ export const transferCreateSchema = z
      *  Outstanding stat. Only valid when sending FROM a workspace account
      *  TO a contact. */
     expectBack: z.boolean().optional().default(false),
+    /** Marks an INBOUND transfer (FROM contact TO my account) as money I
+     *  need to pay back later. Creates a MemberCharge with direction =
+     *  USER_OWES so the contact's "I owe them" balance reflects it. */
+    oweBack: z.boolean().optional().default(false),
   })
   .refine(
     (d) => !d.expectBack || (!!d.fromAccountId && !!d.toContactId),
     {
       message: "Expect-back only applies when sending from your account to a contact",
       path: ["expectBack"],
+    },
+  )
+  .refine(
+    (d) => !d.oweBack || (!!d.fromContactId && !!d.toAccountId),
+    {
+      message: "Owe-back only applies when receiving from a contact to your account",
+      path: ["oweBack"],
+    },
+  )
+  .refine(
+    (d) => !(d.expectBack && d.oweBack),
+    {
+      message: "Pick one obligation direction",
+      path: ["oweBack"],
     },
   )
   .refine((d) => !!d.fromAccountId !== !!d.fromContactId, {
@@ -549,6 +567,10 @@ export const loanUpdateSchema = loanFieldsSchema.partial().extend({
 });
 
 export const loanPaymentSchema = z.object({
+  // Optional client-minted UUID for the resulting Transaction. Used by
+  // the instant-upload flow so the dialog's draft attachments link
+  // without a follow-up round trip.
+  clientId: z.string().uuid().optional().nullable(),
   amount: z.number().positive(),
   paidAt: z.string(),
   accountId: z.string().uuid().optional().nullable(),
@@ -726,6 +748,11 @@ const investmentCreateBase = z.object({
     .min(1)
     .optional(),
   isExisting: z.boolean().optional().default(false),
+  /** Pre-minted txn id from the instant-upload flow. Used as the seed
+   *  BUY transaction's id when there's a single account-based payment
+   *  (no splits) so receipts that were uploaded under this UUID link
+   *  to the saved row without a follow-up round trip. */
+  clientId: z.string().uuid().optional().nullable(),
 });
 
 export const investmentCreateSchema = investmentCreateBase.refine(
@@ -960,6 +987,35 @@ export const eventUpdateSchema = z
     (v) => !v.startedAt || !v.endedAt || new Date(v.endedAt) >= new Date(v.startedAt),
     { message: "End date can't be before start date", path: ["endedAt"] },
   );
+
+/* ---------------- Per-contact bulk settlement ---------------- */
+
+/**
+ * Settle one or more outstanding MemberCharge rows belonging to a single
+ * contact in a single round-trip. Each line carries a partial or full
+ * amount; the server creates ONE Transaction (INCOME or EXPENSE based
+ * on the direction of the charges) plus one MemberChargeSettlement
+ * per line. All charges must share the same `direction` so a single
+ * cash flow makes sense.
+ */
+export const contactBulkSettleSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        chargeId: z.string().uuid(),
+        amount: z.number().positive(),
+      }),
+    )
+    .min(1)
+    .max(50),
+  /** Account or card cash flows through. Required — without it the
+   *  settlements are purely audit and don't move money, which is fine
+   *  if the user picks "no cash flow" — we still record the settlements. */
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  paidAt: z.string().min(1),
+  notes: z.string().trim().max(200).optional().nullable(),
+});
 
 /* ---------------- Subscription schemas ---------------- */
 

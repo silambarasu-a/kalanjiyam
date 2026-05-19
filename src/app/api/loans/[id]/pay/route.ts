@@ -141,6 +141,7 @@ export async function POST(
     const created = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
         data: {
+          ...(data.clientId ? { id: data.clientId } : {}),
           workspaceId: ctx.workspaceId,
           type: TransactionType.EXPENSE,
           kind: TransactionKind.LOAN_PAYMENT,

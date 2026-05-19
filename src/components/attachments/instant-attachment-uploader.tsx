@@ -98,6 +98,24 @@ export const InstantAttachmentUploader = forwardRef<
     onChange?.(rows);
   }, [rows, onChange]);
 
+  // Refresh-protection: when we're in draft mode and have at least one
+  // S3-resident file the parent hasn't submitted yet, warn before unload.
+  // The orphan-GC cron eventually cleans abandoned uploads (24h), but
+  // this avoids surprise data loss for the in-progress user. Manual
+  // navigation inside the SPA isn't affected — only refresh / close.
+  useEffect(() => {
+    if (!draft) return;
+    const hasPending = rows.some((r) => r.status === "ready" || r.status === "uploading");
+    if (!hasPending) return;
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      // Modern browsers ignore the message; the prompt is generic.
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [draft, rows]);
+
   const updateRow = useCallback(
     (id: string, patch: Partial<InstantAttachmentRow>) => {
       setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));

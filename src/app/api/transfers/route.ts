@@ -4,7 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { transferCreateSchema } from "@/lib/validators-domain";
-import { TransactionType, MemberChargeStatus, MemberChargeType } from "@/generated/prisma/client";
+import {
+  TransactionType,
+  MemberChargeStatus,
+  MemberChargeType,
+  MemberChargeDirection,
+} from "@/generated/prisma/client";
 import {
   findStatementForPayment,
   materializeStatementsFor,
@@ -132,6 +137,7 @@ export async function POST(request: Request) {
       date: dateStr,
       notes,
       expectBack,
+      oweBack,
     } = parsed.data;
 
     // Resolve each side. The validator guarantees exactly one of (account,
@@ -200,6 +206,7 @@ export async function POST(request: Request) {
           date,
           notes,
           statementId: statementIdToTag,
+          createsObligation: !!oweBack,
         },
       });
 
@@ -299,6 +306,23 @@ export async function POST(request: Request) {
             transferId: t.id,
           },
         });
+        // Money I need to pay back later → create a USER_OWES charge
+        // linked to this transfer. The settlement flow on the contact
+        // ledger uses MemberChargeSettlement just like the other
+        // direction, only the cash flow reverses on settle.
+        if (oweBack) {
+          await tx.memberCharge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              beneficiaryContactId: fromContact.id,
+              amount,
+              status: MemberChargeStatus.OUTSTANDING,
+              direction: MemberChargeDirection.USER_OWES,
+              sourceTransferId: t.id,
+              notes: notes ?? null,
+            },
+          });
+        }
       }
       return t;
     });

@@ -103,6 +103,7 @@ export function TransactionDetailDialog({
   open,
   onOpenChange,
   onEdit,
+  onDeleted,
 }: {
   transactionId: string | null;
   open: boolean;
@@ -110,6 +111,9 @@ export function TransactionDetailDialog({
   /** Called when the user clicks the Edit button. The parent owns the
    * edit-dialog state so the two dialogs can hand off cleanly. */
   onEdit?: () => void;
+  /** Called after a successful DELETE so the parent can refresh its
+   * surrounding list / detail view. */
+  onDeleted?: () => void;
 }) {
   const { data, isLoading } = useSWR<DetailResponse>(
     open && transactionId ? `/api/transactions/${transactionId}` : null,
@@ -312,6 +316,56 @@ export function TransactionDetailDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Close
           </Button>
+          {onDeleted && tx && (
+            <Button
+              variant="outline"
+              className="text-destructive"
+              onClick={async () => {
+                if (
+                  !confirm(
+                    "Delete this transaction? Linked subscription / bill / advance state will be reverted.",
+                  )
+                ) {
+                  return;
+                }
+                const res = await fetch(`/api/transactions/${tx.id}`, {
+                  method: "DELETE",
+                });
+                if (res.ok) {
+                  toast.success("Transaction deleted");
+                  onOpenChange(false);
+                  onDeleted();
+                  return;
+                }
+                if (res.status === 423) {
+                  const body = await res.json().catch(() => ({}));
+                  if (
+                    body.canForce &&
+                    confirm(
+                      `${body.error}\n\nForce delete anyway? (admin/owner only)`,
+                    )
+                  ) {
+                    const force = await fetch(
+                      `/api/transactions/${tx.id}?force=1`,
+                      { method: "DELETE" },
+                    );
+                    if (force.ok) {
+                      toast.success("Transaction deleted");
+                      onOpenChange(false);
+                      onDeleted();
+                      return;
+                    }
+                  }
+                  toast.error(body.error ?? "Edit window has closed");
+                  return;
+                }
+                const body = await res.json().catch(() => ({}));
+                toast.error(body.error ?? "Delete failed");
+              }}
+            >
+              Delete
+            </Button>
+          )}
           {onEdit && tx && (
             <Button onClick={onEdit} variant="outline">
               Edit

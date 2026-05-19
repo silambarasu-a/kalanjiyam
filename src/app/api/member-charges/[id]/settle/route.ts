@@ -61,15 +61,21 @@ export async function POST(
         ? MemberChargeStatus.SETTLED
         : MemberChargeStatus.PARTIAL;
 
+    // Direction decides the cash-flow side of the settlement:
+    //   OWED_TO_USER → contact pays me → INCOME on my account
+    //   USER_OWES    → I pay contact   → EXPENSE on my account
+    const isIncoming = charge.direction !== "USER_OWES";
     await prisma.$transaction(async (tx) => {
       let txnId: string | null = null;
       if (accountForIncome) {
         const txn = await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
-            type: TransactionType.INCOME,
+            type: isIncoming ? TransactionType.INCOME : TransactionType.EXPENSE,
             amount,
-            description: `Settlement: ${parsed.data.notes ?? "Member charge"}`,
+            description: `${
+              isIncoming ? "Settlement received" : "Settlement paid"
+            }: ${parsed.data.notes ?? "Member charge"}`,
             date: paidAt,
             accountId: accountForIncome,
             beneficiaryContactId: charge.beneficiaryContactId,

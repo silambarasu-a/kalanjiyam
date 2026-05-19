@@ -94,10 +94,17 @@ export async function GET(
       }),
     ]);
 
-    const totalOutstanding = charges.reduce(
-      (sum, c) => sum + (c.status !== "WRITTEN_OFF" ? Number(c.amount) - Number(c.settledAmount) : 0),
-      0
-    );
+    const remainingOf = (c: (typeof charges)[number]) =>
+      c.status !== "WRITTEN_OFF" ? Number(c.amount) - Number(c.settledAmount) : 0;
+    const oweMeCharges = charges.filter((c) => c.direction === "OWED_TO_USER");
+    const owedCharges = charges.filter((c) => c.direction === "USER_OWES");
+    const owedToUser = oweMeCharges.reduce((s, c) => s + remainingOf(c), 0);
+    const userOwes = owedCharges.reduce((s, c) => s + remainingOf(c), 0);
+    // Preserve the legacy contract: `outstanding` = how much THIS contact
+    // owes the workspace (non-negative). New `userOwes` is additive and
+    // tracks the reverse direction. Consumers (reports, contacts list)
+    // see no behavior change for the historical OWED_TO_USER flow.
+    const totalOutstanding = owedToUser;
     const totalSettled = charges.reduce((sum, c) => sum + Number(c.settledAmount), 0);
 
     let sentToContact = 0;
@@ -119,6 +126,8 @@ export async function GET(
       member: { id: member.id, name: member.name },
       totals: {
         outstanding: round2(totalOutstanding),
+        owedToUser: round2(owedToUser),
+        userOwes: round2(userOwes),
         settled: round2(totalSettled),
         sentToContact: round2(sentToContact),
         receivedFromContact: round2(receivedFromContact),
@@ -131,8 +140,10 @@ export async function GET(
         amount: Number(c.amount),
         settledAmount: Number(c.settledAmount),
         status: c.status,
+        direction: c.direction,
         notes: c.notes,
         createdAt: c.createdAt.toISOString(),
+        sourceTransferId: c.sourceTransferId,
         origin: c.originSplit?.transaction
           ? {
               id: c.originSplit.transaction.id,

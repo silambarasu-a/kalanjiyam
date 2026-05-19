@@ -4,11 +4,13 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { subscriptionPaySchema } from "@/lib/validators-domain";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
+import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
 import { advanceCycle } from "@/lib/cascades";
 import {
   ReminderKind,
   ReminderStatus,
   type Subscription,
+  type SubscriptionSchedule,
   SubscriptionStatus,
   TransactionKind,
   TransactionType,
@@ -60,14 +62,21 @@ export async function POST(
     }
 
     // Resolve the schedule row: explicit if provided, else soonest UPCOMING.
-    const schedule = d.scheduleId
-      ? await prisma.subscriptionSchedule.findUnique({
-          where: { id: d.scheduleId },
-        })
-      : await prisma.subscriptionSchedule.findFirst({
+    // Cast to dodge Prisma 7 deep-instantiation quirk on large schemas.
+    const schedule = (d.scheduleId
+      ? await (
+          prisma.subscriptionSchedule.findUnique as unknown as (
+            a: unknown,
+          ) => Promise<SubscriptionSchedule | null>
+        )({ where: { id: d.scheduleId } })
+      : await (
+          prisma.subscriptionSchedule.findFirst as unknown as (
+            a: unknown,
+          ) => Promise<SubscriptionSchedule | null>
+        )({
           where: { subscriptionId: id, status: ReminderStatus.UPCOMING },
           orderBy: { dueDate: "asc" },
-        });
+        }));
     if (!schedule || schedule.subscriptionId !== sub.id) {
       return NextResponse.json(
         { error: "No upcoming schedule found" },
@@ -215,6 +224,20 @@ export async function POST(
 
       return { transactionId: txn.id };
     });
+
+    // Best-effort email — never block the response on dispatch.
+    void sendPaymentConfirmationEmail({
+      workspaceId: ctx.workspaceId,
+      recipientUserIds: [ctx.userId],
+      kind: "SUBSCRIPTION",
+      autopayed: false,
+      amount,
+      label: sub.name,
+      sourceLabel: cardId ? "Card" : "Account",
+      cycleLabel: sub.cycle.toLowerCase().replace("_", "-"),
+      nextDate: null,
+      link: `/subscriptions/${sub.id}`,
+    }).catch((e) => console.warn("[subscription-pay] email failed", e));
 
     return NextResponse.json(result);
   } catch (e) {

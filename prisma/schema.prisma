@@ -60,6 +60,17 @@ enum MemberChargeStatus {
   WRITTEN_OFF
 }
 
+// Which way money flows between the workspace owner and the contact:
+//   OWED_TO_USER — contact owes the workspace owner (default; existing
+//                  flow: I paid for them, they pay me back).
+//   USER_OWES    — workspace owner owes the contact (new flow: contact
+//                  sent me money via Transfer with createsObligation,
+//                  I pay them back).
+enum MemberChargeDirection {
+  OWED_TO_USER
+  USER_OWES
+}
+
 enum AccountKind {
   BANK
   CASH
@@ -668,30 +679,35 @@ model CardStatement {
 }
 
 model Transfer {
-  id            String         @id @default(uuid())
-  workspaceId   String
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  userId        String
-  user          User           @relation("TransferAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  id                String         @id @default(uuid())
+  workspaceId       String
+  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User           @relation("TransferAuthor", fields: [userId], references: [id], onDelete: Cascade)
   // Exactly one of fromAccountId / fromContactId is set, and exactly one of
   // toAccountId / toContactId is set. At least one side must be an account
   // (contact-to-contact transfers don't touch this workspace's books).
-  fromAccountId String?
-  fromAccount   Account?       @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
-  fromContactId String?
-  fromContact   Contact?       @relation("TransferFromContact", fields: [fromContactId], references: [id], onDelete: Restrict)
-  toAccountId   String?
-  toAccount     Account?       @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
-  toContactId   String?
-  toContact     Contact?       @relation("TransferToContact", fields: [toContactId], references: [id], onDelete: Restrict)
-  amount        Decimal        @db.Decimal(14, 2)
-  date          DateTime
-  notes         String?
-  statementId   String?
-  statement     CardStatement? @relation("StatementPayments", fields: [statementId], references: [id], onDelete: SetNull)
-  legs          Transaction[]  @relation("TransferLegs")
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  fromAccountId     String?
+  fromAccount       Account?       @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  fromContactId     String?
+  fromContact       Contact?       @relation("TransferFromContact", fields: [fromContactId], references: [id], onDelete: Restrict)
+  toAccountId       String?
+  toAccount         Account?       @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+  toContactId       String?
+  toContact         Contact?       @relation("TransferToContact", fields: [toContactId], references: [id], onDelete: Restrict)
+  amount            Decimal        @db.Decimal(14, 2)
+  date              DateTime
+  notes             String?
+  statementId       String?
+  statement         CardStatement? @relation("StatementPayments", fields: [statementId], references: [id], onDelete: SetNull)
+  legs              Transaction[]  @relation("TransferLegs")
+  // When true on a fromContact→toAccount transfer, the inbound money is
+  // a loan/advance from the contact — we create a MemberCharge with
+  // direction=USER_OWES so the user can settle it later.
+  createsObligation Boolean        @default(false)
+  obligationCharges MemberCharge[] @relation("TransferObligation")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   @@index([workspaceId, date])
   @@index([fromAccountId])
@@ -875,6 +891,15 @@ model MemberCharge {
   amount               Decimal                  @db.Decimal(14, 2)
   settledAmount        Decimal                  @default(0) @db.Decimal(14, 2)
   status               MemberChargeStatus       @default(OUTSTANDING)
+  // OWED_TO_USER = contact pays workspace owner (default for existing
+  // split / recoverable rows). USER_OWES = workspace owner pays contact
+  // (created when an incoming Transfer is marked "I'll pay this back").
+  direction            MemberChargeDirection    @default(OWED_TO_USER)
+  // When the charge was created by an inbound Transfer (createsObligation
+  // = true), this points back to that transfer so the audit trail is
+  // explicit. SetNull so deleting the transfer doesn't drop the charge.
+  sourceTransferId     String?
+  sourceTransfer       Transfer?                @relation("TransferObligation", fields: [sourceTransferId], references: [id], onDelete: SetNull)
   lastSettlementAt     DateTime?
   notes                String?
   originSplit          TransactionSplit?        @relation("SplitCharge")
@@ -883,6 +908,8 @@ model MemberCharge {
   updatedAt            DateTime                 @updatedAt
 
   @@index([workspaceId, beneficiaryContactId, status])
+  @@index([workspaceId, direction, status])
+  @@index([sourceTransferId])
 }
 
 // One row per contact a transaction is shared with. Replaces the legacy

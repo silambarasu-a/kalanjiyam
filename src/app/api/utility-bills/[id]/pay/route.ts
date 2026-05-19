@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { utilityBillPaySchema } from "@/lib/validators-domain";
 import { canAccessRecord } from "@/lib/permissions";
+import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
 import {
   ReminderStatus,
   TransactionKind,
@@ -175,6 +176,21 @@ export async function POST(
         cashAmount,
       };
     });
+
+    void sendPaymentConfirmationEmail({
+      workspaceId: ctx.workspaceId,
+      recipientUserIds: [ctx.userId],
+      kind: "UTILITY_BILL",
+      autopayed: false,
+      amount: billAmount,
+      label: `${provider.providerName} bill`,
+      sourceLabel:
+        cashAmount > 0 ? (resolvedCardId ? "Card" : "Account") : "advance balance",
+      cashAmount: result.cashAmount,
+      advanceApplied: result.advanceApplied,
+      remainingAdvance: Math.max(0, available - result.advanceApplied),
+      link: `/bills/providers/${provider.id}`,
+    }).catch((e) => console.warn("[bill-pay] email failed", e));
 
     return NextResponse.json(result);
   } catch (e) {

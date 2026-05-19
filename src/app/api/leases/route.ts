@@ -107,10 +107,13 @@ export async function POST(request: Request) {
       }
     }
     if (data.assetType === "LIVESTOCK_BATCH" && data.livestockBatchId) {
-      const batch = await prisma.livestockBatch.findUnique({
+      // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+      const batch = (await (prisma.livestockBatch.findUnique as unknown as (
+        a: unknown,
+      ) => Promise<{ livestock: { workspaceId: string } } | null>)({
         where: { id: data.livestockBatchId },
         include: { livestock: { select: { workspaceId: true } } },
-      });
+      }));
       if (!batch || batch.livestock.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Livestock batch not found" }, { status: 404 });
       }

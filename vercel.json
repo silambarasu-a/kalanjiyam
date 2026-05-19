@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/attachments-gc",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/autopay",
+      "schedule": "0 4 * * *"
     }
   ]
 }

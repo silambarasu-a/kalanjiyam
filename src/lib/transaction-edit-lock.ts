@@ -151,10 +151,13 @@ export async function checkTransactionEditAllowed(args: {
 
   // 3. Non-card → day-window lock. Per-workspace override wins; falls back
   // to the env-driven default in TIMING.defaultEditWindowDays.
-  const ws = await prisma.workspace.findUnique({
+  // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+  const ws = (await (prisma.workspace.findUnique as unknown as (
+    a: unknown,
+  ) => Promise<{ transactionEditWindowDays: number } | null>)({
     where: { id: transaction.workspaceId },
     select: { transactionEditWindowDays: true },
-  });
+  }));
   const window =
     ws?.transactionEditWindowDays ?? TIMING.defaultEditWindowDays;
   if (window <= 0) return { ok: true };
@@ -193,10 +196,13 @@ export async function checkDayWindowEditAllowed(args: {
   entityName: string;
 }): Promise<EditLockResult> {
   const { date, workspaceId, role, force, entityName } = args;
-  const ws = await prisma.workspace.findUnique({
+  // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+  const ws = (await (prisma.workspace.findUnique as unknown as (
+    a: unknown,
+  ) => Promise<{ transactionEditWindowDays: number } | null>)({
     where: { id: workspaceId },
     select: { transactionEditWindowDays: true },
-  });
+  }));
   const window =
     ws?.transactionEditWindowDays ?? TIMING.defaultEditWindowDays;
   if (window <= 0) return { ok: true };

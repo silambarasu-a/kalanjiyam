@@ -48,6 +48,7 @@ import { UtilityProviderForm } from "@/components/bills/utility-provider-form";
 import { AddAdvanceDialog } from "@/components/bills/add-advance-dialog";
 import { UtilityBillForm } from "@/components/bills/utility-bill-form";
 import { PayBillDialog } from "@/components/bills/pay-bill-dialog";
+import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 
 type Provider = {
   id: string;
@@ -115,6 +116,7 @@ export default function ProviderDetailPage({
   const [newBillOpen, setNewBillOpen] = useState(false);
   const [payBill, setPayBill] = useState<Bill | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [focusTxnId, setFocusTxnId] = useState<string | null>(null);
 
   const provider = providerRes?.provider;
   const bills = useMemo(() => billsRes?.bills ?? [], [billsRes]);
@@ -350,6 +352,7 @@ export default function ProviderDetailPage({
                 bills={bills}
                 provider={provider}
                 onPay={(b) => setPayBill(b)}
+                onViewTxn={(txnId) => setFocusTxnId(txnId)}
                 onChanged={() => {
                   globalMutate(`/api/utility-bills?providerId=${id}`);
                   globalMutate(`/api/utility-providers/${id}`);
@@ -359,7 +362,10 @@ export default function ProviderDetailPage({
             </TabsContent>
 
             <TabsContent value="advances" className="pt-4">
-              <AdvancesTable providerId={id} />
+              <AdvancesTable
+                providerId={id}
+                onViewTxn={(txnId) => setFocusTxnId(txnId)}
+              />
             </TabsContent>
           </Tabs>
         </div>
@@ -550,6 +556,22 @@ export default function ProviderDetailPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TransactionDetailDialog
+        transactionId={focusTxnId}
+        open={!!focusTxnId}
+        onOpenChange={(o) => !o && setFocusTxnId(null)}
+        onDeleted={() => {
+          globalMutate(`/api/utility-bills?providerId=${id}`);
+          globalMutate(`/api/utility-providers/${id}`);
+          globalMutate("/api/utility-providers");
+          globalMutate(
+            (k) =>
+              typeof k === "string" &&
+              k.startsWith("/api/transactions?utilityProviderId="),
+          );
+        }}
+      />
     </div>
   );
 }
@@ -580,11 +602,13 @@ function BillsTable({
   bills,
   provider,
   onPay,
+  onViewTxn,
   onChanged,
 }: {
   bills: Bill[];
   provider: Provider;
   onPay: (b: Bill) => void;
+  onViewTxn: (txnId: string) => void;
   onChanged: () => void;
 }) {
   const [statusFilter, setStatusFilter] = useState<"all" | "unpaid" | "paid">(
@@ -698,6 +722,16 @@ function BillsTable({
                           Pay
                         </Button>
                       )}
+                      {b.paidTransaction && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={() => onViewTxn(b.paidTransaction!.id)}
+                        >
+                          View
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="ghost"
@@ -769,7 +803,13 @@ function BillsTable({
   );
 }
 
-function AdvancesTable({ providerId }: { providerId: string }) {
+function AdvancesTable({
+  providerId,
+  onViewTxn,
+}: {
+  providerId: string;
+  onViewTxn: (txnId: string) => void;
+}) {
   const { data, isLoading } = useSWR<{
     transactions: {
       id: string;
@@ -802,11 +842,12 @@ function AdvancesTable({ providerId }: { providerId: string }) {
             <th className="px-3 py-2 text-left font-medium">Source</th>
             <th className="px-3 py-2 text-left font-medium">Note</th>
             <th className="px-3 py-2 text-right font-medium">Amount</th>
+            <th className="px-3 py-2 text-right font-medium">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y">
           {rows.map((t) => (
-            <tr key={t.id}>
+            <tr key={t.id} className="hover:bg-muted/30">
               <td className="px-3 py-2 text-xs">{fmtDate(t.date)}</td>
               <td className="px-3 py-2 text-xs">
                 {t.card?.name ?? t.account?.name ?? "—"}
@@ -816,6 +857,16 @@ function AdvancesTable({ providerId }: { providerId: string }) {
               </td>
               <td className="px-3 py-2 text-right font-medium tabular-nums">
                 {formatINR(t.amount)}
+              </td>
+              <td className="px-3 py-2 text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => onViewTxn(t.id)}
+                >
+                  View
+                </Button>
               </td>
             </tr>
           ))}

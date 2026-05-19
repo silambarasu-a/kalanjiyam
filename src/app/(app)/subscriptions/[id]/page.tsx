@@ -41,6 +41,7 @@ import {
 import { formatINR } from "@/lib/utils";
 import { SubscriptionForm } from "@/components/subscriptions/subscription-form";
 import { PaySubscriptionDialog } from "@/components/subscriptions/pay-subscription-dialog";
+import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 
 type Schedule = {
   id: string;
@@ -83,6 +84,7 @@ export default function SubscriptionDetailPage({
   const [payOpen, setPayOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [focusTxnId, setFocusTxnId] = useState<string | null>(null);
 
   const sub = data?.subscription;
 
@@ -258,6 +260,7 @@ export default function SubscriptionDetailPage({
                 schedules={sub.schedules.filter(
                   (s) => s.status === "CONFIRMED" && s.confirmedTxn,
                 )}
+                onViewTxn={(txnId) => setFocusTxnId(txnId)}
               />
             </TabsContent>
 
@@ -425,6 +428,13 @@ export default function SubscriptionDetailPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TransactionDetailDialog
+        transactionId={focusTxnId}
+        open={!!focusTxnId}
+        onOpenChange={(o) => !o && setFocusTxnId(null)}
+        onDeleted={() => globalMutate(`/api/subscriptions/${id}`)}
+      />
     </div>
   );
 }
@@ -466,7 +476,13 @@ function KpiCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PaymentsTable({ schedules }: { schedules: Schedule[] }) {
+function PaymentsTable({
+  schedules,
+  onViewTxn,
+}: {
+  schedules: Schedule[];
+  onViewTxn: (txnId: string) => void;
+}) {
   if (schedules.length === 0) {
     return (
       <p className="rounded-lg border border-dashed bg-muted/30 p-6 text-center text-xs text-muted-foreground">
@@ -505,12 +521,13 @@ function PaymentsTable({ schedules }: { schedules: Schedule[] }) {
               </td>
               <td className="px-3 py-2 text-right">
                 {s.confirmedTxn && (
-                  <Link
-                    href={`/transactions?focus=${s.confirmedTxn.id}`}
+                  <button
+                    type="button"
+                    onClick={() => onViewTxn(s.confirmedTxn!.id)}
                     className="text-xs text-primary hover:underline"
                   >
                     View
-                  </Link>
+                  </button>
                 )}
               </td>
             </tr>
