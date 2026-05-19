@@ -30,7 +30,9 @@ type Reminder = {
     | "LEASE_PAYMENT"
     | "LOAN_EMI"
     | "CARD_STATEMENT"
-    | "VEHICLE_DOC_RENEWAL";
+    | "VEHICLE_DOC_RENEWAL"
+    | "SUBSCRIPTION_RENEWAL"
+    | "UTILITY_BILL_DUE";
   dueDate: string;
   amount: number | null;
   status: "UPCOMING" | "CONFIRMED" | "SKIPPED" | "MISSED";
@@ -42,6 +44,13 @@ type Reminder = {
     vehicleId: string;
     vehicleName: string | null;
     registrationNo: string | null;
+  } | null;
+  subscription: { id: string; name: string; cycle: string } | null;
+  utilityBill: {
+    id: string;
+    providerId: string;
+    providerName: string;
+    providerKind: string;
   } | null;
 };
 
@@ -155,6 +164,57 @@ function ReminderRow({
   reminder: Reminder;
   onConfirm: () => void;
 }) {
+  // Subscription / utility-bill reminders have their own pay flows.
+  // The generic Confirm dialog would mark them confirmed without
+  // recording a transaction — render a deep-link button instead.
+  if (reminder.kind === "SUBSCRIPTION_RENEWAL" && reminder.subscription) {
+    const overdue = new Date(reminder.dueDate) < new Date();
+    return (
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Clock
+          className={`h-4 w-4 shrink-0 ${overdue ? "text-destructive" : "text-primary"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">{reminder.subscription.name}</div>
+          <div className="text-xs text-muted-foreground">
+            {overdue ? "Overdue " : "Due "}
+            {formatDate(reminder.dueDate)}
+            {reminder.amount != null ? ` · ${formatINR(reminder.amount)}` : ""}
+          </div>
+        </div>
+        <Link href={`/subscriptions/${reminder.subscription.id}`}>
+          <Button size="sm" variant="outline">
+            Open subscription
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+  if (reminder.kind === "UTILITY_BILL_DUE" && reminder.utilityBill) {
+    const overdue = new Date(reminder.dueDate) < new Date();
+    return (
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Clock
+          className={`h-4 w-4 shrink-0 ${overdue ? "text-destructive" : "text-primary"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">
+            {reminder.utilityBill.providerName} bill
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {overdue ? "Overdue " : "Due "}
+            {formatDate(reminder.dueDate)}
+            {reminder.amount != null ? ` · ${formatINR(reminder.amount)}` : ""}
+          </div>
+        </div>
+        <Link href={`/bills/providers/${reminder.utilityBill.providerId}`}>
+          <Button size="sm" variant="outline">
+            Open provider
+          </Button>
+        </Link>
+      </div>
+    );
+  }
   // Vehicle document renewals (FC / PUC / Road Tax / etc.) are expiry
   // trackers, not payments — no Confirm dialog. Render with a link to
   // the vehicle so the user can update the doc with the new expiry.

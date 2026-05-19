@@ -59,7 +59,7 @@ export default function BillsPage() {
   const [kindFilter, setKindFilter] = useState<"ALL" | UtilityKindValue>("ALL");
   const [newOpen, setNewOpen] = useState(false);
 
-  const providers = data?.providers ?? [];
+  const providers = useMemo(() => data?.providers ?? [], [data]);
   const filtered = useMemo(() => {
     let rows = providers.filter((p) => p.status === "ACTIVE");
     if (kindFilter !== "ALL") rows = rows.filter((r) => r.kind === kindFilter);

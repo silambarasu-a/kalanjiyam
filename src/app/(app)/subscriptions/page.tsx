@@ -113,7 +113,7 @@ export default function SubscriptionsPage() {
     "/api/subscriptions",
     fetcher,
   );
-  const all = data?.subscriptions ?? [];
+  const all = useMemo(() => data?.subscriptions ?? [], [data]);
 
   const filtered = useMemo(() => {
     let rows = all;

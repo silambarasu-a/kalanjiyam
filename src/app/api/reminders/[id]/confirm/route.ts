@@ -5,6 +5,8 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { reminderConfirmSchema } from "@/lib/validators-domain";
 import {
+  type Investment,
+  type InvestmentReminder,
   ReminderKind,
   ReminderStatus,
   TransactionType,
@@ -35,10 +37,16 @@ export async function POST(
     const ctx = await requireWorkspace("reminders", "write");
     const session = await auth();
     const { id } = await context.params;
-    const reminder = await prisma.investmentReminder.findUnique({
+    // Cast to dodge Prisma 7 deep-instantiation quirk on large schemas.
+    const reminder = (await (
+      prisma.investmentReminder.findUnique as unknown as (a: unknown) => Promise<
+        | (InvestmentReminder & { investment: Investment | null })
+        | null
+      >
+    )({
       where: { id },
       include: { investment: true },
-    });
+    }));
     if (!reminder || reminder.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }

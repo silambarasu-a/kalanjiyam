@@ -41,6 +41,15 @@ export async function GET(request: Request) {
             vehicle: { select: { id: true, name: true, registrationNo: true } },
           },
         },
+        subscription: { select: { id: true, name: true, cycle: true } },
+        utilityBill: {
+          select: {
+            id: true,
+            provider: {
+              select: { id: true, providerName: true, kind: true },
+            },
+          },
+        },
       },
     });
 
@@ -68,6 +77,21 @@ export async function GET(request: Request) {
               vehicleId: r.vehicleDocument.vehicleId,
               vehicleName: r.vehicleDocument.vehicle?.name ?? null,
               registrationNo: r.vehicleDocument.vehicle?.registrationNo ?? null,
+            }
+          : null,
+        subscription: r.subscription
+          ? {
+              id: r.subscription.id,
+              name: r.subscription.name,
+              cycle: r.subscription.cycle,
+            }
+          : null,
+        utilityBill: r.utilityBill
+          ? {
+              id: r.utilityBill.id,
+              providerId: r.utilityBill.provider.id,
+              providerName: r.utilityBill.provider.providerName,
+              providerKind: r.utilityBill.provider.kind,
             }
           : null,
       })),

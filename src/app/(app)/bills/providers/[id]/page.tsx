@@ -117,7 +117,7 @@ export default function ProviderDetailPage({
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const provider = providerRes?.provider;
-  const bills = billsRes?.bills ?? [];
+  const bills = useMemo(() => billsRes?.bills ?? [], [billsRes]);
 
   const lastPaidBill = useMemo(
     () =>

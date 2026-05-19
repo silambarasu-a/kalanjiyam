@@ -377,6 +377,13 @@ export async function getDashboardCashflow(args: {
             lenderContact: { select: { name: true } },
           },
         },
+        subscription: { select: { id: true, name: true } },
+        utilityBill: {
+          select: {
+            id: true,
+            provider: { select: { id: true, providerName: true } },
+          },
+        },
       },
     }),
     prisma.loan.findMany({
@@ -594,10 +601,27 @@ export async function getDashboardCashflow(args: {
     // avoid showing the same reminder twice on the dashboard.
     if (r.kind === "VEHICLE_DOC_RENEWAL") continue;
     const label =
+      r.subscription?.name ??
+      (r.utilityBill?.provider
+        ? `${r.utilityBill.provider.providerName} bill`
+        : null) ??
       r.investment?.name ??
       r.loan?.lenderContact?.name ??
       r.loan?.lender ??
       r.kind.replace(/_/g, " ");
+    // Subscriptions / utility bills have dedicated pay flows — deep-link
+    // straight to the relevant page so the dashboard doesn't dead-end
+    // at the generic /reminders confirm dialog (which rejects them).
+    const href = r.subscription?.id
+      ? `/subscriptions/${r.subscription.id}`
+      : r.utilityBill?.provider?.id
+        ? `/bills/providers/${r.utilityBill.provider.id}`
+        : "/reminders";
+    const payHref = r.subscription?.id
+      ? `/subscriptions/${r.subscription.id}`
+      : r.utilityBill?.provider?.id
+        ? `/bills/providers/${r.utilityBill.provider.id}`
+        : `/reminders?confirm=${r.id}`;
     dues.push({
       id: `reminder:${r.id}`,
       source: "REMINDER",
@@ -605,8 +629,8 @@ export async function getDashboardCashflow(args: {
       label,
       dueDate: r.dueDate.toISOString(),
       amount: r.amount == null ? null : Number(r.amount),
-      href: "/reminders",
-      payHref: `/reminders?confirm=${r.id}`,
+      href,
+      payHref,
     });
   }
   // Per-loan paid this month — used to mark a due as paid once
