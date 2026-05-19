@@ -198,10 +198,25 @@ export const transactionCreateSchema = z
       path: ["paidByContactId"],
     },
   )
-  .refine((d) => !(d.memberChargeType === "RECOVERABLE" && !d.beneficiaryContactId), {
-    message: "Pick a beneficiary for recoverable charges",
-    path: ["beneficiaryContactId"],
-  })
+  .refine(
+    (d) =>
+      !(
+        d.memberChargeType === "RECOVERABLE" &&
+        !d.beneficiaryContactId &&
+        !d.paidByContactId &&
+        d.splits.length === 0
+      ),
+    {
+      // Three valid RECOVERABLE shapes:
+      //   1. Single-beneficiary expense (legacy)     → beneficiaryContactId
+      //   2. Multi-contact split with isRecoverable  → splits[]
+      //   3. Contact-paid-for-me expense (new flow)  → paidByContactId
+      // The refine only fires when NONE of these are present.
+      message:
+        "Pick a beneficiary, contact who paid, or a split for recoverable charges",
+      path: ["beneficiaryContactId"],
+    },
+  )
   .refine((d) => d.splits.length === 0 || d.type === "EXPENSE", {
     message: "Splits are only allowed on expenses",
     path: ["splits"],

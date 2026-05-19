@@ -53,6 +53,12 @@ type DetailResponse = {
     beneficiary: { id: string; name: string } | null;
     paidByContact: { id: string; name: string } | null;
     paidByContactId: string | null;
+    subscription: { id: string; name: string } | null;
+    utilityProvider: { id: string; providerName: string; kind: string } | null;
+    utilityBill: {
+      id: string;
+      provider: { id: string; providerName: string; kind: string };
+    } | null;
     memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
     splits: Array<{
       id: string;
@@ -78,6 +84,7 @@ type DetailResponse = {
     hospitalizationStage: "PRE" | "DURING" | "POST" | null;
     transferId: string | null;
     transfer: {
+      createsObligation: boolean;
       fromAccount: { id: string; name: string; kind: string } | null;
       toAccount: { id: string; name: string; kind: string } | null;
       fromContact: { id: string; name: string } | null;
@@ -217,6 +224,39 @@ export function TransactionDetailDialog({
                         : "Beneficiary"
                   }
                   value={tx.beneficiary.name}
+                />
+              )}
+              {tx.transfer?.createsObligation && tx.transfer.fromContact && (
+                <Field
+                  label="Obligation created"
+                  value={`You owe ${tx.transfer.fromContact.name} — settle from their contact page`}
+                  href={`/contacts/${tx.transfer.fromContact.id}`}
+                />
+              )}
+              {tx.subscription && (
+                <Field
+                  label="Subscription"
+                  value={tx.subscription.name}
+                  href={`/subscriptions/${tx.subscription.id}`}
+                />
+              )}
+              {tx.utilityBill && (
+                <Field
+                  label={`${tx.utilityBill.provider.providerName} bill`}
+                  value={`${tx.utilityBill.provider.kind
+                    .replace(/_/g, " ")
+                    .toLowerCase()} · paid`}
+                  href={`/bills/providers/${tx.utilityBill.provider.id}`}
+                />
+              )}
+              {tx.utilityProvider && !tx.utilityBill && (
+                // Standalone advance deposit — no bill link, just provider.
+                <Field
+                  label={`Advance to ${tx.utilityProvider.providerName}`}
+                  value={tx.utilityProvider.kind
+                    .replace(/_/g, " ")
+                    .toLowerCase()}
+                  href={`/bills/providers/${tx.utilityProvider.id}`}
                 />
               )}
               {tx.vehicle && (
@@ -391,13 +431,31 @@ export function TransactionDetailDialog({
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({
+  label,
+  value,
+  href,
+}: {
+  label: string;
+  value: string;
+  /** Optional deep link — turns the value into a clickable link. */
+  href?: string;
+}) {
   return (
     <div className="rounded-lg border bg-card p-3">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className="mt-0.5 text-sm font-medium truncate">{value}</div>
+      {href ? (
+        <a
+          href={href}
+          className="mt-0.5 block truncate text-sm font-medium text-primary hover:underline"
+        >
+          {value}
+        </a>
+      ) : (
+        <div className="mt-0.5 text-sm font-medium truncate">{value}</div>
+      )}
     </div>
   );
 }

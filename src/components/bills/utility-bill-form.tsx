@@ -20,6 +20,9 @@ type Provider = {
   id: string;
   kind: UtilityKindValue;
   providerName: string;
+  /** Day of month (1–31) the provider typically bills on. Used to
+   *  pre-fill the due date so the user doesn't pick it every time. */
+  defaultDueDay?: number | null;
 };
 
 type Props = {
@@ -39,6 +42,26 @@ function inDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Compute the next occurrence of `dayOfMonth`. If today is past the
+ * target, advances to next month. Clamps to the last day of the month
+ * when target > days in that month (so dueDay=31 → 30 Apr / 28 Feb).
+ */
+function nextDueDateFor(dayOfMonth: number): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const today = now.getDate();
+  const targetMonth = today < dayOfMonth ? month : month + 1;
+  const candidate = new Date(year, targetMonth, dayOfMonth);
+  // Date overflow auto-rolls (e.g. Feb 31 → Mar 3) — clamp back.
+  if (candidate.getMonth() !== ((targetMonth % 12) + 12) % 12) {
+    const lastDay = new Date(year, targetMonth + 1, 0);
+    return lastDay.toISOString().slice(0, 10);
+  }
+  return candidate.toISOString().slice(0, 10);
 }
 
 export function UtilityBillForm({
@@ -61,7 +84,13 @@ export function UtilityBillForm({
     previousMeterReading ?? lastBillRes?.bills?.[0]?.currentReading ?? null;
 
   const [billDate, setBillDate] = useState(todayIso());
-  const [dueDate, setDueDate] = useState(inDays(10));
+  // Default due date: provider's configured default day if set,
+  // otherwise today + 10 days as a safe fallback.
+  const [dueDate, setDueDate] = useState(
+    provider.defaultDueDay != null
+      ? nextDueDateFor(provider.defaultDueDay)
+      : inDays(10),
+  );
   const [billAmount, setBillAmount] = useState("");
   // User-typed override of previousReading. When blank, we fall through
   // to `inferredPrev` from the last paid bill so the displayed value

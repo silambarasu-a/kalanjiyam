@@ -84,6 +84,16 @@ export async function GET(
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
         paidByContact: { select: { id: true, name: true } },
+        subscription: { select: { id: true, name: true } },
+        utilityProvider: {
+          select: { id: true, providerName: true, kind: true },
+        },
+        utilityBill: {
+          select: {
+            id: true,
+            provider: { select: { id: true, providerName: true, kind: true } },
+          },
+        },
         splits: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -109,6 +119,7 @@ export async function GET(
         },
         transfer: {
           select: {
+            createsObligation: true,
             fromAccount: { select: { id: true, name: true, kind: true } },
             toAccount: { select: { id: true, name: true, kind: true } },
             fromContact: { select: { id: true, name: true } },
@@ -124,6 +135,16 @@ export async function GET(
       beneficiaryContact: { id: string; name: string } | null;
       paidByContact: { id: string; name: string } | null;
       paidByContactId: string | null;
+      subscription: { id: string; name: string } | null;
+      utilityProvider: {
+        id: string;
+        providerName: string;
+        kind: string;
+      } | null;
+      utilityBill: {
+        id: string;
+        provider: { id: string; providerName: string; kind: string };
+      } | null;
       splits: Array<{
         id: string;
         amount: unknown;
@@ -146,6 +167,7 @@ export async function GET(
         patientContact: { id: string; name: string };
       } | null;
       transfer: {
+        createsObligation: boolean;
         fromAccount: { id: string; name: string; kind: string } | null;
         toAccount: { id: string; name: string; kind: string } | null;
         fromContact: { id: string; name: string } | null;
@@ -220,6 +242,9 @@ export async function GET(
         memberChargeType: t.memberChargeType,
         paidByContact: t.paidByContact,
         paidByContactId: t.paidByContactId ?? null,
+        subscription: t.subscription,
+        utilityProvider: t.utilityProvider,
+        utilityBill: t.utilityBill,
         splits: t.splits.map((s) => ({
           id: s.id,
           contact: s.contact,

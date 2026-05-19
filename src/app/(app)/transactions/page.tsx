@@ -39,6 +39,9 @@ type Txn = {
   card: { id: string; name: string } | null;
   beneficiary: { id: string; name: string } | null;
   paidByContact: { id: string; name: string } | null;
+  subscription: { id: string; name: string } | null;
+  utilityProvider: { id: string; providerName: string; kind: string } | null;
+  utilityBill: { id: string; providerId: string; dueDate: string } | null;
   memberChargeType: "NONE" | "RECOVERABLE" | "GIFT";
   splits: Array<{
     id: string;
@@ -245,6 +248,21 @@ export default function TransactionsPage() {
                               Refund
                             </span>
                           )}
+                          {t.kind === "SUBSCRIPTION" && (
+                            <span className="inline-flex items-center rounded-full bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Sub
+                            </span>
+                          )}
+                          {t.kind === "UTILITY_BILL" && (
+                            <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Bill
+                            </span>
+                          )}
+                          {t.kind === "UTILITY_ADVANCE" && (
+                            <span className="inline-flex items-center rounded-full bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Advance
+                            </span>
+                          )}
                           <span className="truncate">{t.description}</span>
                         </div>
                         {t.transferCounterparty ? (
@@ -264,6 +282,19 @@ export default function TransactionsPage() {
                               ? " (you owe back)"
                               : t.memberChargeType === "GIFT"
                                 ? " (gift)"
+                                : ""}
+                          </div>
+                        ) : t.subscription ? (
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            {t.subscription.name}
+                          </div>
+                        ) : t.utilityProvider ? (
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            {t.utilityProvider.providerName}
+                            {t.kind === "UTILITY_ADVANCE"
+                              ? " · advance"
+                              : t.utilityBill
+                                ? " · bill"
                                 : ""}
                           </div>
                         ) : (

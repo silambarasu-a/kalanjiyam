@@ -107,6 +107,15 @@ export async function GET(request: Request) {
         card: { select: { id: true, name: true } },
         beneficiaryContact: { select: { id: true, name: true } },
         paidByContact: { select: { id: true, name: true } },
+        subscription: { select: { id: true, name: true } },
+        utilityProvider: { select: { id: true, providerName: true, kind: true } },
+        utilityBill: {
+          select: {
+            id: true,
+            dueDate: true,
+            providerId: true,
+          },
+        },
         splits: {
           select: {
             id: true,
@@ -190,6 +199,15 @@ export async function GET(request: Request) {
           card: t.card,
           beneficiary: t.beneficiaryContact,
           paidByContact: t.paidByContact,
+          subscription: t.subscription,
+          utilityProvider: t.utilityProvider,
+          utilityBill: t.utilityBill
+            ? {
+                id: t.utilityBill.id,
+                providerId: t.utilityBill.providerId,
+                dueDate: t.utilityBill.dueDate.toISOString(),
+              }
+            : null,
           memberChargeType: t.memberChargeType,
           splits: t.splits.map((s) => ({
             id: s.id,
@@ -411,12 +429,21 @@ export async function POST(request: Request) {
     const isSingleSplit = splits.length === 1;
     const primaryContactId = isSingleSplit ? splits[0].contactId : null;
     const hasRecoverableSplit = splits.some((s) => s.isRecoverable);
+    // When the user is in the new "Paid by contact" flow there are no
+    // splits, but the client still sends an explicit memberChargeType
+    // (RECOVERABLE = "I'll pay back" / GIFT = "treat") so the route
+    // knows whether to create a USER_OWES MemberCharge. Honor the
+    // client's choice when paidByContactId is set; otherwise fall back
+    // to derivation from splits (the legacy behavior).
     const derivedChargeType: MemberChargeType =
-      splits.length === 0
-        ? "NONE"
-        : hasRecoverableSplit
-          ? "RECOVERABLE"
-          : "GIFT";
+      data.paidByContactId
+        ? ((data.memberChargeType as MemberChargeType | undefined) ??
+          MemberChargeType.NONE)
+        : splits.length === 0
+          ? MemberChargeType.NONE
+          : hasRecoverableSplit
+            ? MemberChargeType.RECOVERABLE
+            : MemberChargeType.GIFT;
 
     const created = await prisma.$transaction(async (tx) => {
       // Create one MemberCharge per recoverable split.

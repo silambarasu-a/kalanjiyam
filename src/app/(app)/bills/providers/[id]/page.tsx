@@ -234,6 +234,11 @@ export default function ProviderDetailPage({
                       {provider.addressLine}
                     </div>
                   )}
+                  {provider.notes && (
+                    <div className="mt-1.5 text-xs text-muted-foreground whitespace-pre-line">
+                      {provider.notes}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -476,6 +481,7 @@ export default function ProviderDetailPage({
               id: provider.id,
               kind: provider.kind,
               providerName: provider.providerName,
+              defaultDueDay: provider.defaultDueDay,
             }}
             previousMeterReading={lastPaidBill?.currentReading ?? null}
             onSaved={() => {

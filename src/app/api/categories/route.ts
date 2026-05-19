@@ -62,9 +62,17 @@ async function validateParentReference(args: {
   workspaceId: string;
   childTypes: string[];
 }): Promise<string | null> {
-  const parent = await prisma.category.findUnique({
+  // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas.
+  const parent = (await (
+    prisma.category.findUnique as unknown as (a: unknown) => Promise<{
+      id: string;
+      workspaceId: string | null;
+      parentCategoryId: string | null;
+      types: string[];
+    } | null>
+  )({
     where: { id: args.parentCategoryId },
-  });
+  }));
   if (!parent) return "Parent category not found";
   const visible = parent.workspaceId === null || parent.workspaceId === args.workspaceId;
   if (!visible) return "Parent category not found";
