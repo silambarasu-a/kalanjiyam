@@ -11,6 +11,7 @@ import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DescriptionField } from "@/components/ui/description-field";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
@@ -1091,10 +1092,12 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </label>
       )}
 
-      <label className="block">
-        <span className="text-xs font-medium">Notes</span>
-        <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
-      </label>
+      <DescriptionField
+        value={notes}
+        onChange={setNotes}
+        label="Notes"
+        maxLength={500}
+      />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>

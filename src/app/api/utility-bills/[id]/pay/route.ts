@@ -5,6 +5,11 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { utilityBillPaySchema } from "@/lib/validators-domain";
 import { canAccessRecord } from "@/lib/permissions";
 import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
+import { resolveUtilityCategoryId } from "@/lib/utility-category";
+import {
+  ADVANCE_NONNEG_MESSAGE,
+  isAdvanceNonNegViolation,
+} from "@/lib/utility-advance-guard";
 import {
   ReminderStatus,
   TransactionKind,
@@ -16,6 +21,9 @@ import {
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
+  }
+  if (isAdvanceNonNegViolation(e)) {
+    return NextResponse.json({ error: ADVANCE_NONNEG_MESSAGE }, { status: 409 });
   }
   console.error("[utility-bills/[id]/pay]", e);
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
@@ -106,10 +114,16 @@ export async function POST(
         );
       }
     }
+    // Resolve a human-readable source name for the confirmation email so
+    // it matches the autopay format ("HDFC Credit") rather than the
+    // generic "Card" / "Account". Look up whichever side the user picked.
+    let cardName: string | null = null;
+    let accountName: string | null = null;
     if (resolvedCardId) {
       const card = await prisma.card.findUnique({
         where: { id: resolvedCardId },
         select: {
+          name: true,
           workspaceId: true,
           accountId: true,
           ownerUserId: true,
@@ -122,14 +136,47 @@ export async function POST(
       if (!canAccessRecord(session, card)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      cardName = card.name;
       // Route to companion account for balance math (same as transactions POST).
       resolvedAccountId = card.accountId ?? resolvedAccountId;
+    }
+    // Validate the account leg too — when the user supplies an explicit
+    // `accountId` (not falling back to the provider's default), we must
+    // confirm it belongs to the workspace and the caller can access it.
+    // The companion-account routing from `card.accountId` above is
+    // already in-workspace (the card lookup validated it), so we only
+    // re-check when the caller's input was explicit and not card-driven.
+    if (!cardName && resolvedAccountId) {
+      const acc = await prisma.account.findUnique({
+        where: { id: resolvedAccountId },
+        select: {
+          name: true,
+          workspaceId: true,
+          ownerUserId: true,
+          sharedWithUserIds: true,
+        },
+      });
+      if (!acc || acc.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Account not found" }, { status: 404 });
+      }
+      if (!canAccessRecord(session, acc)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      accountName = acc.name;
     }
 
     const paidOn = d.paidOn ? new Date(d.paidOn) : new Date();
     if (Number.isNaN(paidOn.getTime())) {
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }
+
+    // Stamp the matching utility category so cashflow / PnL reports
+    // bucket the spend correctly. Falls back to null if the seed is
+    // missing — the pay flow continues either way.
+    const categoryId = await resolveUtilityCategoryId(
+      ctx.workspaceId,
+      provider.kind,
+    );
 
     const result = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
@@ -141,6 +188,7 @@ export async function POST(
           description:
             d.notes?.trim() || `${provider.providerName} bill`,
           date: paidOn,
+          categoryId,
           accountId: cashAmount > 0 ? resolvedAccountId : null,
           cardId: cashAmount > 0 ? resolvedCardId : null,
           utilityProviderId: provider.id,
@@ -157,11 +205,18 @@ export async function POST(
           advanceApplied,
         },
       });
+      // Read the post-update advance back inside the same transaction so
+      // the confirmation email shows the true remaining balance even
+      // under concurrent pays (read-then-display from the request-time
+      // snapshot would otherwise be stale).
+      let remainingAdvance = available;
       if (advanceApplied > 0) {
-        await tx.utilityProvider.update({
+        const updated = await tx.utilityProvider.update({
           where: { id: provider.id },
           data: { advanceBalance: { decrement: advanceApplied } },
+          select: { advanceBalance: true },
         });
+        remainingAdvance = Number(updated.advanceBalance);
       }
       await tx.investmentReminder.updateMany({
         where: { utilityBillId: bill.id },
@@ -174,6 +229,7 @@ export async function POST(
         transactionId: txn.id,
         advanceApplied,
         cashAmount,
+        remainingAdvance,
       };
     });
 
@@ -185,10 +241,12 @@ export async function POST(
       amount: billAmount,
       label: `${provider.providerName} bill`,
       sourceLabel:
-        cashAmount > 0 ? (resolvedCardId ? "Card" : "Account") : "advance balance",
+        cashAmount > 0
+          ? (cardName ?? accountName ?? "default source")
+          : "advance balance",
       cashAmount: result.cashAmount,
       advanceApplied: result.advanceApplied,
-      remainingAdvance: Math.max(0, available - result.advanceApplied),
+      remainingAdvance: result.remainingAdvance,
       link: `/bills/providers/${provider.id}`,
     }).catch((e) => console.warn("[bill-pay] email failed", e));
 

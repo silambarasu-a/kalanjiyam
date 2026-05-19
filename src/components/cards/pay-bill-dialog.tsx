@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DescriptionField } from "@/components/ui/description-field";
 import {
   Dialog,
   DialogContent,
@@ -159,14 +159,12 @@ export function PayBillDialog({
               />
             </div>
           </label>
-          <label className="block">
-            <span className="text-xs font-medium">Notes</span>
-            <Input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              maxLength={200}
-            />
-          </label>
+          <DescriptionField
+            value={notes}
+            onChange={setNotes}
+            label="Notes"
+            maxLength={200}
+          />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

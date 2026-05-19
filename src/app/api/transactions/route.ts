@@ -346,6 +346,20 @@ export async function POST(request: Request) {
       }
     }
 
+    // Same workspace-scope check for the new "paid by contact" flow —
+    // without this, an attacker could POST a transaction with
+    // paidByContactId pointing at another workspace's contact, creating
+    // a MemberCharge that silently bridges workspaces.
+    if (data.paidByContactId) {
+      const fm = await prisma.contact.findUnique({
+        where: { id: data.paidByContactId },
+        select: { workspaceId: true },
+      });
+      if (!fm || fm.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
+    }
+
     // Normalize legacy single-beneficiary input into the splits[] shape so
     // the rest of the handler only deals with one model. A client that posts
     // {beneficiaryContactId, memberChargeType} with no splits[] is treated

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DescriptionField } from "@/components/ui/description-field";
 import {
   Dialog,
   DialogContent,
@@ -168,14 +169,12 @@ export function EventDialog({
               approaches the cap.
             </span>
           </label>
-          <label className="block">
-            <span className="text-xs font-medium">Notes</span>
-            <Input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              maxLength={500}
-            />
-          </label>
+          <DescriptionField
+            value={notes}
+            onChange={setNotes}
+            label="Notes"
+            maxLength={500}
+          />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

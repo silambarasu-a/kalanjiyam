@@ -10,6 +10,8 @@ import {
   TransactionType,
 } from "@/generated/prisma/client";
 import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
+import { resolveUtilityCategoryId } from "@/lib/utility-category";
+import { isAdvanceNonNegViolation } from "@/lib/utility-advance-guard";
 
 /**
  * Daily auto-pay sweep. Runs ACTIVE subscriptions and pending utility
@@ -207,6 +209,7 @@ async function runBills(today: Date) {
       provider: {
         select: {
           id: true,
+          kind: true,
           providerName: true,
           accountId: true,
           cardId: true,
@@ -256,7 +259,11 @@ async function runBills(today: Date) {
         continue;
       }
       const paidOn = new Date();
-      const txnId = await prisma.$transaction(async (tx) => {
+      const categoryId = await resolveUtilityCategoryId(
+        bill.workspaceId,
+        provider.kind,
+      );
+      const result = await prisma.$transaction(async (tx) => {
         const txn = await tx.transaction.create({
           data: {
             workspaceId: bill.workspaceId,
@@ -265,6 +272,7 @@ async function runBills(today: Date) {
             amount: cashAmount,
             description: `${provider.providerName} bill · auto-pay`,
             date: paidOn,
+            categoryId,
             accountId: cashAmount > 0 ? resolvedAccountId : null,
             cardId: cashAmount > 0 ? resolvedCardId : null,
             utilityProviderId: provider.id,
@@ -281,11 +289,18 @@ async function runBills(today: Date) {
             advanceApplied,
           },
         });
+        // Re-read the post-decrement balance from inside the same
+        // transaction so the email's remaining-advance figure stays
+        // truthful even if another sweep / manual pay decremented this
+        // provider concurrently.
+        let remainingAdvance = available;
         if (advanceApplied > 0) {
-          await tx.utilityProvider.update({
+          const updated = await tx.utilityProvider.update({
             where: { id: provider.id },
             data: { advanceBalance: { decrement: advanceApplied } },
+            select: { advanceBalance: true },
           });
+          remainingAdvance = Number(updated.advanceBalance);
         }
         await tx.investmentReminder.updateMany({
           where: { utilityBillId: bill.id },
@@ -294,10 +309,10 @@ async function runBills(today: Date) {
             confirmedTransactionId: txn.id,
           },
         });
-        return txn.id;
+        return { txnId: txn.id, remainingAdvance };
       });
       count++;
-      void txnId;
+      void result.txnId;
       await sendPaymentConfirmationEmail({
         workspaceId: bill.workspaceId,
         recipientUserIds: [authorUserId],
@@ -306,7 +321,7 @@ async function runBills(today: Date) {
         amount: billAmount,
         cashAmount,
         advanceApplied,
-        remainingAdvance: Math.max(0, available - advanceApplied),
+        remainingAdvance: result.remainingAdvance,
         label: `${provider.providerName} bill`,
         sourceLabel:
           cashAmount > 0
@@ -315,6 +330,17 @@ async function runBills(today: Date) {
         link: `/bills/providers/${provider.id}`,
       }).catch((e) => console.warn("[autopay] bill email failed", e));
     } catch (e) {
+      // Advance-balance race: another caller decremented the same
+      // balance to zero before us. Bill stays unpaid; the next sweep
+      // (or the user) will retry against the fresh balance.
+      if (isAdvanceNonNegViolation(e)) {
+        failures.push({
+          id: bill.id,
+          reason:
+            "Advance balance changed during sweep — bill will retry on the next run.",
+        });
+        continue;
+      }
       failures.push({
         id: bill.id,
         reason: e instanceof Error ? e.message : "unknown",

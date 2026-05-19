@@ -69,7 +69,12 @@ export type DashboardStats = {
   otherHoldingsCurrent: number;
   cardOutstanding: number;
   loanOutstanding: number;
+  /** Outstanding from OWED_TO_USER charges (others owe the workspace owner).
+   *  Asset side of the net-worth equation. */
   chargesOutstanding: number;
+  /** Outstanding from USER_OWES charges (owner owes contacts). Liability
+   *  side — counted against net worth. */
+  chargesIOwe: number;
 };
 
 export type DashboardCashflow = {
@@ -133,7 +138,10 @@ export async function getDashboardStats(args: {
       where: { workspaceId, active: true },
       _sum: { amount: true, currentValue: true },
     }),
-    prisma.memberCharge.aggregate({
+    // Aggregate by direction so net worth can treat OWED_TO_USER as an
+    // asset (people owe me) and USER_OWES as a liability (I owe them).
+    prisma.memberCharge.groupBy({
+      by: ["direction"],
       where: { workspaceId, status: { in: ["OUTSTANDING", "PARTIAL"] } },
       _sum: { amount: true, settledAmount: true },
     }),
@@ -188,15 +196,29 @@ export async function getDashboardStats(args: {
       otherHoldingsCurrent += cur;
     }
   }
-  const chargesOutstanding =
-    Number(outstandingCharges._sum.amount ?? 0) -
-    Number(outstandingCharges._sum.settledAmount ?? 0);
+  // Split outstanding by direction. OWED_TO_USER counts as an asset
+  // (people owe the workspace owner); USER_OWES counts as a liability
+  // (the owner owes contacts).
+  let owedToUserRemaining = 0;
+  let userOwesRemaining = 0;
+  for (const row of outstandingCharges) {
+    const remaining =
+      Number(row._sum.amount ?? 0) - Number(row._sum.settledAmount ?? 0);
+    if (row.direction === "USER_OWES") userOwesRemaining += remaining;
+    else owedToUserRemaining += remaining;
+  }
+  // Legacy alias — many existing UI consumers read `chargesOutstanding`
+  // as "what others owe me". Keep that semantic so the tile doesn't
+  // break; the new `userOwesRemaining` is surfaced separately.
+  const chargesOutstanding = owedToUserRemaining;
   const netWorth =
     liquid +
     investedCurrent +
-    otherHoldingsCurrent -
+    otherHoldingsCurrent +
+    owedToUserRemaining -
     cardOutstanding -
-    loanOutstanding;
+    loanOutstanding -
+    userOwesRemaining;
   const income = Number(monthIncomeAgg._sum.amount ?? 0);
   const expense = Number(monthExpenseAgg._sum.amount ?? 0);
 
@@ -217,6 +239,7 @@ export async function getDashboardStats(args: {
     cardOutstanding,
     loanOutstanding,
     chargesOutstanding,
+    chargesIOwe: userOwesRemaining,
   };
 }
 

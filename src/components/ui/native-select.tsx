@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Loader2, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type NativeSelectOption = {
@@ -38,6 +38,10 @@ export function NativeSelect({
   className,
   disabled,
   autoFocus,
+  searchable = false,
+  searchPlaceholder = "Search…",
+  loading = false,
+  loadingMessage = "Loading…",
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -46,23 +50,55 @@ export function NativeSelect({
   className?: string;
   disabled?: boolean;
   autoFocus?: boolean;
+  /** Show a search box at the top of the dropdown and filter as the user types. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  /** Show a spinner inside the trigger and disable interaction while data loads. */
+  loading?: boolean;
+  loadingMessage?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(-1);
+  const [query, setQuery] = useState("");
   const [menuRect, setMenuRect] = useState<{ top: number; left: number; width: number } | null>(
     null,
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Flat list of selectable options for keyboard nav + lookup.
-  const flat = useMemo<NativeSelectOption[]>(
+  // Filtered, searchable view. Empty query → identity.
+  const filteredOptions = useMemo<Items>(() => {
+    if (!searchable || !query.trim()) return options;
+    const q = query.trim().toLowerCase();
+    const match = (o: NativeSelectOption) =>
+      o.label.toLowerCase().includes(q) ||
+      (o.hint?.toLowerCase().includes(q) ?? false);
+    if (isGrouped(options)) {
+      return options
+        .map((g) => ({ ...g, options: g.options.filter(match) }))
+        .filter((g) => g.options.length > 0);
+    }
+    return (options as NativeSelectOption[]).filter(match);
+  }, [options, query, searchable]);
+
+  // Flat list of selectable options for keyboard nav + lookup. The full
+  // (unfiltered) list is used to render the trigger label even when the
+  // current value is filtered out by the search query.
+  const flatAll = useMemo<NativeSelectOption[]>(
     () =>
       isGrouped(options)
         ? options.flatMap((g) => g.options)
         : (options as NativeSelectOption[]),
     [options]
+  );
+  const flat = useMemo<NativeSelectOption[]>(
+    () =>
+      isGrouped(filteredOptions)
+        ? filteredOptions.flatMap((g) => g.options)
+        : (filteredOptions as NativeSelectOption[]),
+    [filteredOptions]
   );
 
   useEffect(() => {
@@ -72,6 +108,8 @@ export function NativeSelect({
       if (wrapRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
       setOpen(false);
+      setHighlighted(-1);
+      setQuery("");
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -94,13 +132,27 @@ export function NativeSelect({
     };
   }, [open]);
 
-  const selected = flat.find((o) => o.value === value);
+  const selected = flatAll.find((o) => o.value === value);
   const display = selected?.label ?? "";
+
+  // Auto-focus the search input when the menu opens (only side-effect
+  // tied to `open`; query is cleared by `closeMenu` rather than a
+  // setState-in-effect so the linter's react-hooks rule stays happy).
+  useEffect(() => {
+    if (!open || !searchable) return;
+    const t = setTimeout(() => searchInputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [open, searchable]);
+
+  function closeMenu() {
+    setOpen(false);
+    setHighlighted(-1);
+    setQuery("");
+  }
 
   function commit(next: string) {
     onChange(next);
-    setOpen(false);
-    setHighlighted(-1);
+    closeMenu();
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
@@ -122,8 +174,7 @@ export function NativeSelect({
         setHighlighted(Math.max(0, flat.findIndex((o) => o.value === value)));
       }
     } else if (e.key === "Escape") {
-      setOpen(false);
-      setHighlighted(-1);
+      closeMenu();
     }
   }
 
@@ -163,22 +214,32 @@ export function NativeSelect({
           ref={buttonRef}
           type="button"
           autoFocus={autoFocus}
-          disabled={disabled}
+          disabled={disabled || loading}
           aria-haspopup="listbox"
           aria-expanded={open}
+          aria-busy={loading || undefined}
           onClick={() => setOpen((o) => !o)}
           onKeyDown={onKeyDown}
           className="flex h-9 w-full items-center rounded-lg border border-input bg-transparent pl-3 pr-9 py-1 text-sm text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn("flex-1 truncate", !display && "text-muted-foreground")}>
-            {display || placeholder}
+          <span
+            className={cn(
+              "flex-1 truncate",
+              (loading || !display) && "text-muted-foreground",
+            )}
+          >
+            {loading ? loadingMessage : display || placeholder}
           </span>
         </button>
         <span
           aria-hidden
           className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 inline-flex items-center justify-center rounded text-muted-foreground"
         >
-          <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+          )}
         </span>
       </div>
 
@@ -194,13 +255,49 @@ export function NativeSelect({
                 minWidth: menuRect.width,
                 maxWidth: `min(28rem, calc(100vw - ${menuRect.left + 8}px))`,
               }}
-              className="z-50 rounded-lg border bg-popover shadow-(--shadow-popover) max-h-72 overflow-y-auto w-max"
+              className="z-50 flex max-h-72 w-max flex-col overflow-hidden rounded-lg border bg-popover shadow-(--shadow-popover)"
             >
+              {searchable && (
+                <div className="flex items-center gap-2 border-b px-2 py-1.5">
+                  <Search aria-hidden className="h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setHighlighted(0);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setHighlighted((h) => Math.min(flat.length - 1, h + 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setHighlighted((h) => Math.max(0, h - 1));
+                      } else if (e.key === "Enter") {
+                        if (highlighted >= 0 && flat[highlighted] && !flat[highlighted].disabled) {
+                          e.preventDefault();
+                          commit(flat[highlighted].value);
+                        }
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        closeMenu();
+                      }
+                    }}
+                    placeholder={searchPlaceholder}
+                    className="h-7 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              )}
+              <div className="flex-1 overflow-y-auto">
               {flat.length === 0 ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">No options.</div>
-              ) : isGrouped(options) ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  {searchable && query ? "No matches." : "No options."}
+                </div>
+              ) : isGrouped(filteredOptions) ? (
                 <div className="py-1">
-                  {options.map((g) => (
+                  {filteredOptions.map((g) => (
                     <div key={g.label}>
                       <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">
                         {g.label}
@@ -216,9 +313,12 @@ export function NativeSelect({
                 </div>
               ) : (
                 <ul className="py-1">
-                  {(options as NativeSelectOption[]).map((o, i) => renderOption(o, i))}
+                  {(filteredOptions as NativeSelectOption[]).map((o, i) =>
+                    renderOption(o, i),
+                  )}
                 </ul>
               )}
+              </div>
             </div>,
             document.body,
           )

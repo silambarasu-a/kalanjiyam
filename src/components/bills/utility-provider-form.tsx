@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DescriptionField } from "@/components/ui/description-field";
 import { UTILITY_KINDS, type UtilityKindValue } from "@/components/bills/utility-kind";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -148,12 +149,13 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
           />
         </div>
         <div className="sm:col-span-2">
-          <Label>Address (optional)</Label>
-          <Input
+          <DescriptionField
             value={addressLine}
-            onChange={(e) => setAddressLine(e.target.value)}
+            onChange={setAddressLine}
+            label="Address (optional)"
             maxLength={240}
             placeholder="Service address — useful when one home has multiple meters"
+            rows={2}
           />
         </div>
       </div>
@@ -200,15 +202,13 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         </label>
       </div>
 
-      <div>
-        <Label>Notes</Label>
-        <Input
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={1000}
-          placeholder="Optional"
-        />
-      </div>
+      <DescriptionField
+        value={notes}
+        onChange={setNotes}
+        label="Notes"
+        maxLength={1000}
+        placeholder="Optional"
+      />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 

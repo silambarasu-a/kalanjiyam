@@ -8,6 +8,7 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
+import { DescriptionField } from "@/components/ui/description-field";
 import { fetcher } from "@/lib/swr-fetcher";
 import {
   InstantAttachmentUploader,
@@ -273,15 +274,13 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
         </label>
       </div>
 
-      <div>
-        <Label>Notes</Label>
-        <Input
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={1000}
-          placeholder="Optional"
-        />
-      </div>
+      <DescriptionField
+        value={notes}
+        onChange={setNotes}
+        label="Notes"
+        maxLength={1000}
+        placeholder="Optional"
+      />
 
       {/* In edit mode, wait for SWR to resolve so `initial` reflects
           the persisted attachments. In create mode, mount immediately. */}

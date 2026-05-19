@@ -10,11 +10,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
+import { DescriptionField } from "@/components/ui/description-field";
 import { formatINR } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -303,24 +303,20 @@ export function BulkSettleDialog({
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Paid on</Label>
-              <DateInput
-                value={paidAt}
-                onChange={(e) => setPaidAt(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Notes</Label>
-              <Input
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                maxLength={200}
-                placeholder="Optional"
-              />
-            </div>
+          <div>
+            <Label>Paid on</Label>
+            <DateInput
+              value={paidAt}
+              onChange={(e) => setPaidAt(e.target.value)}
+            />
           </div>
+          <DescriptionField
+            value={notes}
+            onChange={setNotes}
+            label="Notes"
+            maxLength={200}
+            placeholder="Optional"
+          />
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

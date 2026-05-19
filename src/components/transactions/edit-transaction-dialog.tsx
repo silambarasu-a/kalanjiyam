@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DescriptionField } from "@/components/ui/description-field";
 import {
   Dialog,
   DialogContent,
@@ -352,14 +353,11 @@ export function EditTransactionDialog({
                 <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
               </label>
             </div>
-            <label className="block">
-              <span className="text-xs font-medium">Description</span>
-              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                maxLength={200}
-              />
-            </label>
+            <DescriptionField
+              value={description}
+              onChange={setDescription}
+              maxLength={200}
+            />
             {/* Category picker — same combobox the new-transaction
                 dialog uses, scoped to the row's transaction type so
                 income categories don't surface for expense rows. */}

@@ -8,6 +8,7 @@ import {
   TransactionKind,
   TransactionType,
 } from "@/generated/prisma/client";
+import { resolveUtilityCategoryId } from "@/lib/utility-category";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -88,6 +89,13 @@ export async function POST(
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }
 
+    // Same category mapping as bill payments so the user's cashflow /
+    // PnL reports don't show advance deposits as "Uncategorized".
+    const categoryId = await resolveUtilityCategoryId(
+      ctx.workspaceId,
+      provider.kind,
+    );
+
     const result = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
         data: {
@@ -98,6 +106,7 @@ export async function POST(
           description:
             d.notes?.trim() || `Advance to ${provider.providerName}`,
           date: txDate,
+          categoryId,
           accountId: resolvedAccountId,
           cardId: resolvedCardId,
           utilityProviderId: provider.id,

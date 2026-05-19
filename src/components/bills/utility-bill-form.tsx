@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
+import { DescriptionField } from "@/components/ui/description-field";
 import { formatINR } from "@/lib/utils";
 import {
   InstantAttachmentUploader,
@@ -204,15 +205,13 @@ export function UtilityBillForm({
         )}
       </div>
 
-      <div>
-        <Label>Notes</Label>
-        <Input
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          maxLength={1000}
-          placeholder="Optional"
-        />
-      </div>
+      <DescriptionField
+        value={notes}
+        onChange={setNotes}
+        label="Notes"
+        maxLength={1000}
+        placeholder="Optional"
+      />
 
       <InstantAttachmentUploader
         ref={uploaderRef}

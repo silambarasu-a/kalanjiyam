@@ -4,12 +4,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LineChart, HandCoins, RefreshCw, RotateCcw } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  ArrowLeftRight,
+  LineChart,
+  HandCoins,
+  RefreshCw,
+  RotateCcw,
+  Check,
+  Gift,
+  Wallet,
+} from "lucide-react";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
+import { DescriptionField } from "@/components/ui/description-field";
 import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import {
   PercentOrRupeeInput,
@@ -200,15 +212,22 @@ function DialogBody({
   onClose: () => void;
 }) {
   const [type, setType] = useState<TransactionDefault>(defaultType);
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
+  const { data: accountsData, isLoading: accountsLoading } = useSWR<{
+    accounts: Account[];
+  }>("/api/accounts", fetcher);
+  const { data: cardsData, isLoading: cardsLoading } = useSWR<{ cards: Card[] }>(
+    "/api/cards",
+    fetcher,
+  );
   const { data: categoriesData } = useSWR<{ categories: Category[] }>(
     type === "INCOME" || type === "EXPENSE"
       ? `/api/categories?type=${type}`
       : null,
     fetcher
   );
-  const { data: contactsData } = useSWR<{ members: Contact[] }>("/api/contacts", fetcher);
+  const { data: contactsData, isLoading: contactsLoading } = useSWR<{
+    members: Contact[];
+  }>("/api/contacts", fetcher);
   const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
     "/api/crop-batches?active=true",
     fetcher
@@ -299,6 +318,7 @@ function DialogBody({
           livestockBatches={livestockBatches}
           events={events}
           workers={workers}
+          sourcesLoading={accountsLoading || cardsLoading || contactsLoading}
           onClose={onClose}
         />
       )}
@@ -316,6 +336,7 @@ function IncomeExpenseForm({
   livestockBatches,
   events,
   workers,
+  sourcesLoading = false,
   onClose,
 }: {
   type: "INCOME" | "EXPENSE";
@@ -334,6 +355,7 @@ function IncomeExpenseForm({
     active: boolean;
   }[];
   workers: Worker[];
+  sourcesLoading?: boolean;
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -852,30 +874,20 @@ function IncomeExpenseForm({
               value={effectivePaymentSource}
               onChange={setPaymentSource}
               options={sources}
+              searchable
+              searchPlaceholder={
+                type === "INCOME"
+                  ? "Search accounts…"
+                  : "Search accounts, cards, contacts…"
+              }
+              loading={sourcesLoading}
+              loadingMessage={
+                type === "INCOME"
+                  ? "Loading accounts…"
+                  : "Loading accounts & cards…"
+              }
             />
           </div>
-          {effectivePaymentSource.startsWith("contact:") && (
-            <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5 text-xs">
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={oweContactBack}
-                  onChange={(e) => setOweContactBack(e.target.checked)}
-                  className="mt-0.5 h-3.5 w-3.5 accent-primary"
-                />
-                <div className="space-y-0.5">
-                  <span className="block font-medium">
-                    I&rsquo;ll pay them back
-                  </span>
-                  <span className="text-muted-foreground">
-                    {oweContactBack
-                      ? "Adds to 'You owe them' on the contact's page — settle later."
-                      : "Gift / treat — recorded for history, no obligation."}
-                  </span>
-                </div>
-              </label>
-            </div>
-          )}
         </label>
         <div className="block">
           <span className="text-xs font-medium">Category</span>
@@ -912,6 +924,18 @@ function IncomeExpenseForm({
           onCreated={(id) => setCategoryId(id)}
         />
       </div>
+
+      {effectivePaymentSource.startsWith("contact:") && (
+        <ContactRepaymentToggle
+          contactName={
+            contacts.find(
+              (c) => c.id === effectivePaymentSource.slice("contact:".length),
+            )?.name ?? null
+          }
+          value={oweContactBack}
+          onChange={setOweContactBack}
+        />
+      )}
 
       {isWageMode && (
         <WorkersPanel
@@ -1252,15 +1276,12 @@ function IncomeExpenseForm({
         </div>
       )}
 
-      <label className="block">
-        <span className="text-xs font-medium">Description</span>
-        <Input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={type === "INCOME" ? "What's it for?" : "What did you spend on?"}
-          maxLength={200}
-        />
-      </label>
+      <DescriptionField
+        value={description}
+        onChange={setDescription}
+        placeholder={type === "INCOME" ? "What's it for?" : "What did you spend on?"}
+        maxLength={200}
+      />
 
       {(() => {
         // Predict the eventual owner so we can show a meaningful hint
@@ -1712,15 +1733,12 @@ function RefundForm({ cards, onClose }: { cards: Card[]; onClose: () => void }) 
         </div>
       </div>
 
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium">Description</label>
-        <Input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="e.g. Refund: Amazon order #ABC123"
-          maxLength={200}
-        />
-      </div>
+      <DescriptionField
+        value={description}
+        onChange={setDescription}
+        placeholder="e.g. Refund: Amazon order #ABC123"
+        maxLength={200}
+      />
 
       {cycleHint && (
         <div
@@ -1753,6 +1771,113 @@ function formatPeriod(s: { periodStart: string; periodEnd: string }) {
   const fmt = (d: string) =>
     new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   return `${fmt(s.periodStart)} – ${fmt(s.periodEnd)}`;
+}
+
+/**
+ * Full-width segmented control shown when "Pay from" is a contact. Two
+ * mutually-exclusive options:
+ *   `true`  → contact paid for me and I'll repay (creates USER_OWES MemberCharge).
+ *   `false` → contact paid as a gift / treat (no obligation, history only).
+ *
+ * Spans the form width so the choice reads at a glance and so the
+ * Category column above isn't left visually empty.
+ */
+function ContactRepaymentToggle({
+  contactName,
+  value,
+  onChange,
+}: {
+  contactName: string | null;
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const opts: {
+    key: boolean;
+    icon: React.ComponentType<{ className?: string }>;
+    label: string;
+    sub: string;
+  }[] = [
+    {
+      key: true,
+      icon: Wallet,
+      label: "I'll repay them",
+      sub: contactName
+        ? `Adds to "You owe ${contactName}"`
+        : "Adds to 'You owe' on their page",
+    },
+    {
+      key: false,
+      icon: Gift,
+      label: "Gift / treat",
+      sub: "History only, no obligation",
+    },
+  ];
+
+  return (
+    <fieldset className="space-y-2 rounded-xl border bg-muted/20 p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <legend className="text-xs font-medium">
+          How will this be settled?
+        </legend>
+        <span className="text-[10px] text-muted-foreground">
+          {contactName ? `Paid by ${contactName}` : "Paid by contact"}
+        </span>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label="How will this be settled?"
+        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+      >
+        {opts.map((o) => {
+          const active = value === o.key;
+          const Icon = o.icon;
+          return (
+            <button
+              key={String(o.key)}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(o.key)}
+              className={cn(
+                "group relative flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all outline-none",
+                "focus-visible:ring-2 focus-visible:ring-ring/40",
+                active
+                  ? "border-primary bg-background shadow-sm ring-1 ring-primary/20"
+                  : "border-input bg-background/60 hover:border-input/80 hover:bg-background",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
+                  active
+                    ? "bg-primary/10 text-primary"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </span>
+              <span className="min-w-0 flex-1 space-y-0.5">
+                <span
+                  className={cn(
+                    "block text-sm font-medium leading-tight",
+                    active ? "text-foreground" : "text-foreground/80",
+                  )}
+                >
+                  {o.label}
+                </span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">
+                  {o.sub}
+                </span>
+              </span>
+              {active && (
+                <Check className="absolute right-2.5 top-2.5 h-3.5 w-3.5 text-primary" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 }
 
 function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
@@ -4421,21 +4546,17 @@ function InvestmentForm({
         </label>
       )}
 
-      <label className="block">
-        <span className="text-xs font-medium">Description</span>
-        <Input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Optional"
-          maxLength={200}
-        />
-      </label>
-
-      <p className="text-xs text-muted-foreground">
-        {action === "BUY"
-          ? "Adds to the holding's invested amount and quantity."
-          : "Reduces the holding's invested amount and quantity (clamped at 0)."}
-      </p>
+      <DescriptionField
+        value={description}
+        onChange={setDescription}
+        placeholder="Optional"
+        maxLength={200}
+        hint={
+          action === "BUY"
+            ? "Adds to the holding's invested amount and quantity."
+            : "Reduces the holding's invested amount and quantity (clamped at 0)."
+        }
+      />
 
       {/* Single-account new-holding creations and existing-holding pays
           both anchor receipts on the same `investClientId` via the API's

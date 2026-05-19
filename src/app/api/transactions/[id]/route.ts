@@ -22,10 +22,17 @@ import {
   revertUtilityAdvance,
   revertUtilityBillPay,
 } from "@/lib/cascades";
+import {
+  ADVANCE_NONNEG_MESSAGE,
+  isAdvanceNonNegViolation,
+} from "@/lib/utility-advance-guard";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
+  }
+  if (isAdvanceNonNegViolation(e)) {
+    return NextResponse.json({ error: ADVANCE_NONNEG_MESSAGE }, { status: 409 });
   }
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
@@ -346,6 +353,50 @@ const body = await request.json();
     const newAmount =
       parsed.data.amount != null ? Number(parsed.data.amount) : oldAmount;
     const amountChanged = newAmount !== oldAmount;
+
+    // Block amount edits on transactions where the amount drives a
+    // linked obligation that we don't yet sync atomically. Editing the
+    // amount silently would create a mismatch between the txn and the
+    // MemberCharge / Subscription / UtilityBill. Cleaner UX: ask the
+    // user to delete + recreate.
+    if (amountChanged) {
+      if (t.paidByContactId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't edit the amount on a 'paid by contact' transaction. Delete and recreate it so the linked obligation stays in sync.",
+          },
+          { status: 400 },
+        );
+      }
+      if (t.kind === "SUBSCRIPTION" && t.subscriptionId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a subscription payment. Edit the subscription's master amount instead, or delete this payment.",
+          },
+          { status: 400 },
+        );
+      }
+      if (t.kind === "UTILITY_BILL" && t.utilityBillId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a utility-bill payment. Edit the bill itself, or delete this payment.",
+          },
+          { status: 400 },
+        );
+      }
+      if (t.kind === "UTILITY_ADVANCE" && t.utilityProviderId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a utility advance — it drives the provider's running balance. Delete and re-add.",
+          },
+          { status: 400 },
+        );
+      }
+    }
 
     // Pull every relation that needs rebalancing in one round-trip.
     const full = amountChanged
