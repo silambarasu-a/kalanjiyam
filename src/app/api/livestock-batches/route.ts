@@ -32,11 +32,17 @@ export async function GET(request: Request) {
       batches: batches.map((b) => ({
         id: b.id,
         name: b.name,
+        productionType: b.productionType,
+        contractId: b.contractId,
         startDate: b.startDate.toISOString(),
         endDate: b.endDate?.toISOString() ?? null,
         expectedCycleDays: b.expectedCycleDays,
         initialCount: b.initialCount,
         currentCount: b.currentCount,
+        initialAvgWeight:
+          b.initialAvgWeight == null ? null : Number(b.initialAvgWeight),
+        targetWeight: b.targetWeight == null ? null : Number(b.targetWeight),
+        targetFCR: b.targetFCR == null ? null : Number(b.targetFCR),
         notes: b.notes,
         active: b.active,
         livestock: b.livestock,
@@ -68,19 +74,47 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Land not found" }, { status: 404 });
       }
     }
+    if (parsed.data.contractId) {
+      const contract = await prisma.livestockContract.findUnique({
+        where: { id: parsed.data.contractId },
+        select: { workspaceId: true },
+      });
+      if (!contract || contract.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+      }
+    }
     const batch = await prisma.livestockBatch.create({
       data: {
         livestockId: parsed.data.livestockId,
         landId: parsed.data.landId ?? null,
+        contractId: parsed.data.contractId ?? null,
         name: parsed.data.name,
+        productionType: parsed.data.productionType ?? "DUAL_PURPOSE",
         startDate: new Date(parsed.data.startDate),
         endDate: parsed.data.endDate ? new Date(parsed.data.endDate) : null,
         expectedCycleDays: parsed.data.expectedCycleDays ?? null,
         initialCount: parsed.data.initialCount,
         currentCount: parsed.data.initialCount,
+        initialAvgWeight: parsed.data.initialAvgWeight ?? null,
+        targetWeight: parsed.data.targetWeight ?? null,
+        targetFCR: parsed.data.targetFCR ?? null,
         notes: parsed.data.notes,
       },
     });
+    // When the cycle length is known, plant a reminder for "cycle
+    // ending soon" so the notifications cron fires 5/3/1/0 days out.
+    if (parsed.data.expectedCycleDays && parsed.data.expectedCycleDays > 0) {
+      const due = new Date(parsed.data.startDate);
+      due.setUTCDate(due.getUTCDate() + parsed.data.expectedCycleDays);
+      await prisma.investmentReminder.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          kind: "LIVESTOCK_CYCLE_ENDING",
+          dueDate: due,
+          livestockBatchId: batch.id,
+        },
+      });
+    }
     return NextResponse.json({ id: batch.id });
   } catch (e) {
     return err(e);

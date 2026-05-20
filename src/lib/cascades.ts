@@ -246,5 +246,96 @@ export async function revertUtilityAdvance(
   };
 }
 
+/**
+ * Undo a broiler-contract Lift transaction. The lift POST creates an
+ * INCOME Transaction (kind=CONTRACT_PAYOUT) plus a SALE LivestockEvent
+ * and an EXIT WeighingLog — all three reference the same date. When
+ * the user deletes the Transaction we have to:
+ *
+ *   1. Find the linked SALE LivestockEvent (via `transactionId`) and
+ *      undo it: increment `currentCount` by `event.count`, then
+ *      delete the event.
+ *   2. Find and delete the EXIT WeighingLog created for the same lift
+ *      (matched by batchId + phase=EXIT + same date).
+ *   3. If the batch was closed by the lift (active=false + endDate
+ *      matches), reopen it.
+ *
+ * Returns `{ ok, notes }` for the cascade-preview dialog.
+ */
+export async function revertContractLift(
+  tx: Prisma.TransactionClient,
+  txnId: string,
+): Promise<{ ok: true; notes: string[] }> {
+  const notes: string[] = [];
+
+  const event = await tx.livestockEvent.findUnique({
+    where: { transactionId: txnId },
+    include: {
+      batch: {
+        select: {
+          id: true,
+          name: true,
+          active: true,
+          endDate: true,
+          currentCount: true,
+        },
+      },
+    },
+  });
+  if (!event) return { ok: true, notes };
+
+  // 1 + 2. Restore head count + delete the SALE event.
+  await tx.livestockBatch.update({
+    where: { id: event.batchId },
+    data: { currentCount: { increment: event.count } },
+  });
+  notes.push(
+    `Restored ${event.count} head to ${event.batch.name}`,
+  );
+  await tx.livestockEvent.delete({ where: { id: event.id } });
+
+  // 3. Find + delete the matching EXIT WeighingLog. Lift always
+  // creates one on the same date as the event; if more than one EXIT
+  // weighing exists for the date (manual + lift), we delete the most
+  // recent (the lift weighing always sits at the top because the
+  // event row was just created).
+  const liftWeighing = await tx.weighingLog.findFirst({
+    where: {
+      batchId: event.batchId,
+      phase: "EXIT",
+      date: event.date,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (liftWeighing) {
+    await tx.weighingLog.delete({ where: { id: liftWeighing.id } });
+    notes.push("Removed the EXIT weighing");
+  }
+
+  // 4. Reopen the batch if the lift closed it. Heuristic: endDate
+  // matches the event date (within the same UTC day) and active=false.
+  if (
+    !event.batch.active &&
+    event.batch.endDate &&
+    sameUtcDay(event.batch.endDate, event.date)
+  ) {
+    await tx.livestockBatch.update({
+      where: { id: event.batchId },
+      data: { active: true, endDate: null },
+    });
+    notes.push(`Reopened ${event.batch.name}`);
+  }
+
+  return { ok: true, notes };
+}
+
+function sameUtcDay(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
 /** Same advance helper, exposed for non-cascade uses (e.g. forward pay). */
 export { advanceCycle, rollbackCycle };

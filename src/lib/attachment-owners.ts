@@ -90,6 +90,22 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "LIVESTOCK_BATCH_DOCUMENT": {
+      // Batches don't store workspaceId directly — hop through the
+      // parent Livestock row.
+      const row = await prisma.livestockBatch.findUnique({
+        where: { id: ownerId },
+        select: { livestock: { select: { workspaceId: true } } },
+      });
+      return !!row && row.livestock.workspaceId === workspaceId;
+    }
+    case "LIVESTOCK_CONTRACT_DOCUMENT": {
+      const row = await prisma.livestockContract.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     default: {
       const exhaustive: never = ownerKind;
       void exhaustive;

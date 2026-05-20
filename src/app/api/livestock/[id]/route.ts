@@ -10,6 +10,31 @@ function err(e: unknown) {
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const ctx = await requireWorkspace("livestock", "read");
+    const { id } = await context.params;
+    const livestock = await prisma.livestock.findUnique({ where: { id } });
+    if (!livestock || livestock.workspaceId !== ctx.workspaceId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({
+      livestock: {
+        id: livestock.id,
+        name: livestock.name,
+        species: livestock.species,
+        description: livestock.description,
+        active: livestock.active,
+      },
+    });
+  } catch (e) {
+    return err(e);
+  }
+}
+
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> }

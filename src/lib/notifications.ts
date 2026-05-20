@@ -51,6 +51,8 @@ const KIND_FEATURES: Record<NotificationKind, Feature[] | null> = {
   SUBSCRIPTION_RENEWAL_DUE: ["subscriptions"],
   UTILITY_BILL_DUE_SOON: ["bills"],
   UTILITY_BILL_OVERDUE: ["bills"],
+  VACCINATION_DUE: ["livestock"],
+  LIVESTOCK_CYCLE_ENDING: ["livestock"],
   GENERIC: null,
 };
 

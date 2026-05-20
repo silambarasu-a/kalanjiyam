@@ -22,7 +22,9 @@ export type AttachmentOwnerKind =
   | "INCOME_PROOF"
   | "EVENT_DOCUMENT"
   | "UTILITY_BILL"
-  | "SUBSCRIPTION_DOCUMENT";
+  | "SUBSCRIPTION_DOCUMENT"
+  | "LIVESTOCK_BATCH_DOCUMENT"
+  | "LIVESTOCK_CONTRACT_DOCUMENT";
 
 export type AttachmentPolicy = {
   /** S3 path segment for this owner kind. Stable; never rename. */
@@ -106,6 +108,20 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     feature: "subscriptions",
     mime: ["application/pdf", "image/*"],
     maxMB: 10,
+    sensitive: false,
+  },
+  LIVESTOCK_BATCH_DOCUMENT: {
+    entityPath: "livestock-batches",
+    feature: "livestock",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    sensitive: false,
+  },
+  LIVESTOCK_CONTRACT_DOCUMENT: {
+    entityPath: "livestock-contracts",
+    feature: "livestock",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
     sensitive: false,
   },
 };

@@ -30,6 +30,8 @@ const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   VEHICLE_DOC_RENEWAL: NotificationKind.GENERIC,
   SUBSCRIPTION_RENEWAL: NotificationKind.SUBSCRIPTION_RENEWAL_DUE,
   UTILITY_BILL_DUE: NotificationKind.UTILITY_BILL_DUE_SOON,
+  VACCINATION_DUE: NotificationKind.VACCINATION_DUE,
+  LIVESTOCK_CYCLE_ENDING: NotificationKind.LIVESTOCK_CYCLE_ENDING,
 };
 
 const VEHICLE_DOC_KIND_LABEL: Record<string, string> = {
@@ -101,6 +103,29 @@ async function run() {
           provider: { select: { id: true, providerName: true, kind: true } },
         },
       },
+      vaccinationLog: {
+        select: {
+          id: true,
+          vaccine: true,
+          batchId: true,
+          batch: {
+            select: {
+              id: true,
+              name: true,
+              livestockId: true,
+              livestock: { select: { name: true } },
+            },
+          },
+        },
+      },
+      livestockBatch: {
+        select: {
+          id: true,
+          name: true,
+          livestockId: true,
+          livestock: { select: { name: true } },
+        },
+      },
     },
   });
 
@@ -141,6 +166,11 @@ async function run() {
       label = r.subscription.name;
     } else if (r.kind === ReminderKind.UTILITY_BILL_DUE && r.utilityBill) {
       label = `${r.utilityBill.provider.providerName} bill`;
+    } else if (r.kind === ReminderKind.VACCINATION_DUE && r.vaccinationLog) {
+      const batch = r.vaccinationLog.batch;
+      label = `${r.vaccinationLog.vaccine}${batch ? ` (${batch.livestock.name} · ${batch.name})` : ""}`;
+    } else if (r.kind === ReminderKind.LIVESTOCK_CYCLE_ENDING && r.livestockBatch) {
+      label = `${r.livestockBatch.livestock.name} · ${r.livestockBatch.name} cycle`;
     } else {
       label =
         r.investment?.name ??
@@ -161,19 +191,27 @@ async function run() {
           : isExpiry
             ? `${label} expires in ${daysOut} day${daysOut === 1 ? "" : "s"}`
             : `${label} due in ${daysOut} day${daysOut === 1 ? "" : "s"}`;
+    const livestockBatchLink =
+      r.vaccinationLog?.batch
+        ? `/livestock/${r.vaccinationLog.batch.livestockId}/batches/${r.vaccinationLog.batch.id}`
+        : r.livestockBatch
+          ? `/livestock/${r.livestockBatch.livestockId}/batches/${r.livestockBatch.id}`
+          : null;
     const link = r.vehicleDocument?.vehicleId
       ? `/vehicles/${r.vehicleDocument.vehicleId}`
       : r.subscription?.id
         ? `/subscriptions/${r.subscription.id}`
         : r.utilityBill?.provider?.id
           ? `/bills/providers/${r.utilityBill.provider.id}`
-          : r.investment?.id
-            ? r.investment.kind === "INSURANCE"
-              ? `/insurance/${r.investment.id}`
-              : `/investments/${r.investment.id}`
-            : r.loan?.id
-              ? `/loans/${r.loan.id}`
-              : "/notifications";
+          : livestockBatchLink
+            ? livestockBatchLink
+            : r.investment?.id
+              ? r.investment.kind === "INSURANCE"
+                ? `/insurance/${r.investment.id}`
+                : `/investments/${r.investment.id}`
+              : r.loan?.id
+                ? `/loans/${r.loan.id}`
+                : "/notifications";
 
     const body = isExpiry
       ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`

@@ -263,6 +263,26 @@ export default function TransactionsPage() {
                               Advance
                             </span>
                           )}
+                          {t.kind === "MILK_SALE" && (
+                            <span className="inline-flex items-center rounded-full bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Milk
+                            </span>
+                          )}
+                          {t.kind === "EGG_SALE" && (
+                            <span className="inline-flex items-center rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Eggs
+                            </span>
+                          )}
+                          {t.kind === "CONTRACT_PAYOUT" && (
+                            <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Lift
+                            </span>
+                          )}
+                          {t.kind === "HEALTH_CARE" && (
+                            <span className="inline-flex items-center rounded-full bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider shrink-0">
+                              Health
+                            </span>
+                          )}
                           <span className="truncate">{t.description}</span>
                         </div>
                         {t.transferCounterparty ? (

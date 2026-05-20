@@ -11,11 +11,15 @@ import {
   Bell,
   ChevronDown,
   CreditCard,
+  Droplets,
+  Gauge,
   Landmark,
+  PawPrint,
   Wallet2,
   Users,
   HardHat,
   AlertCircle,
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   Hourglass,
@@ -151,6 +155,29 @@ type LiquidByMember = {
   grandTotal: number;
 };
 
+type LivestockOverview = {
+  activeBatches: number;
+  totalHead: number;
+  avgMortalityPct: number;
+  contractBatches: number;
+  avgContractFCR: number | null;
+  last30dMilkLitres: number;
+  attentionBatches: {
+    id: string;
+    name: string;
+    livestockId: string;
+    livestockName: string;
+    productionType: string;
+    head: number;
+    mortalityPct: number;
+    fcr: number | null;
+    targetFCR: number | null;
+    daysInCycle: number;
+    expectedCycleDays: number | null;
+    severity: "mortality" | "fcr" | "exit-soon";
+  }[];
+};
+
 type RecentTxn = {
   id: string;
   type: "INCOME" | "EXPENSE" | "INVESTMENT" | "HAND_LOAN" | "TRANSFER";
@@ -199,6 +226,10 @@ export default function DashboardPage() {
     fetcher,
   );
   const maturingPolicies = maturingPoliciesData?.policies ?? [];
+  const { data: livestockOverview } = useSWR<LivestockOverview>(
+    "/api/reports/livestock-overview",
+    fetcher,
+  );
   const { data: recentTxnsData } = useSWR<{ transactions: RecentTxn[] }>(
     "/api/transactions?limit=10",
     fetcher,
@@ -359,6 +390,9 @@ export default function DashboardPage() {
           )}
           {maturingPolicies.length > 0 && (
             <MaturingPoliciesSection policies={maturingPolicies} />
+          )}
+          {livestockOverview && livestockOverview.activeBatches > 0 && (
+            <LivestockOverviewSection data={livestockOverview} />
           )}
           <RecentTransactionsSection transactions={recentTxns} />
           <SettledThisMonth settled={cashflow?.settled ?? null} />
@@ -667,6 +701,145 @@ function MaturingPoliciesSection({
         })}
       </ul>
     </section>
+  );
+}
+
+function LivestockOverviewSection({ data }: { data: LivestockOverview }) {
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <PawPrint className="h-4 w-4 text-primary" /> Livestock overview
+        </h2>
+        <Link
+          href="/livestock"
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Open
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <MiniBox
+          label="Active batches"
+          value={String(data.activeBatches)}
+          hint={
+            data.contractBatches > 0
+              ? `${data.contractBatches} under contract`
+              : undefined
+          }
+        />
+        <MiniBox label="Live head" value={String(data.totalHead)} />
+        <MiniBox
+          label="Avg mortality"
+          value={`${data.avgMortalityPct.toFixed(1)}%`}
+          tone={data.avgMortalityPct > 5 ? "negative" : "default"}
+          icon={<Gauge className="h-3 w-3" />}
+        />
+        <MiniBox
+          label={data.last30dMilkLitres > 0 ? "Milk · 30d" : "Avg contract FCR"}
+          value={
+            data.last30dMilkLitres > 0
+              ? `${data.last30dMilkLitres.toFixed(0)} L`
+              : data.avgContractFCR != null
+                ? data.avgContractFCR.toFixed(2)
+                : "—"
+          }
+          icon={
+            data.last30dMilkLitres > 0 ? (
+              <Droplets className="h-3 w-3" />
+            ) : (
+              <Gauge className="h-3 w-3" />
+            )
+          }
+        />
+      </div>
+
+      {data.attentionBatches.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+            <AlertTriangle className="h-3 w-3" />
+            Needs attention
+          </div>
+          <ul className="divide-y rounded-lg border">
+            {data.attentionBatches.map((b) => (
+              <li
+                key={b.id}
+                className="flex items-center justify-between gap-3 px-3 py-2"
+              >
+                <Link
+                  href={`/livestock/${b.livestockId}/batches/${b.id}`}
+                  className="min-w-0 flex-1 hover:underline"
+                >
+                  <div className="truncate text-xs font-medium">
+                    {b.livestockName} · {b.name}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {b.head} head · day {b.daysInCycle}
+                    {b.expectedCycleDays ? ` / ${b.expectedCycleDays}` : ""}
+                  </div>
+                </Link>
+                <div className="shrink-0 text-right">
+                  {b.severity === "mortality" && (
+                    <span className="text-[11px] font-medium text-destructive tabular-nums">
+                      {b.mortalityPct.toFixed(1)}% mortality
+                    </span>
+                  )}
+                  {b.severity === "fcr" && (
+                    <span className="text-[11px] font-medium text-amber-700 tabular-nums dark:text-amber-400">
+                      FCR {b.fcr?.toFixed(2)}
+                      {b.targetFCR != null
+                        ? ` vs ${b.targetFCR.toFixed(2)}`
+                        : ""}
+                    </span>
+                  )}
+                  {b.severity === "exit-soon" && (
+                    <span className="text-[11px] font-medium text-sky-700 tabular-nums dark:text-sky-300">
+                      Exit window
+                    </span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MiniBox({
+  label,
+  value,
+  hint,
+  tone = "default",
+  icon,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "negative";
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border bg-muted/30 p-2.5">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div
+        className={`mt-0.5 text-sm font-semibold tabular-nums ${
+          tone === "negative" ? "text-destructive" : ""
+        }`}
+      >
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+          {hint}
+        </div>
+      )}
+    </div>
   );
 }
 

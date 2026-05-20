@@ -26,19 +26,80 @@ export async function GET(
   try {
     const ctx = await requireWorkspace("livestock", "read");
     const { id } = await context.params;
-    const batch = await loadBatch(id, ctx.workspaceId);
-    if (!batch) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const fullBatch = await prisma.livestockBatch.findUnique({
+      where: { id },
+      include: {
+        livestock: { select: { workspaceId: true } },
+        contract: {
+          select: {
+            id: true,
+            integratorName: true,
+            contractRef: true,
+            agreedRatePerKg: true,
+          },
+        },
+        land: {
+          select: {
+            id: true,
+            name: true,
+            area: true,
+            areaUnit: true,
+          },
+        },
+      },
+    });
+    if (!fullBatch || fullBatch.livestock.workspaceId !== ctx.workspaceId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const batch = fullBatch;
 
-    const [events, feedLogs, vaccinations, incomeAgg, expenseAgg] = await Promise.all([
+    const [
+      events,
+      feedLogs,
+      vaccinations,
+      weighings,
+      mortality,
+      animals,
+      milkLogs,
+      eggLogs,
+      healthLogs,
+      incomeAgg,
+      expenseAgg,
+      laborAgg,
+    ] = await Promise.all([
       prisma.livestockEvent.findMany({
         where: { batchId: id },
         orderBy: { date: "desc" },
       }),
-      prisma.feedLog.findMany({ where: { batchId: id }, orderBy: { date: "desc" }, take: 50 }),
+      prisma.feedLog.findMany({ where: { batchId: id }, orderBy: { date: "desc" }, take: 100 }),
       prisma.vaccinationLog.findMany({
         where: { batchId: id },
         orderBy: { date: "desc" },
         take: 50,
+      }),
+      prisma.weighingLog.findMany({
+        where: { batchId: id },
+        orderBy: { date: "desc" },
+      }),
+      prisma.mortalityLog.findMany({
+        where: { batchId: id },
+        orderBy: { date: "desc" },
+      }),
+      prisma.livestockAnimal.findMany({
+        where: { batchId: id },
+        orderBy: [{ active: "desc" }, { tagNumber: "asc" }],
+      }),
+      prisma.milkLog.findMany({
+        where: { batchId: id },
+        orderBy: { date: "desc" },
+      }),
+      prisma.eggProductionLog.findMany({
+        where: { batchId: id },
+        orderBy: { date: "desc" },
+      }),
+      prisma.healthLog.findMany({
+        where: { batchId: id },
+        orderBy: [{ resolved: "asc" }, { date: "desc" }],
       }),
       prisma.transaction.aggregate({
         where: { livestockBatchId: id, type: "INCOME" },
@@ -48,25 +109,60 @@ export async function GET(
         where: { livestockBatchId: id, type: "EXPENSE" },
         _sum: { amount: true },
       }),
+      prisma.transaction.aggregate({
+        where: { livestockBatchId: id, kind: "WAGE" },
+        _sum: { amount: true },
+      }),
     ]);
 
     return NextResponse.json({
       batch: {
         id: batch.id,
         name: batch.name,
+        productionType: batch.productionType,
+        contractId: batch.contractId,
+        contract: batch.contract
+          ? {
+              id: batch.contract.id,
+              integratorName: batch.contract.integratorName,
+              contractRef: batch.contract.contractRef,
+              agreedRatePerKg: Number(batch.contract.agreedRatePerKg),
+            }
+          : null,
         startDate: batch.startDate.toISOString(),
         endDate: batch.endDate?.toISOString() ?? null,
         expectedCycleDays: batch.expectedCycleDays,
         initialCount: batch.initialCount,
         currentCount: batch.currentCount,
+        initialAvgWeight:
+          batch.initialAvgWeight == null
+            ? null
+            : Number(batch.initialAvgWeight),
+        targetWeight:
+          batch.targetWeight == null ? null : Number(batch.targetWeight),
+        targetFCR: batch.targetFCR == null ? null : Number(batch.targetFCR),
         notes: batch.notes,
         active: batch.active,
         livestockId: batch.livestockId,
         landId: batch.landId,
+        land: batch.land
+          ? {
+              id: batch.land.id,
+              name: batch.land.name,
+              area: batch.land.area == null ? null : Number(batch.land.area),
+              areaUnit: batch.land.areaUnit,
+            }
+          : null,
       },
       summary: {
         income: Number(incomeAgg._sum.amount ?? 0),
         expense: Number(expenseAgg._sum.amount ?? 0),
+        // Labor is a subset of `expense` — we surface it separately so
+        // the batch detail page can break it out of the EXPENSE bar.
+        // Comes from WAGE-kind transactions tagged to this batch (the
+        // wage-payment flow does this when the attendance row carries
+        // a livestockBatchId).
+        labor: Number(laborAgg._sum.amount ?? 0),
         net: Number(incomeAgg._sum.amount ?? 0) - Number(expenseAgg._sum.amount ?? 0),
       },
       events: events.map((e) => ({
@@ -75,6 +171,9 @@ export async function GET(
         date: e.date.toISOString(),
         count: e.count,
         unitValue: e.unitValue == null ? null : Number(e.unitValue),
+        avgWeightKg: e.avgWeightKg == null ? null : Number(e.avgWeightKg),
+        totalWeightKg:
+          e.totalWeightKg == null ? null : Number(e.totalWeightKg),
         notes: e.notes,
       })),
       feedLogs: feedLogs.map((f) => ({
@@ -92,6 +191,74 @@ export async function GET(
         nextDueDate: v.nextDueDate?.toISOString() ?? null,
         cost: v.cost == null ? null : Number(v.cost),
         notes: v.notes,
+      })),
+      weighings: weighings.map((w) => ({
+        id: w.id,
+        animalId: w.animalId,
+        phase: w.phase,
+        date: w.date.toISOString(),
+        sampleSize: w.sampleSize,
+        totalKg: Number(w.totalKg),
+        avgKg: Number(w.avgKg),
+        notes: w.notes,
+      })),
+      mortality: mortality.map((m) => ({
+        id: m.id,
+        animalId: m.animalId,
+        date: m.date.toISOString(),
+        count: m.count,
+        cause: m.cause,
+        culled: m.culled,
+        notes: m.notes,
+      })),
+      animals: animals.map((a) => ({
+        id: a.id,
+        tagNumber: a.tagNumber,
+        name: a.name,
+        sex: a.sex,
+        dob: a.dob?.toISOString() ?? null,
+        breed: a.breed,
+        color: a.color,
+        notes: a.notes,
+        active: a.active,
+      })),
+      milkLogs: milkLogs.map((m) => ({
+        id: m.id,
+        animalId: m.animalId,
+        date: m.date.toISOString(),
+        totalLitres: Number(m.totalLitres),
+        sessions: m.sessions,
+        fatPct: m.fatPct == null ? null : Number(m.fatPct),
+        snfPct: m.snfPct == null ? null : Number(m.snfPct),
+        soldLitres: m.soldLitres == null ? null : Number(m.soldLitres),
+        ratePerLitre:
+          m.ratePerLitre == null ? null : Number(m.ratePerLitre),
+        transactionId: m.transactionId,
+        notes: m.notes,
+      })),
+      eggLogs: eggLogs.map((e) => ({
+        id: e.id,
+        date: e.date.toISOString(),
+        collected: e.collected,
+        grades: e.grades,
+        broken: e.broken,
+        sold: e.sold,
+        salePricePerEgg:
+          e.salePricePerEgg == null ? null : Number(e.salePricePerEgg),
+        transactionId: e.transactionId,
+        notes: e.notes,
+      })),
+      healthLogs: healthLogs.map((h) => ({
+        id: h.id,
+        animalId: h.animalId,
+        date: h.date.toISOString(),
+        condition: h.condition,
+        treatment: h.treatment,
+        cost: h.cost == null ? null : Number(h.cost),
+        resolved: h.resolved,
+        resolvedAt: h.resolvedAt?.toISOString() ?? null,
+        transactionId: h.transactionId,
+        notes: h.notes,
       })),
     });
   } catch (e) {
@@ -117,6 +284,11 @@ export async function PATCH(
       where: { id },
       data: {
         name: parsed.data.name ?? batch.name,
+        productionType: parsed.data.productionType ?? batch.productionType,
+        contractId:
+          parsed.data.contractId === undefined
+            ? batch.contractId
+            : (parsed.data.contractId ?? null),
         startDate: parsed.data.startDate ? new Date(parsed.data.startDate) : batch.startDate,
         endDate:
           parsed.data.endDate === undefined
@@ -128,6 +300,18 @@ export async function PATCH(
           parsed.data.expectedCycleDays === undefined
             ? batch.expectedCycleDays
             : parsed.data.expectedCycleDays,
+        initialAvgWeight:
+          parsed.data.initialAvgWeight === undefined
+            ? batch.initialAvgWeight
+            : (parsed.data.initialAvgWeight ?? null),
+        targetWeight:
+          parsed.data.targetWeight === undefined
+            ? batch.targetWeight
+            : (parsed.data.targetWeight ?? null),
+        targetFCR:
+          parsed.data.targetFCR === undefined
+            ? batch.targetFCR
+            : (parsed.data.targetFCR ?? null),
         notes: parsed.data.notes ?? batch.notes,
         active: parsed.data.active ?? batch.active,
         landId: parsed.data.landId === undefined ? batch.landId : parsed.data.landId,

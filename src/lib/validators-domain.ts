@@ -386,14 +386,30 @@ export const livestockUpdateSchema = livestockCreateSchema.partial().extend({
   active: z.boolean().optional(),
 });
 
+const productionTypeEnum = z.enum([
+  "BROILER_CONTRACT",
+  "BROILER_INDEPENDENT",
+  "LAYER",
+  "COUNTRY_CHICKEN",
+  "DAIRY",
+  "MEAT_GOAT",
+  "MEAT_SHEEP",
+  "DUAL_PURPOSE",
+]);
+
 export const livestockBatchCreateSchema = z.object({
   livestockId: z.string().uuid(),
   landId: z.string().uuid().optional().nullable(),
   name: z.string().trim().min(1).max(80),
+  productionType: productionTypeEnum.optional(),
+  contractId: z.string().uuid().optional().nullable(),
   startDate: z.string(),
   endDate: z.string().optional().nullable(),
   expectedCycleDays: z.number().int().positive().optional().nullable(),
   initialCount: z.number().int().min(0),
+  initialAvgWeight: z.number().positive().optional().nullable(),
+  targetWeight: z.number().positive().optional().nullable(),
+  targetFCR: z.number().positive().max(99).optional().nullable(),
   notes: z.string().trim().max(500).optional(),
 });
 
@@ -408,6 +424,8 @@ export const livestockEventCreateSchema = z
     date: z.string(),
     count: z.number().int().positive(),
     unitValue: z.number().nonnegative().optional().nullable(),
+    avgWeightKg: z.number().positive().optional().nullable(),
+    totalWeightKg: z.number().positive().optional().nullable(),
     notes: z.string().trim().max(500).optional(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
@@ -418,6 +436,296 @@ export const livestockEventCreateSchema = z
     { message: "Sale/Purchase needs a unit value", path: ["unitValue"] }
   );
 
+export const weighingLogCreateSchema = z.object({
+  animalId: z.string().uuid().optional().nullable(),
+  phase: z.enum(["ARRIVAL", "INTERIM", "WEEKLY", "EXIT"]),
+  date: z.string(),
+  sampleSize: z.number().int().positive().default(1),
+  totalKg: z.number().positive(),
+  notes: z.string().trim().max(500).optional(),
+});
+export const weighingLogUpdateSchema = weighingLogCreateSchema.partial();
+
+export const mortalityLogCreateSchema = z.object({
+  animalId: z.string().uuid().optional().nullable(),
+  date: z.string(),
+  count: z.number().int().positive().default(1),
+  cause: z
+    .enum([
+      "UNKNOWN",
+      "DISEASE",
+      "PREDATOR",
+      "INJURY",
+      "HEAT",
+      "COLD",
+      "STAMPEDE",
+      "OTHER",
+    ])
+    .default("UNKNOWN"),
+  culled: z.boolean().default(false),
+  notes: z.string().trim().max(500).optional(),
+});
+export const mortalityLogUpdateSchema = mortalityLogCreateSchema.partial();
+
+export const livestockAnimalCreateSchema = z.object({
+  tagNumber: z.string().trim().min(1).max(40),
+  name: z.string().trim().max(80).optional().nullable(),
+  sex: z.enum(["MALE", "FEMALE", "UNKNOWN"]).default("UNKNOWN"),
+  dob: z.string().optional().nullable(),
+  breed: z.string().trim().max(60).optional().nullable(),
+  color: z.string().trim().max(40).optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+export const livestockAnimalUpdateSchema = livestockAnimalCreateSchema
+  .partial()
+  .extend({ active: z.boolean().optional() });
+
+// Json shape for the contract bonus / penalty tables. Kept as a Zod
+// object so the API rejects garbage Json before it hits the database.
+const fcrBonusBandSchema = z.object({
+  maxFcr: z.number().positive(),
+  bonusPerKg: z.number(),
+});
+const mortalityPenaltyBandSchema = z.object({
+  overByPct: z.number().nonnegative(),
+  deductPerKg: z.number().nonnegative(),
+});
+
+export const livestockContractCreateSchema = z.object({
+  contactId: z.string().uuid().optional().nullable(),
+  integratorName: z.string().trim().min(1).max(120),
+  contractRef: z.string().trim().max(80).optional().nullable(),
+  agreedRatePerKg: z.number().positive(),
+  fcrBonusBands: z.array(fcrBonusBandSchema).optional().nullable(),
+  mortalityCap: z.number().min(0).max(100).optional().nullable(),
+  mortalityPenalty: z.array(mortalityPenaltyBandSchema).optional().nullable(),
+  suppliesProvided: z.array(z.string().trim().max(40)).optional().default([]),
+  notes: z.string().trim().max(500).optional(),
+  startedOn: z.string(),
+  endedOn: z.string().optional().nullable(),
+});
+export const livestockContractUpdateSchema = livestockContractCreateSchema
+  .partial()
+  .extend({ endedOn: z.string().optional().nullable() });
+
+// `sessions` is a free-form Json bag (e.g. { MORNING: 12.5, EVENING: 11 })
+// so a 2-session farm and a 3-session farm share the same shape. We
+// only validate that values are non-negative numbers.
+const milkSessionsSchema = z
+  .record(z.string().min(1).max(20), z.number().nonnegative())
+  .optional();
+
+export const milkLogCreateSchema = z
+  .object({
+    animalId: z.string().uuid().optional().nullable(),
+    date: z.string(),
+    totalLitres: z.number().positive(),
+    sessions: milkSessionsSchema,
+    fatPct: z.number().min(0).max(20).optional().nullable(),
+    snfPct: z.number().min(0).max(20).optional().nullable(),
+    soldLitres: z.number().nonnegative().optional().nullable(),
+    ratePerLitre: z.number().nonnegative().optional().nullable(),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (d) => (d.soldLitres ?? 0) <= d.totalLitres,
+    {
+      message: "Sold litres can't exceed total milked",
+      path: ["soldLitres"],
+    },
+  )
+  .refine(
+    (d) => {
+      // If sale info is provided, it must be complete enough to create
+      // an INCOME Transaction. Either both soldLitres + ratePerLitre or
+      // neither.
+      const hasSold = (d.soldLitres ?? 0) > 0;
+      const hasRate = (d.ratePerLitre ?? 0) > 0;
+      return hasSold === hasRate;
+    },
+    {
+      message: "Pair sold litres with a rate — or leave both empty",
+      path: ["ratePerLitre"],
+    },
+  );
+
+export const milkLogUpdateSchema = z
+  .object({
+    animalId: z.string().uuid().optional().nullable(),
+    date: z.string().optional(),
+    totalLitres: z.number().positive().optional(),
+    sessions: milkSessionsSchema,
+    fatPct: z.number().min(0).max(20).optional().nullable(),
+    snfPct: z.number().min(0).max(20).optional().nullable(),
+    soldLitres: z.number().nonnegative().optional().nullable(),
+    ratePerLitre: z.number().nonnegative().optional().nullable(),
+    notes: z.string().trim().max(500).optional(),
+  });
+
+// `grades` is a free-form Json bag (e.g. { SMALL: 12, MEDIUM: 80, ... })
+// so the grade taxonomy can evolve without a schema bump.
+const eggGradesSchema = z
+  .record(z.string().min(1).max(20), z.number().int().nonnegative())
+  .optional();
+
+export const eggLogCreateSchema = z
+  .object({
+    date: z.string(),
+    collected: z.number().int().positive(),
+    grades: eggGradesSchema,
+    broken: z.number().int().nonnegative().optional().nullable(),
+    sold: z.number().int().nonnegative().optional().nullable(),
+    salePricePerEgg: z.number().nonnegative().optional().nullable(),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (d) => (d.sold ?? 0) + (d.broken ?? 0) <= d.collected,
+    {
+      message: "Sold + broken can't exceed collected",
+      path: ["sold"],
+    },
+  )
+  .refine(
+    (d) => {
+      const hasSold = (d.sold ?? 0) > 0;
+      const hasPrice = (d.salePricePerEgg ?? 0) > 0;
+      return hasSold === hasPrice;
+    },
+    {
+      message: "Pair sold count with a per-egg price — or leave both empty",
+      path: ["salePricePerEgg"],
+    },
+  );
+
+export const eggLogUpdateSchema = z.object({
+  date: z.string().optional(),
+  collected: z.number().int().positive().optional(),
+  grades: eggGradesSchema,
+  broken: z.number().int().nonnegative().optional().nullable(),
+  sold: z.number().int().nonnegative().optional().nullable(),
+  salePricePerEgg: z.number().nonnegative().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
+// Lift event for broiler-contract batches. The integrator picks up
+// the live birds and pays per kg; analytics computes the payout.
+export const liftEventSchema = z.object({
+  date: z.string(),
+  count: z.number().int().positive(),
+  totalWeightKg: z.number().positive(),
+  // Where the integrator deposited the growing-charge cheque.
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+  // When true, the endpoint flips the batch to active=false and stamps
+  // endDate. Default true (lifting normally closes the cycle).
+  closeBatch: z.boolean().default(true),
+});
+
+export const healthLogCreateSchema = z.object({
+  animalId: z.string().uuid().optional().nullable(),
+  date: z.string(),
+  condition: z.string().trim().min(1).max(120),
+  treatment: z.string().trim().max(500).optional().nullable(),
+  cost: z.number().nonnegative().optional().nullable(),
+  resolved: z.boolean().default(false),
+  resolvedAt: z.string().optional().nullable(),
+  accountId: z.string().uuid().optional().nullable(),
+  cardId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+// Bulk-import historical batches. Each row creates one LivestockBatch
+// under a Livestock parent (matched by name; auto-created if missing
+// and the caller passes `createMissingLivestock=true`). Capped at 500
+// rows per call to keep the $transaction reasonable.
+const importBatchRowSchema = z.object({
+  livestockName: z.string().trim().min(1).max(80),
+  batchName: z.string().trim().min(1).max(80),
+  productionType: productionTypeEnum.optional(),
+  startDate: z.string(),
+  endDate: z.string().optional().nullable(),
+  expectedCycleDays: z.number().int().positive().optional().nullable(),
+  initialCount: z.number().int().min(0),
+  currentCount: z.number().int().min(0).optional(),
+  initialAvgWeight: z.number().positive().optional().nullable(),
+  targetWeight: z.number().positive().optional().nullable(),
+  targetFCR: z.number().positive().max(99).optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+  active: z.boolean().optional(),
+});
+export const livestockBatchImportSchema = z.object({
+  rows: z.array(importBatchRowSchema).min(1).max(500),
+  createMissingLivestock: z.boolean().default(true),
+});
+
+// Bulk-import feed / weighings / mortality. All three reference a
+// LivestockBatch by name (workspace-scoped) so the user can paste a
+// CSV exported from a paper logbook. Rejects the whole batch on a
+// single bad row.
+const feedImportRowSchema = z.object({
+  batchName: z.string().trim().min(1).max(80),
+  date: z.string(),
+  amount: z.number().positive(),
+  quantity: z.number().positive().optional().nullable(),
+  unit: z.string().trim().max(20).optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+const weighingImportRowSchema = z.object({
+  batchName: z.string().trim().min(1).max(80),
+  date: z.string(),
+  phase: z.enum(["ARRIVAL", "INTERIM", "WEEKLY", "EXIT"]).default("INTERIM"),
+  sampleSize: z.number().int().positive().default(1),
+  totalKg: z.number().positive(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+const mortalityImportRowSchema = z.object({
+  batchName: z.string().trim().min(1).max(80),
+  date: z.string(),
+  count: z.number().int().positive().default(1),
+  cause: z
+    .enum([
+      "UNKNOWN",
+      "DISEASE",
+      "PREDATOR",
+      "INJURY",
+      "HEAT",
+      "COLD",
+      "STAMPEDE",
+      "OTHER",
+    ])
+    .default("UNKNOWN"),
+  culled: z.boolean().optional().default(false),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+export const livestockLogsImportSchema = z.object({
+  entity: z.enum(["feed", "weighings", "mortality"]),
+  rows: z
+    .array(
+      z.union([
+        feedImportRowSchema,
+        weighingImportRowSchema,
+        mortalityImportRowSchema,
+      ]),
+    )
+    .min(1)
+    .max(1000),
+});
+
+export const healthLogUpdateSchema = z.object({
+  animalId: z.string().uuid().optional().nullable(),
+  date: z.string().optional(),
+  condition: z.string().trim().min(1).max(120).optional(),
+  treatment: z.string().trim().max(500).optional().nullable(),
+  cost: z.number().nonnegative().optional().nullable(),
+  resolved: z.boolean().optional(),
+  resolvedAt: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
+});
+
 export const feedLogCreateSchema = z.object({
   date: z.string(),
   amount: z.number().positive(),
@@ -426,6 +734,15 @@ export const feedLogCreateSchema = z.object({
   notes: z.string().trim().max(500).optional(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
+});
+export const feedLogUpdateSchema = z.object({
+  date: z.string().optional(),
+  // Editing `amount` is forbidden when a Transaction is linked — the
+  // linked txn carries the cashflow figure. Quantity / unit / notes
+  // are safe to update.
+  quantity: z.number().positive().optional().nullable(),
+  unit: z.string().trim().max(20).optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const vaccinationLogCreateSchema = z.object({
@@ -436,6 +753,12 @@ export const vaccinationLogCreateSchema = z.object({
   notes: z.string().trim().max(500).optional(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
+});
+export const vaccinationLogUpdateSchema = z.object({
+  vaccine: z.string().trim().min(1).max(80).optional(),
+  date: z.string().optional(),
+  nextDueDate: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional(),
 });
 
 export const workerCreateSchema = z.object({

@@ -70,7 +70,7 @@ export async function POST(
         });
         txnId = txn.id;
       }
-      return tx.vaccinationLog.create({
+      const vaccinationLog = await tx.vaccinationLog.create({
         data: {
           batchId: id,
           vaccine: data.vaccine,
@@ -81,6 +81,19 @@ export async function POST(
           transactionId: txnId,
         },
       });
+      // When the user sets a next-due date, auto-create the reminder
+      // row so the existing notifications cron picks it up.
+      if (data.nextDueDate) {
+        await tx.investmentReminder.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            kind: "VACCINATION_DUE",
+            dueDate: new Date(data.nextDueDate),
+            vaccinationLogId: vaccinationLog.id,
+          },
+        });
+      }
+      return vaccinationLog;
     });
     return NextResponse.json({ id: result.id });
   } catch (e) {

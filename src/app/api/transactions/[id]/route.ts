@@ -18,6 +18,7 @@ import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 import { isS3Configured, presignGet } from "@/lib/s3";
 import {
+  revertContractLift,
   revertSubscriptionPay,
   revertUtilityAdvance,
   revertUtilityBillPay,
@@ -392,6 +393,24 @@ const body = await request.json();
           {
             error:
               "Can't change the amount of a utility advance — it drives the provider's running balance. Delete and re-add.",
+          },
+          { status: 400 },
+        );
+      }
+      if (t.kind === "CONTRACT_PAYOUT" && t.livestockBatchId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a contract payout. The figure is derived from the lift weight × contract rate. Delete and re-record the lift.",
+          },
+          { status: 400 },
+        );
+      }
+      if (t.kind === "HEALTH_CARE" && t.livestockBatchId) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a health-care expense. Edit it from the batch's Health tab.",
           },
           { status: 400 },
         );
@@ -1049,6 +1068,13 @@ export async function DELETE(
           // body into a toast either way.
           throw new WorkspaceAccessError(400, r.reason);
         }
+      }
+
+      // ── Broiler-contract lift: undo the linked SALE LivestockEvent
+      // (restoring head count), delete the EXIT WeighingLog created at
+      // lift-time, and reopen the batch if the lift closed it.
+      if (t.kind === "CONTRACT_PAYOUT" && t.livestockBatchId) {
+        await revertContractLift(tx, t.id);
       }
 
       // ── "Contact paid for me" obligation: when this EXPENSE was

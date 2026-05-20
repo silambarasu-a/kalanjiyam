@@ -45,6 +45,10 @@ enum TransactionKind {
   SUBSCRIPTION
   UTILITY_BILL
   UTILITY_ADVANCE
+  MILK_SALE
+  EGG_SALE
+  CONTRACT_PAYOUT
+  HEALTH_CARE
 }
 
 enum MemberChargeType {
@@ -237,6 +241,8 @@ enum NotificationKind {
   SUBSCRIPTION_RENEWAL_DUE
   UTILITY_BILL_DUE_SOON
   UTILITY_BILL_OVERDUE
+  VACCINATION_DUE
+  LIVESTOCK_CYCLE_ENDING
   GENERIC
 }
 
@@ -281,6 +287,45 @@ enum LeaseAssetType {
   LIVESTOCK_BATCH
 }
 
+// Drives which fields the batch form asks for, which tabs the detail
+// page shows, and which formulas the analytics endpoint runs. Stored
+// per-batch so a single Livestock row (e.g. "Goats") can host a mix of
+// dairy + meat batches over time.
+enum ProductionType {
+  BROILER_CONTRACT
+  BROILER_INDEPENDENT
+  LAYER
+  COUNTRY_CHICKEN
+  DAIRY
+  MEAT_GOAT
+  MEAT_SHEEP
+  DUAL_PURPOSE
+}
+
+enum AnimalSex {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum MortalityCause {
+  UNKNOWN
+  DISEASE
+  PREDATOR
+  INJURY
+  HEAT
+  COLD
+  STAMPEDE
+  OTHER
+}
+
+enum WeighingPhase {
+  ARRIVAL
+  INTERIM
+  WEEKLY
+  EXIT
+}
+
 enum LeaseDirection {
   LEASED_OUT
   LEASED_IN
@@ -323,6 +368,8 @@ enum ReminderKind {
   VEHICLE_DOC_RENEWAL
   SUBSCRIPTION_RENEWAL
   UTILITY_BILL_DUE
+  VACCINATION_DUE
+  LIVESTOCK_CYCLE_ENDING
 }
 
 enum ReminderStatus {
@@ -437,6 +484,7 @@ model Workspace {
   lands               Land[]
   crops               Crop[]
   livestock           Livestock[]
+  livestockContracts  LivestockContract[]
   leases              Lease[]
   workers             Worker[]
   advanceRepayments   AdvanceRepayment[]
@@ -561,6 +609,7 @@ model Contact {
   ownedVehicles      Vehicle[]          @relation("VehicleOwner")
   vehiclesBought     Vehicle[]          @relation("VehicleDisposalBuyer")
   hospitalizations   Hospitalization[]  @relation("HospitalizationPatient")
+  livestockContracts LivestockContract[] @relation("LivestockContractContact")
 
   @@index([workspaceId, active])
 }
@@ -867,6 +916,9 @@ model Transaction {
   livestockEvent          LivestockEvent?
   feedLog                 FeedLog?
   vaccinationLog          VaccinationLog?
+  milkLog                 MilkLog?
+  eggProductionLog        EggProductionLog?
+  healthLog               HealthLog?
   memberChargeSettlements MemberChargeSettlement[]
   reminderConfirmation    InvestmentReminder?      @relation("ReminderConfirmation")
   splits                  TransactionSplit[]       @relation("TransactionSplits")
@@ -1042,31 +1094,51 @@ model Livestock {
 }
 
 model LivestockBatch {
-  id                String    @id @default(uuid())
+  id                String           @id @default(uuid())
   livestockId       String
-  livestock         Livestock @relation(fields: [livestockId], references: [id], onDelete: Cascade)
+  livestock         Livestock        @relation(fields: [livestockId], references: [id], onDelete: Cascade)
   landId            String?
-  land              Land?     @relation(fields: [landId], references: [id], onDelete: SetNull)
+  land              Land?            @relation(fields: [landId], references: [id], onDelete: SetNull)
   name              String
+  // Drives form / detail-page variant. Existing rows backfill to
+  // DUAL_PURPOSE in the migration so nothing breaks.
+  productionType    ProductionType   @default(DUAL_PURPOSE)
+  contractId        String?
+  contract          LivestockContract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
   startDate         DateTime
   endDate           DateTime?
   expectedCycleDays Int?
-  initialCount      Int       @default(0)
-  currentCount      Int       @default(0)
+  initialCount      Int              @default(0)
+  currentCount      Int              @default(0)
+  // Average weight per bird/animal at arrival; drives FCR + ADG math.
+  initialAvgWeight  Decimal?         @db.Decimal(8, 3)
+  // Optional grower targets — surfaced on the detail page as a goal
+  // marker on the weight-gain chart.
+  targetWeight      Decimal?         @db.Decimal(8, 3)
+  targetFCR         Decimal?         @db.Decimal(5, 3)
   notes             String?
-  active            Boolean   @default(true)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  active            Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   events       LivestockEvent[]
   feedLogs     FeedLog[]
   vaccinations VaccinationLog[]
   transactions Transaction[]
   attendance   Attendance[]
-  leases       Lease[]          @relation("LeaseLivestockBatch")
+  leases       Lease[]              @relation("LeaseLivestockBatch")
+  animals      LivestockAnimal[]
+  weighings    WeighingLog[]
+  mortality    MortalityLog[]
+  milkLogs     MilkLog[]
+  eggLogs      EggProductionLog[]
+  healthLogs   HealthLog[]
+  reminders    InvestmentReminder[] @relation("ReminderLivestockBatch")
 
   @@index([livestockId, active])
   @@index([landId])
+  @@index([contractId])
+  @@index([productionType, active])
 }
 
 model LivestockEvent {
@@ -1077,12 +1149,225 @@ model LivestockEvent {
   date          DateTime
   count         Int
   unitValue     Decimal?           @db.Decimal(12, 2)
+  // Per-animal average weight at the time of the event. Combined with
+  // `count` this gives total weight; surfaced on PURCHASE/SALE rows so
+  // the detail-page table reads "12 birds · avg 2.10 kg · ₹120/bird".
+  avgWeightKg   Decimal?           @db.Decimal(8, 3)
+  // Optional total weight override when the user actually weighed the
+  // bulk lot (e.g. a goat sale) instead of averaging.
+  totalWeightKg Decimal?           @db.Decimal(12, 3)
   notes         String?
   transactionId String?            @unique
   transaction   Transaction?       @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   createdAt     DateTime           @default(now())
 
   @@index([batchId, date])
+}
+
+// Optional per-animal layer on top of a batch. For poultry batches we
+// almost never use this (1000 broilers, nobody names them); for a dairy
+// herd of 8 named cows we do. Models like WeighingLog / MortalityLog
+// can reference either the batch (bulk events) or a specific animal.
+model LivestockAnimal {
+  id          String           @id @default(uuid())
+  batchId     String
+  batch       LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  tagNumber   String
+  name        String?
+  sex         AnimalSex        @default(UNKNOWN)
+  dob         DateTime?
+  breed       String?
+  color       String?
+  notes       String?
+  // Flips to false on individual SALE / DEATH so the active herd view
+  // stays clean while history is preserved.
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  weighings   WeighingLog[]
+  mortality   MortalityLog[]
+  milkLogs    MilkLog[]
+  healthLogs  HealthLog[]
+
+  @@unique([batchId, tagNumber])
+  @@index([batchId, active])
+}
+
+// Captures the "weight on buy / sell / interim weigh-in" data that
+// drives FCR, ADG, and contract-payout math. Bulk events use
+// (sampleSize, totalKg, avgKg) — sampling a handful of birds is
+// industry-standard for broiler. Per-animal events set animalId and
+// usually sampleSize=1.
+model WeighingLog {
+  id          String           @id @default(uuid())
+  batchId     String
+  batch       LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId    String?
+  animal      LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  phase       WeighingPhase
+  date        DateTime
+  sampleSize  Int              @default(1)
+  totalKg     Decimal          @db.Decimal(12, 3)
+  // Denormalised = totalKg / sampleSize. Stored to keep the analytics
+  // query fast and to survive sampleSize edits without a recompute.
+  avgKg       Decimal          @db.Decimal(8, 3)
+  notes       String?
+  createdAt   DateTime         @default(now())
+
+  @@index([batchId, date])
+  @@index([animalId, date])
+}
+
+// Daily milk production for DAIRY batches. `sessions` is a denormalised
+// Json bag (e.g. `{ MORNING: 12.5, EVENING: 11.0 }`) so a farmer who
+// milks three times a day doesn't need a schema change. When `sold` and
+// `ratePerLitre` are present the API creates a linked INCOME
+// Transaction tagged to the batch so dashboard cashflow stays accurate.
+// `animalId` is optional — populated only when the farmer records per-
+// cow yield (named dairy cows). Bulk dairy units skip it.
+model MilkLog {
+  id              String           @id @default(uuid())
+  batchId         String
+  batch           LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId        String?
+  animal          LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  date            DateTime
+  // Denormalised totals so the chart query is fast. `sessions` keeps the
+  // per-session breakdown for the detail view.
+  totalLitres     Decimal          @db.Decimal(10, 3)
+  sessions        Json?
+  fatPct          Decimal?         @db.Decimal(4, 2)
+  snfPct          Decimal?         @db.Decimal(4, 2)
+  // Sold portion (litres) + price. The remainder is treated as home use.
+  soldLitres      Decimal?         @db.Decimal(10, 3)
+  ratePerLitre    Decimal?         @db.Decimal(8, 2)
+  // Linked INCOME Transaction when sold + rate are both set. Nullable so
+  // a production-only log (no sale yet) is still a valid row.
+  transactionId   String?          @unique
+  transaction     Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes           String?
+  createdAt       DateTime         @default(now())
+
+  @@index([batchId, date])
+  @@index([animalId, date])
+}
+
+// Health / disease log — beyond vaccinations. Captures the symptom,
+// treatment given, and (optional) cost. When cost > 0 + a source is
+// set, the API creates a linked EXPENSE Transaction (kind=HEALTH_CARE).
+// `resolved` flips when the animal recovers; `resolvedAt` stamps the
+// date. Used by all production types — birds, dairy, goats alike.
+model HealthLog {
+  id            String           @id @default(uuid())
+  batchId       String
+  batch         LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId      String?
+  animal        LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  date          DateTime
+  condition     String
+  treatment     String?
+  cost          Decimal?         @db.Decimal(12, 2)
+  resolved      Boolean          @default(false)
+  resolvedAt    DateTime?
+  transactionId String?          @unique
+  transaction   Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime         @default(now())
+
+  @@index([batchId, date])
+  @@index([animalId, date])
+  @@index([batchId, resolved])
+}
+
+// Daily egg production for LAYER + COUNTRY_CHICKEN batches. `grades`
+// is a denormalised Json bag (e.g. `{ SMALL: 12, MEDIUM: 80, LARGE: 30 }`)
+// so the grade taxonomy can evolve without a schema bump. When `sold`
+// and `salePricePerEgg` are both set the API creates a linked INCOME
+// Transaction (kind=EGG_SALE) tagged to the batch. Mirrors MilkLog.
+model EggProductionLog {
+  id              String           @id @default(uuid())
+  batchId         String
+  batch           LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  date            DateTime
+  collected       Int
+  grades          Json?
+  broken          Int?
+  // Sale columns — when both set, API creates an INCOME Transaction.
+  sold            Int?
+  salePricePerEgg Decimal?         @db.Decimal(8, 2)
+  transactionId   String?          @unique
+  transaction     Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes           String?
+  createdAt       DateTime         @default(now())
+
+  @@index([batchId, date])
+}
+
+// First-class mortality log with cause + culled flag. Replaces the
+// old "just record a DEATH LivestockEvent and bump the count" pattern,
+// which conflated cause-of-death with movement. Deleting a row in the
+// API auto-restores LivestockBatch.currentCount.
+model MortalityLog {
+  id        String           @id @default(uuid())
+  batchId   String
+  batch     LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId  String?
+  animal    LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  date      DateTime
+  count     Int              @default(1)
+  cause     MortalityCause   @default(UNKNOWN)
+  // Farmer-initiated cull (sick / runt) vs natural death. Contract
+  // integrators sometimes pay for natural mortality but never for culls.
+  culled    Boolean          @default(false)
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  @@index([batchId, date])
+  @@index([animalId, date])
+}
+
+// The Suguna / Sakthi / Venky's relationship. Reusing Contact for the
+// counterparty (recommended in the planning round) so settlements flow
+// through the existing MemberCharge ledger; integratorName /
+// contractRef stay denormalised for fast list rendering.
+model LivestockContract {
+  id              String          @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Optional Contact link — present when the integrator was added to
+  // the contacts book; nullable so the user can record a contract
+  // before creating the Contact row.
+  contactId       String?
+  contact         Contact?        @relation("LivestockContractContact", fields: [contactId], references: [id], onDelete: SetNull)
+  integratorName  String
+  contractRef     String?
+  // Base growing charge in ₹ per kg of live weight lifted.
+  agreedRatePerKg Decimal         @db.Decimal(10, 2)
+  // Json array: [{ "maxFcr": 1.6, "bonusPerKg": 1.50 }, ...]
+  // Lower FCR ranges typically pay more — bands evaluated in order,
+  // first match wins. Empty array == no bonus structure.
+  fcrBonusBands   Json?
+  // Mortality % above which penalties kick in (e.g. 5.00 means "no
+  // penalty up to 5%, then per-band penalties apply").
+  mortalityCap    Decimal?        @db.Decimal(5, 2)
+  // Json array: [{ "overByPct": 2, "deductPerKg": 1 }, ...]
+  mortalityPenalty Json?
+  // Free-form list of what the integrator supplies — DOC, FEED,
+  // MEDICINE, VACCINES, TECH. Used only for UI surfacing on the
+  // contract card; not validated by an enum so new supplies can be
+  // added without a migration.
+  suppliesProvided String[]       @default([])
+  notes           String?
+  startedOn       DateTime
+  endedOn         DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  batches         LivestockBatch[]
+
+  @@index([workspaceId, startedOn])
+  @@index([contactId])
 }
 
 model FeedLog {
@@ -1112,6 +1397,7 @@ model VaccinationLog {
   notes         String?
   transactionId String?        @unique
   transaction   Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  reminders     InvestmentReminder[] @relation("ReminderVaccination")
   createdAt     DateTime       @default(now())
 
   @@index([batchId, date])
@@ -1521,6 +1807,10 @@ model InvestmentReminder {
   subscriptionSchedule   SubscriptionSchedule? @relation("ReminderSubscriptionSchedule", fields: [subscriptionScheduleId], references: [id], onDelete: Cascade)
   utilityBillId          String?
   utilityBill            UtilityBill?          @relation("ReminderUtilityBill", fields: [utilityBillId], references: [id], onDelete: Cascade)
+  vaccinationLogId       String?
+  vaccinationLog         VaccinationLog?       @relation("ReminderVaccination", fields: [vaccinationLogId], references: [id], onDelete: Cascade)
+  livestockBatchId       String?
+  livestockBatch         LivestockBatch?       @relation("ReminderLivestockBatch", fields: [livestockBatchId], references: [id], onDelete: Cascade)
   kind                   ReminderKind
   dueDate                DateTime              @db.Date
   amount                 Decimal?              @db.Decimal(14, 2)
@@ -1539,6 +1829,8 @@ model InvestmentReminder {
   @@index([subscriptionId])
   @@index([subscriptionScheduleId])
   @@index([utilityBillId])
+  @@index([vaccinationLogId])
+  @@index([livestockBatchId])
 }
 
 model InsuredMember {
@@ -1756,6 +2048,8 @@ enum AttachmentOwnerKind {
   EVENT_DOCUMENT
   UTILITY_BILL
   SUBSCRIPTION_DOCUMENT
+  LIVESTOCK_BATCH_DOCUMENT
+  LIVESTOCK_CONTRACT_DOCUMENT
 }
 
 //
