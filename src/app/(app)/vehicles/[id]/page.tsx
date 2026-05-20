@@ -226,7 +226,7 @@ export default function VehicleDetailPage({
               {` · Owner: ${vehicle.ownerContact.name}`}
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex flex-wrap items-center gap-1 sm:shrink-0">
             <Button
               size="sm"
               variant="outline"

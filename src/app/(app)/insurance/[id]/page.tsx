@@ -187,7 +187,7 @@ export default function InsuranceDetailPage({
               {policy.policyNumber ? ` · ${policy.policyNumber}` : ""}
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex flex-wrap items-center gap-1 sm:shrink-0">
             <Button
               size="sm"
               variant="outline"

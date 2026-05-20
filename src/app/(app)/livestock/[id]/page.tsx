@@ -10,7 +10,6 @@ import {
   Plus,
   Stethoscope,
   Utensils,
-  Wallet,
   Activity,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +18,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
-import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
 import {
@@ -30,8 +28,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ContractFormDialog } from "@/components/livestock/contract-form-dialog";
-import { mutateBalances } from "@/lib/mutate-balances";
-import { formatDate, groupAccountOptions } from "@/lib/utils";
+import {
+  BatchActionDialog,
+  type BatchActionTab,
+} from "@/components/livestock/batch-action-dialog";
+import { formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type ProductionType =
@@ -60,14 +61,6 @@ type Batch = {
   notes: string | null;
   active: boolean;
   livestock: { id: string; name: string };
-};
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
 };
 
 type ContractRow = {
@@ -175,7 +168,7 @@ export default function LivestockDetailPage() {
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
   const [actionBatch, setActionBatch] = useState<{
     batch: Batch;
-    tab: "event" | "feed" | "vaccination";
+    tab: BatchActionTab;
   } | null>(null);
 
   const batches = batchesRes?.batches ?? [];
@@ -257,8 +250,9 @@ export default function LivestockDetailPage() {
 
       {isLoading ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <Skeleton className="h-40" />
-          <Skeleton className="h-40" />
+          {Array.from({ length: 4 }).map((_, i) => (
+            <BatchCardSkeleton key={i} />
+          ))}
         </div>
       ) : visible.length === 0 ? (
         <div className="rounded-xl border border-dashed bg-card p-10 text-center">
@@ -304,8 +298,20 @@ export default function LivestockDetailPage() {
         onClose={() => setCreateBatchOpen(false)}
       />
       <BatchActionDialog
-        batchAction={actionBatch}
-        onClose={() => setActionBatch(null)}
+        key={`action-${actionBatch?.batch.id ?? "none"}-${actionBatch?.tab ?? "none"}`}
+        open={!!actionBatch}
+        onOpenChange={(o) => !o && setActionBatch(null)}
+        batch={
+          actionBatch
+            ? {
+                id: actionBatch.batch.id,
+                name: actionBatch.batch.name,
+                currentCount: actionBatch.batch.currentCount,
+                livestockId: actionBatch.batch.livestock.id,
+              }
+            : null
+        }
+        tab={actionBatch?.tab ?? null}
       />
     </div>
   );
@@ -337,8 +343,19 @@ function BatchCard({
       ? `${((headDelta / batch.initialCount) * 100).toFixed(1)}% loss`
       : null;
 
+  // The card is a Link to the detail page; the per-action buttons sit
+  // inside the link but stop propagation so they don't trigger nav.
+  const stop = (handler: () => void) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handler();
+  };
+
   return (
-    <div className="group rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm">
+    <Link
+      href={`/livestock/${batch.livestock.id}/batches/${batch.id}`}
+      className="group block rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -414,7 +431,7 @@ function BatchCard({
           size="sm"
           variant="outline"
           className="gap-1"
-          onClick={onRecordEvent}
+          onClick={stop(onRecordEvent)}
         >
           <Activity className="h-3.5 w-3.5" /> Event
         </Button>
@@ -422,7 +439,7 @@ function BatchCard({
           size="sm"
           variant="outline"
           className="gap-1"
-          onClick={onLogFeed}
+          onClick={stop(onLogFeed)}
         >
           <Utensils className="h-3.5 w-3.5" /> Feed
         </Button>
@@ -430,16 +447,44 @@ function BatchCard({
           size="sm"
           variant="outline"
           className="gap-1"
-          onClick={onLogVaccination}
+          onClick={stop(onLogVaccination)}
         >
           <Stethoscope className="h-3.5 w-3.5" /> Vaccine
         </Button>
-        <Link
-          href={`/livestock/${batch.livestock.id}/batches/${batch.id}`}
-          className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-        >
+        <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground group-hover:text-foreground">
           Details <ArrowRight className="h-3 w-3" />
-        </Link>
+        </span>
+      </div>
+    </Link>
+  );
+}
+
+function BatchCardSkeleton() {
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 space-y-2">
+          <div className="flex gap-1.5">
+            <Skeleton className="h-4 w-20 rounded-full" />
+            <Skeleton className="h-4 w-16 rounded-full" />
+          </div>
+          <Skeleton className="h-5 w-3/5" />
+          <Skeleton className="h-3 w-2/5" />
+        </div>
+        <div className="shrink-0 space-y-1.5 text-right">
+          <Skeleton className="h-6 w-12 ml-auto" />
+          <Skeleton className="h-3 w-10 ml-auto" />
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Skeleton className="h-10" />
+        <Skeleton className="h-10" />
+        <Skeleton className="h-10" />
+      </div>
+      <div className="mt-3 flex gap-1.5">
+        <Skeleton className="h-7 w-16 rounded-md" />
+        <Skeleton className="h-7 w-16 rounded-md" />
+        <Skeleton className="h-7 w-16 rounded-md" />
       </div>
     </div>
   );
@@ -807,352 +852,6 @@ function CreateBatchDialog({
             if (newId) setContractId(newId);
           }}
         />
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function BatchActionDialog({
-  batchAction,
-  onClose,
-}: {
-  batchAction: { batch: Batch; tab: "event" | "feed" | "vaccination" } | null;
-  onClose: () => void;
-}) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
-    batchAction ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = (accountsData?.accounts ?? []).filter(
-    (a) => a.kind !== "CARD",
-  );
-
-  const [eventType, setEventType] = useState<
-    "PURCHASE" | "BIRTH" | "DEATH" | "SALE"
-  >("BIRTH");
-  const [count, setCount] = useState("1");
-  const [unitValue, setUnitValue] = useState("");
-  const [avgWeightKg, setAvgWeightKg] = useState("");
-  const [feedAmount, setFeedAmount] = useState("");
-  const [feedQuantity, setFeedQuantity] = useState("");
-  const [feedUnit, setFeedUnit] = useState("");
-  const [vaccine, setVaccine] = useState("");
-  const [nextDueDate, setNextDueDate] = useState("");
-  const [vaccinationCost, setVaccinationCost] = useState("");
-  const [date, setDate] = useState(today);
-  const [accountId, setAccountId] = useState("");
-  const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!batchAction) return;
-    /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
-    setEventType("BIRTH");
-    setCount("1");
-    setUnitValue("");
-    setAvgWeightKg("");
-    setFeedAmount("");
-    setFeedQuantity("");
-    setFeedUnit("");
-    setVaccine("");
-    setNextDueDate("");
-    setVaccinationCost("");
-    setDate(today);
-    setAccountId("");
-    setNotes("");
-    setError(null);
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [batchAction, today]);
-
-  if (!batchAction) return null;
-  const { batch, tab } = batchAction;
-
-  const isFinancial =
-    (tab === "event" && (eventType === "SALE" || eventType === "PURCHASE")) ||
-    tab === "feed" ||
-    (tab === "vaccination" && Number(vaccinationCost) > 0);
-
-  async function submit() {
-    setError(null);
-    setSubmitting(true);
-    try {
-      let url = "";
-      let payload: Record<string, unknown> = {};
-      if (tab === "event") {
-        url = `/api/livestock-batches/${batch.id}/events`;
-        payload = {
-          eventType,
-          date,
-          count: Number(count) || 0,
-          unitValue: unitValue ? Number(unitValue) : null,
-          avgWeightKg: avgWeightKg ? Number(avgWeightKg) : null,
-          notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
-        };
-      } else if (tab === "feed") {
-        url = `/api/livestock-batches/${batch.id}/feed`;
-        payload = {
-          date,
-          amount: Number(feedAmount) || 0,
-          quantity: feedQuantity ? Number(feedQuantity) : null,
-          unit: feedUnit || undefined,
-          notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
-        };
-      } else {
-        url = `/api/livestock-batches/${batch.id}/vaccination`;
-        payload = {
-          vaccine,
-          date,
-          nextDueDate: nextDueDate || null,
-          cost: vaccinationCost ? Number(vaccinationCost) : null,
-          notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
-        };
-      }
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body.error ?? "Failed");
-        return;
-      }
-      globalMutate(
-        `/api/livestock-batches?livestockId=${batch.livestock.id}&active=false`,
-      );
-      globalMutate("/api/livestock");
-      await mutateBalances();
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const showAvgWeight =
-    tab === "event" &&
-    (eventType === "PURCHASE" || eventType === "SALE");
-
-  return (
-    <Dialog open={batchAction !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            {tab === "event" ? (
-              <span className="inline-flex items-center gap-2">
-                <Activity className="h-4 w-4" /> {batch.name} · Event
-              </span>
-            ) : tab === "feed" ? (
-              <span className="inline-flex items-center gap-2">
-                <Utensils className="h-4 w-4" /> {batch.name} · Feed
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-2">
-                <Stethoscope className="h-4 w-4" /> {batch.name} · Vaccination
-              </span>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          {tab === "event" && (
-            <>
-              <div className="flex flex-wrap gap-1.5">
-                {(["BIRTH", "DEATH", "SALE", "PURCHASE"] as const).map((e) => (
-                  <Button
-                    key={e}
-                    type="button"
-                    size="sm"
-                    variant={eventType === e ? "default" : "outline"}
-                    onClick={() => setEventType(e)}
-                  >
-                    {e}
-                  </Button>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Count</Label>
-                  <Input
-                    inputMode="numeric"
-                    value={count}
-                    onChange={(e) =>
-                      setCount(e.target.value.replace(/\D/g, "").slice(0, 6))
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Date</Label>
-                  <DateInput
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                  />
-                </div>
-              </div>
-              {(eventType === "SALE" || eventType === "PURCHASE") && (
-                <div className="space-y-1">
-                  <Label className="text-xs">Unit value (₹)</Label>
-                  <AmountInput
-                    value={unitValue}
-                    onChange={setUnitValue}
-                    placeholder="Per animal"
-                  />
-                </div>
-              )}
-              {showAvgWeight && (
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Avg weight per animal (kg, optional)
-                  </Label>
-                  <Input
-                    inputMode="decimal"
-                    value={avgWeightKg}
-                    onChange={(e) =>
-                      setAvgWeightKg(
-                        e.target.value.replace(/[^\d.]/g, "").slice(0, 8),
-                      )
-                    }
-                    placeholder="2.10"
-                  />
-                  <p className="text-[10px] text-muted-foreground">
-                    Useful for FCR + contract payout math. Skip if you didn&rsquo;t
-                    weigh.
-                  </p>
-                </div>
-              )}
-              <p className="text-[11px] text-muted-foreground">
-                Current head: {batch.currentCount}. Birth/Purchase add, Death/Sale
-                subtract.
-              </p>
-            </>
-          )}
-          {tab === "feed" && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Cost (₹)</Label>
-                  <AmountInput value={feedAmount} onChange={setFeedAmount} />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Date</Label>
-                  <DateInput
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Quantity{" "}
-                    <span className="font-normal text-muted-foreground">
-                      (drives FCR)
-                    </span>
-                  </Label>
-                  <AmountInput
-                    value={feedQuantity}
-                    onChange={setFeedQuantity}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Unit</Label>
-                  <Input
-                    value={feedUnit}
-                    onChange={(e) => setFeedUnit(e.target.value)}
-                    placeholder="kg, bag, sack…"
-                    maxLength={20}
-                  />
-                </div>
-              </div>
-            </>
-          )}
-          {tab === "vaccination" && (
-            <>
-              <div className="space-y-1">
-                <Label className="text-xs">Vaccine</Label>
-                <Input
-                  value={vaccine}
-                  onChange={(e) => setVaccine(e.target.value)}
-                  maxLength={80}
-                  placeholder="Newcastle, Gumboro, FMD…"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Date</Label>
-                  <DateInput
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Next due date</Label>
-                  <DateInput
-                    value={nextDueDate}
-                    onChange={(e) => setNextDueDate(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Cost (₹, optional)</Label>
-                <AmountInput
-                  value={vaccinationCost}
-                  onChange={setVaccinationCost}
-                />
-              </div>
-            </>
-          )}
-
-          {isFinancial &&
-            (() => {
-              const isOutflow =
-                (tab === "event" && eventType === "PURCHASE") ||
-                tab === "feed" ||
-                tab === "vaccination";
-              const debitAmount = !isOutflow
-                ? 0
-                : tab === "feed"
-                  ? Number(feedAmount) || 0
-                  : tab === "vaccination"
-                    ? Number(vaccinationCost) || 0
-                    : (Number(count) || 0) * (Number(unitValue) || 0);
-              return (
-                <div className="space-y-1">
-                  <Label className="text-xs inline-flex items-center gap-1">
-                    <Wallet className="h-3 w-3" /> Pay from / receive into
-                  </Label>
-                  <NativeSelect
-                    value={accountId}
-                    onChange={setAccountId}
-                    options={groupAccountOptions(accounts, debitAmount)}
-                    searchable
-                  />
-                </div>
-              );
-            })()}
-
-          <DescriptionField
-            label="Notes"
-            value={notes}
-            onChange={setNotes}
-            placeholder="Optional notes…"
-            maxLength={500}
-            rows={2}
-          />
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={submitting}>
-            {submitting ? "Saving…" : "Save"}
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

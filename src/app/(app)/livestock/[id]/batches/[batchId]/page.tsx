@@ -23,6 +23,7 @@ import {
   Stethoscope,
   Truck,
   Users,
+  Utensils,
   Wallet,
 } from "lucide-react";
 import {
@@ -58,6 +59,10 @@ import { CloseBatchDialog } from "@/components/livestock/close-batch-dialog";
 import { EditBatchDialog } from "@/components/livestock/edit-batch-dialog";
 import { EditVaccinationDialog } from "@/components/livestock/edit-vaccination-dialog";
 import { EditFeedDialog } from "@/components/livestock/edit-feed-dialog";
+import {
+  BatchActionDialog,
+  type BatchActionTab,
+} from "@/components/livestock/batch-action-dialog";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -273,6 +278,7 @@ export default function BatchDetailPage({
   const [liftOpen, setLiftOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [actionTab, setActionTab] = useState<BatchActionTab | null>(null);
   const [editVaccination, setEditVaccination] = useState<
     BatchDetail["vaccinations"][number] | null
   >(null);
@@ -546,7 +552,7 @@ export default function BatchDetailPage({
         </Link>
       </div>
 
-      <header className="rounded-xl border bg-card p-5">
+      <header className="rounded-xl border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -601,7 +607,31 @@ export default function BatchDetailPage({
               </p>
             )}
           </div>
-          <div className="flex shrink-0 flex-wrap gap-1.5">
+          <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => setActionTab("event")}
+            >
+              <Activity className="h-3.5 w-3.5" /> Event
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => setActionTab("feed")}
+            >
+              <Utensils className="h-3.5 w-3.5" /> Feed
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => setActionTab("vaccination")}
+            >
+              <Stethoscope className="h-3.5 w-3.5" /> Vaccine
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -792,7 +822,7 @@ export default function BatchDetailPage({
       </section>
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="flex-wrap">
+        <TabsList className="flex w-full overflow-x-auto sm:w-auto sm:flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {showWeighingsTab && (
             <TabsTrigger value="weighings">
@@ -1038,7 +1068,7 @@ export default function BatchDetailPage({
             {weighings.length === 0 ? (
               <Empty msg="No weighings yet. Use the Weighing button up top to log arrival or interim weights — drives FCR + ADG." />
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -1116,7 +1146,7 @@ export default function BatchDetailPage({
           {feedLogs.length === 0 ? (
             <Empty msg="No feed logs yet. Log feed from the batch list to start tracking consumption + FCR." />
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>
@@ -1176,7 +1206,7 @@ export default function BatchDetailPage({
           {mortality.length === 0 ? (
             <Empty msg="No mortality recorded. Use the Mortality button up top — deaths auto-decrement the head count and culls are tracked separately." />
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>
@@ -1254,7 +1284,7 @@ export default function BatchDetailPage({
             {healthLogs.length === 0 ? (
               <Empty msg="No disease incidents recorded. Use the Health button up top to log symptoms + treatment." />
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -1348,7 +1378,7 @@ export default function BatchDetailPage({
             {vaccinations.length === 0 ? (
               <Empty msg="No vaccinations recorded yet." />
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -1446,7 +1476,7 @@ export default function BatchDetailPage({
               }
             />
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>
@@ -1524,7 +1554,7 @@ export default function BatchDetailPage({
             {animals.length === 0 ? (
               <Empty msg="No individual animals tracked yet — bulk-only batches can skip this." />
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -1686,7 +1716,7 @@ export default function BatchDetailPage({
               )}
             </div>
             {milkLogs.length === 0 ? null : (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -1855,7 +1885,7 @@ export default function BatchDetailPage({
               )}
             </div>
             {eggLogs.length > 0 && (
-              <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="overflow-x-auto rounded-xl border bg-card">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <tr>
@@ -2011,6 +2041,18 @@ export default function BatchDetailPage({
         isContract={isContract}
         netPnL={summary.net}
         onClosed={refresh}
+      />
+      <BatchActionDialog
+        key={`action-${actionTab ?? "none"}`}
+        open={!!actionTab}
+        onOpenChange={(o) => !o && setActionTab(null)}
+        batch={{
+          id: batch.id,
+          name: batch.name,
+          currentCount: batch.currentCount,
+          livestockId: batch.livestockId,
+        }}
+        tab={actionTab}
       />
       {editVaccination && (
         <EditVaccinationDialog
