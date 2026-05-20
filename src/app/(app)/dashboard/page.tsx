@@ -70,6 +70,7 @@ type Stats = {
   cardOutstanding: number;
   loanOutstanding: number;
   chargesOutstanding: number;
+  chargesIOwe: number;
 };
 
 type Cashflow = {
@@ -455,11 +456,21 @@ export default function DashboardPage() {
             />
           )}
           <SmallCard
-            title="Member charges"
+            title="They owe you"
             value={stats ? formatINR(stats.chargesOutstanding) : "—"}
+            hint="Across all member charges"
             icon={<Users className="h-4 w-4" />}
             href="/contacts"
           />
+          {stats && stats.chargesIOwe > 0 && (
+            <SmallCard
+              title="You owe contacts"
+              value={formatINR(stats.chargesIOwe)}
+              hint="Paid-by-contact + recoverable transfers"
+              icon={<Users className="h-4 w-4" />}
+              href="/contacts"
+            />
+          )}
         </section>
       </div>
     </div>

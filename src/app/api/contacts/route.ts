@@ -30,16 +30,36 @@ export async function GET() {
           amount: true,
           settledAmount: true,
           status: true,
+          direction: true,
         },
       }),
     ]);
 
-    const totalsByMember = new Map<string, { outstanding: number; settled: number }>();
+    // Direction-aware totals. The historical `outstanding` field only
+    // counted OWED_TO_USER ("they owe me") rows; mixing in USER_OWES
+    // ("I owe them" — created by the paidByContact flow) into the same
+    // figure misled users into thinking the contact owed them when the
+    // reverse was true. We now expose both legs separately and keep
+    // `outstanding` semantically tied to OWED_TO_USER for backward
+    // compatibility with any external readers.
+    type Totals = {
+      outstanding: number;
+      youOwe: number;
+      settled: number;
+    };
+    const totalsByMember = new Map<string, Totals>();
     for (const c of charges) {
       if (!c.beneficiaryContactId) continue;
-      const cur = totalsByMember.get(c.beneficiaryContactId) ?? { outstanding: 0, settled: 0 };
+      const cur =
+        totalsByMember.get(c.beneficiaryContactId) ??
+        ({ outstanding: 0, youOwe: 0, settled: 0 } as Totals);
       if (c.status !== "WRITTEN_OFF") {
-        cur.outstanding += Number(c.amount) - Number(c.settledAmount);
+        const remaining = Number(c.amount) - Number(c.settledAmount);
+        if (c.direction === "USER_OWES") {
+          cur.youOwe += remaining;
+        } else {
+          cur.outstanding += remaining;
+        }
       }
       cur.settled += Number(c.settledAmount);
       totalsByMember.set(c.beneficiaryContactId, cur);
@@ -47,7 +67,9 @@ export async function GET() {
 
     return NextResponse.json({
       members: members.map((m) => {
-        const t = totalsByMember.get(m.id) ?? { outstanding: 0, settled: 0 };
+        const t =
+          totalsByMember.get(m.id) ??
+          ({ outstanding: 0, youOwe: 0, settled: 0 } as Totals);
         return {
           id: m.id,
           name: m.name,

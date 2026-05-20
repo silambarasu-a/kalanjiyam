@@ -25,7 +25,7 @@ type Contact = {
   notes: string | null;
   active: boolean;
   linkedUser: { id: string; email: string; name: string } | null;
-  totals: { outstanding: number; settled: number };
+  totals: { outstanding: number; youOwe: number; settled: number };
 };
 
 
@@ -35,7 +35,17 @@ export default function ContactsPage() {
 
   const members = data?.members ?? [];
   const activeMembers = members.filter((m) => m.active);
-  const totalOutstanding = activeMembers.reduce((s, m) => s + m.totals.outstanding, 0);
+  // Direction-aware totals. "Outstanding" historically only meant
+  // "they owe me"; we now separately surface "you owe them" so the
+  // paidByContact flow doesn't get accounted in the wrong column.
+  const totalTheyOweMe = activeMembers.reduce(
+    (s, m) => s + m.totals.outstanding,
+    0,
+  );
+  const totalIOweThem = activeMembers.reduce(
+    (s, m) => s + m.totals.youOwe,
+    0,
+  );
   const totalSettled = members.reduce((s, m) => s + m.totals.settled, 0);
 
   return (
@@ -54,17 +64,24 @@ export default function ContactsPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         <StatCard
           label="Active contacts"
           value={String(activeMembers.length)}
           icon={<Users className="h-4 w-4" />}
         />
         <StatCard
-          label="Outstanding"
-          value={formatINR(totalOutstanding)}
+          label="They owe you"
+          value={formatINR(totalTheyOweMe)}
           icon={<Wallet className="h-4 w-4" />}
-          highlight={totalOutstanding > 0}
+          highlight={totalTheyOweMe > 0}
+        />
+        <StatCard
+          label="You owe them"
+          value={formatINR(totalIOweThem)}
+          icon={<Wallet className="h-4 w-4" />}
+          highlight={totalIOweThem > 0}
+          tone="negative"
         />
         <StatCard
           label="Settled to date"
@@ -101,24 +118,35 @@ function StatCard({
   value,
   icon,
   highlight,
+  tone = "default",
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   highlight?: boolean;
+  tone?: "default" | "negative";
 }) {
+  const highlightClass =
+    highlight && tone === "negative"
+      ? "border-amber-500/40 bg-amber-500/5"
+      : highlight
+        ? "border-primary/40 bg-primary/5"
+        : "";
   return (
-    <div
-      className={
-        "rounded-lg border bg-card p-4 " +
-        (highlight ? "border-primary/40 bg-primary/5" : "")
-      }
-    >
+    <div className={"rounded-lg border bg-card p-4 " + highlightClass}>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
-      <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+      <div
+        className={`mt-1 text-xl font-semibold tabular-nums ${
+          tone === "negative" && Number(value.replace(/[^\d]/g, "")) > 0
+            ? "text-amber-700 dark:text-amber-400"
+            : ""
+        }`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -152,12 +180,36 @@ function MemberRow({
         </div>
         {member.active && (
           <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Outstanding
-            </div>
-            <div className="text-sm font-semibold tabular-nums">
-              {formatINR(member.totals.outstanding)}
-            </div>
+            {member.totals.outstanding > 0 && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  They owe you
+                </div>
+                <div className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                  {formatINR(member.totals.outstanding)}
+                </div>
+              </div>
+            )}
+            {member.totals.youOwe > 0 && (
+              <div
+                className={
+                  member.totals.outstanding > 0 ? "mt-1" : ""
+                }
+              >
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  You owe
+                </div>
+                <div className="text-sm font-semibold tabular-nums text-amber-700 dark:text-amber-400">
+                  {formatINR(member.totals.youOwe)}
+                </div>
+              </div>
+            )}
+            {member.totals.outstanding === 0 &&
+              member.totals.youOwe === 0 && (
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Settled
+                </div>
+              )}
           </div>
         )}
       </Link>
