@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Force JS actions onto Node 24 so we're not pinned to the deprecated
+# Node 20 runtime (dawidd6/action-send-mail@v3 still bundles Node 20).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   backup:
     runs-on: ubuntu-latest
@@ -34,8 +39,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # pg_dump must be >= server major version. Bump the postgres
-          # image tag when you upgrade the database engine.
           docker run --rm \
             -e DATABASE_URL \
             -e PGCONNECT_TIMEOUT=15 \
@@ -77,24 +80,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # NOTE: errors are NOT suppressed. If this step reports zero
+          # objects right after a successful upload it's almost always
+          # because the IAM user is missing s3:ListBucket on the prefix.
           aws s3api list-objects-v2 \
             --bucket "$BUCKET" \
             --prefix "$PREFIX/" \
-            --query 'reverse(sort_by(Contents,&Key))[].Key' \
-            --output text 2>/dev/null \
-            | tr '\t' '\n' \
-            | grep -E '\.dump$' > all-keys.txt || true
+            --query 'Contents[].Key' \
+            --output text > raw-keys.txt
+
+          # aws prints the literal string "None" when Contents is null
+          # (genuinely empty bucket). Treat that as zero matches without
+          # masking a real auth error — those exit non-zero above.
+          if [ ! -s raw-keys.txt ] || grep -qx "None" raw-keys.txt; then
+            : > all-keys.txt
+          else
+            tr '\t' '\n' < raw-keys.txt | grep -E '\.dump$' | sort -r > all-keys.txt
+          fi
 
           TOTAL=$(wc -l < all-keys.txt | tr -d ' ')
           KEEP=3
-          {
-            echo "found=$TOTAL"
-            echo "kept<<EOF"
-            head -n "$KEEP" all-keys.txt
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "Found $TOTAL backup objects under $PREFIX/"
 
           DELETED_FILE=$(mktemp)
+          : > "$DELETED_FILE"
           if [ "$TOTAL" -gt "$KEEP" ]; then
             tail -n +"$((KEEP+1))" all-keys.txt > "$DELETED_FILE"
             while IFS= read -r K; do
@@ -103,10 +112,130 @@ jobs:
               aws s3 rm "s3://$BUCKET/$K"
             done < "$DELETED_FILE"
           fi
+
+          DEL_COUNT=$(grep -c '\S' "$DELETED_FILE" || true)
+          KEPT_COUNT=$(head -n "$KEEP" all-keys.txt | grep -c '\S' || true)
           {
-            echo "deleted<<EOF"
-            cat "$DELETED_FILE" 2>/dev/null || true
-            echo "EOF"
+            echo "found=$TOTAL"
+            echo "kept_count=$KEPT_COUNT"
+            echo "del_count=$DEL_COUNT"
+            echo "kept<<KEPTEOF"
+            head -n "$KEEP" all-keys.txt
+            echo "KEPTEOF"
+            echo "deleted<<DELEOF"
+            cat "$DELETED_FILE"
+            echo "DELEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compose success email
+        if: success()
+        id: ok_email
+        env:
+          TODAY:    ${{ steps.meta.outputs.today }}
+          KEY:      ${{ steps.meta.outputs.key }}
+          SIZE:     ${{ steps.dump.outputs.size }}
+          FOUND:    ${{ steps.prune.outputs.found }}
+          KEPT:     ${{ steps.prune.outputs.kept }}
+          PRUNED:   ${{ steps.prune.outputs.deleted }}
+          KEPT_N:   ${{ steps.prune.outputs.kept_count }}
+          PRUNE_N:  ${{ steps.prune.outputs.del_count }}
+          RUN_URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          YEAR=$(date -u +%Y)
+          if   [ "$SIZE" -ge 1048576 ]; then SIZE_H=$(awk "BEGIN{printf \"%.2f MB\", $SIZE/1048576}")
+          elif [ "$SIZE" -ge 1024 ];    then SIZE_H=$(awk "BEGIN{printf \"%.2f KB\", $SIZE/1024}")
+          else SIZE_H="$SIZE bytes"
+          fi
+
+          render_html_list() {
+            local input="$1" muted="$2"
+            if [ -z "$(printf "%s" "$input" | tr -d '[:space:]')" ]; then
+              if [ "$muted" = "muted" ]; then
+                printf '<span style="color:#9CA3AF;font-style:italic;">none</span>'
+              else
+                printf '<span style="color:#9CA3AF;font-style:italic;">none yet</span>'
+              fi
+              return
+            fi
+            printf '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;">'
+            printf "%s" "$input" | while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              printf '<div>%s</div>' "$line"
+            done
+            printf '</div>'
+          }
+
+          KEPT_HTML=$(render_html_list "$KEPT" "ok")
+          PRUNED_HTML=$(render_html_list "$PRUNED" "muted")
+
+          KEPT_TEXT=$(printf "%s" "$KEPT"   | sed '/^$/d' | sed 's/^/    /')
+          PRUNED_TEXT=$(printf "%s" "$PRUNED" | sed '/^$/d' | sed 's/^/    /')
+          [ -z "$KEPT_TEXT"   ] && KEPT_TEXT="    (none yet)"
+          [ -z "$PRUNED_TEXT" ] && PRUNED_TEXT="    (none)"
+
+          cat > /tmp/email.html <<HTMLEOF
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><title>Backup OK · $TODAY</title></head>
+          <body style="margin:0;padding:0;background:#FAFAFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#0A0A0B;">
+            <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Daily database snapshot saved to S3 on $TODAY.</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FAFAFB;padding:32px 0;">
+              <tr><td align="center">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
+                  <tr><td style="padding:24px 32px;border-bottom:1px solid #E5E7EB;">
+                    <span style="font-size:20px;font-weight:600;color:#047857;letter-spacing:-0.01em;">Kalanjiyam</span>
+                  </td></tr>
+                  <tr><td style="padding:32px;font-size:15px;line-height:1.6;color:#0A0A0B;">
+                    <div style="margin:0 0 16px 0;"><span style="display:inline-block;padding:4px 10px;background:#ECFDF5;color:#047857;border:1px solid rgba(4,120,87,0.13);border-radius:999px;font-size:11px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase;">Database backup</span></div>
+                    <p style="margin:0 0 8px 0;font-size:18px;font-weight:600;color:#0A0A0B;line-height:1.4;">Backup completed</p>
+                    <p style="margin:0 0 20px 0;color:#6B7280;">Daily snapshot saved to S3 on <strong style="color:#0A0A0B;">$TODAY</strong>.</p>
+                    <div style="background:#ECFDF5;border:1px solid rgba(4,120,87,0.13);border-radius:10px;padding:16px 18px;margin:0 0 20px 0;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
+                        <tr><td style="padding:4px 12px 4px 0;color:#6B7280;width:96px;vertical-align:top;">Key</td><td style="padding:4px 0;color:#0A0A0B;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all;">$KEY</td></tr>
+                        <tr><td style="padding:4px 12px 4px 0;color:#6B7280;vertical-align:top;">Size</td><td style="padding:4px 0;color:#0A0A0B;">$SIZE_H</td></tr>
+                        <tr><td style="padding:4px 12px 4px 0;color:#6B7280;vertical-align:top;">Retained</td><td style="padding:4px 0;color:#0A0A0B;">$KEPT_HTML</td></tr>
+                        <tr><td style="padding:4px 12px 4px 0;color:#6B7280;vertical-align:top;">Pruned</td><td style="padding:4px 0;color:#0A0A0B;">$PRUNED_HTML</td></tr>
+                      </table>
+                    </div>
+                    <p style="margin:0;"><a href="$RUN_URL" style="display:inline-block;padding:10px 18px;background:#047857;color:#FFFFFF;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">View run logs</a></p>
+                  </td></tr>
+                  <tr><td style="padding:20px 32px 24px 32px;background:#FAFAFB;border-top:1px solid #E5E7EB;font-size:12px;color:#6B7280;line-height:1.7;">
+                    <div>&copy; $YEAR Kalanjiyam &middot; Household finance &amp; farm management</div>
+                    <div style="margin-top:4px;">Automated message from the daily backup workflow.</div>
+                  </td></tr>
+                </table>
+              </td></tr>
+            </table>
+          </body></html>
+          HTMLEOF
+
+          cat > /tmp/email.txt <<TXTEOF
+          [Kalanjiyam] Database backup completed
+
+          Daily snapshot saved to S3 on $TODAY.
+
+            Key:   $KEY
+            Size:  $SIZE_H
+
+            Retained ($KEPT_N):
+          $KEPT_TEXT
+
+            Pruned ($PRUNE_N):
+          $PRUNED_TEXT
+
+          View run logs: $RUN_URL
+
+          — Kalanjiyam · Automated backup notification
+          TXTEOF
+
+          {
+            echo "html<<HTMLOUT"
+            cat /tmp/email.html
+            echo "HTMLOUT"
+            echo "text<<TXTOUT"
+            cat /tmp/email.txt
+            echo "TXTOUT"
           } >> "$GITHUB_OUTPUT"
 
       - name: Notify success
@@ -119,22 +248,84 @@ jobs:
           password:       ${{ secrets.SMTP_PASS }}
           from:           Kalanjiyam Backup <${{ secrets.SMTP_USER }}>
           to:             ${{ secrets.BACKUP_NOTIFY_EMAIL }}
-          subject:        "[Kalanjiyam] Backup OK - ${{ steps.meta.outputs.today }}"
+          reply_to:       ${{ secrets.SMTP_USER }}
+          subject:        "Kalanjiyam · Backup OK · ${{ steps.meta.outputs.today }}"
           convert_markdown: false
-          body: |
-            Database backup completed successfully.
+          body:           ${{ steps.ok_email.outputs.text }}
+          html_body:      ${{ steps.ok_email.outputs.html }}
 
-            Key:    ${{ steps.meta.outputs.key }}
-            Size:   ${{ steps.dump.outputs.size }} bytes
-            Total in bucket: ${{ steps.prune.outputs.found }}
+      - name: Compose failure email
+        if: failure()
+        id: fail_email
+        env:
+          TODAY:   ${{ steps.meta.outputs.today }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          YEAR=$(date -u +%Y)
 
-            Kept (newest 3):
-            ${{ steps.prune.outputs.kept }}
+          cat > /tmp/email.html <<HTMLEOF
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="color-scheme" content="light"/><title>Backup FAILED · $TODAY</title></head>
+          <body style="margin:0;padding:0;background:#FAFAFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#0A0A0B;">
+            <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Daily database backup failed on $TODAY. Existing backups in S3 are untouched.</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FAFAFB;padding:32px 0;">
+              <tr><td align="center">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
+                  <tr><td style="padding:24px 32px;border-bottom:1px solid #E5E7EB;">
+                    <span style="font-size:20px;font-weight:600;color:#047857;letter-spacing:-0.01em;">Kalanjiyam</span>
+                  </td></tr>
+                  <tr><td style="padding:32px;font-size:15px;line-height:1.6;color:#0A0A0B;">
+                    <div style="margin:0 0 16px 0;"><span style="display:inline-block;padding:4px 10px;background:#FEF2F2;color:#B91C1C;border:1px solid rgba(185,28,28,0.18);border-radius:999px;font-size:11px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase;">Backup failed</span></div>
+                    <p style="margin:0 0 8px 0;font-size:18px;font-weight:600;color:#0A0A0B;line-height:1.4;">Daily backup did not complete</p>
+                    <p style="margin:0 0 20px 0;color:#6B7280;">The scheduled snapshot for <strong style="color:#0A0A0B;">$TODAY</strong> failed. Recent backups already in S3 are untouched.</p>
+                    <div style="background:#FEF2F2;border:1px solid rgba(185,28,28,0.18);border-radius:10px;padding:14px 18px;margin:0 0 20px 0;font-size:13px;">
+                      <p style="margin:0 0 8px 0;color:#0A0A0B;font-weight:600;">Triage checklist</p>
+                      <ul style="margin:0;padding-left:18px;color:#6B7280;line-height:1.7;">
+                        <li>Is the DB reachable from GitHub Actions runners (SSL only, no IP allowlist)?</li>
+                        <li>Is the <code style="background:#F3F4F6;padding:1px 5px;border-radius:4px;font-size:12px;">postgres:NN</code> image major version &gt;= server major?</li>
+                        <li>Has <code style="background:#F3F4F6;padding:1px 5px;border-radius:4px;font-size:12px;">AWS_ACCESS_KEY_ID</code> been rotated or scoped away from the bucket?</li>
+                        <li>Did <code style="background:#F3F4F6;padding:1px 5px;border-radius:4px;font-size:12px;">DB_BACKUP_DATABASE_URL</code> change?</li>
+                      </ul>
+                    </div>
+                    <p style="margin:0;"><a href="$RUN_URL" style="display:inline-block;padding:10px 18px;background:#B91C1C;color:#FFFFFF;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">Open failed run</a></p>
+                  </td></tr>
+                  <tr><td style="padding:20px 32px 24px 32px;background:#FAFAFB;border-top:1px solid #E5E7EB;font-size:12px;color:#6B7280;line-height:1.7;">
+                    <div>&copy; $YEAR Kalanjiyam &middot; Household finance &amp; farm management</div>
+                    <div style="margin-top:4px;">Automated message from the daily backup workflow.</div>
+                  </td></tr>
+                </table>
+              </td></tr>
+            </table>
+          </body></html>
+          HTMLEOF
 
-            Pruned (older than 3 days):
-            ${{ steps.prune.outputs.deleted }}
+          cat > /tmp/email.txt <<TXTEOF
+          [Kalanjiyam] Daily backup FAILED for $TODAY
 
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          The scheduled snapshot for $TODAY did not complete.
+          Recent backups already in S3 are untouched.
+
+          Triage:
+            - Is the DB reachable from GitHub Actions runners (SSL only)?
+            - Is the postgres:NN image major version >= server major?
+            - Has AWS_ACCESS_KEY_ID been rotated?
+            - Did DB_BACKUP_DATABASE_URL change?
+
+          Open failed run: $RUN_URL
+
+          — Kalanjiyam · Automated backup notification
+          TXTEOF
+
+          {
+            echo "html<<HTMLOUT"
+            cat /tmp/email.html
+            echo "HTMLOUT"
+            echo "text<<TXTOUT"
+            cat /tmp/email.txt
+            echo "TXTOUT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Notify failure
         if: failure()
@@ -146,15 +337,8 @@ jobs:
           password:       ${{ secrets.SMTP_PASS }}
           from:           Kalanjiyam Backup <${{ secrets.SMTP_USER }}>
           to:             ${{ secrets.BACKUP_NOTIFY_EMAIL }}
-          subject:        "[Kalanjiyam] Backup FAILED - ${{ steps.meta.outputs.today }}"
+          reply_to:       ${{ secrets.SMTP_USER }}
+          subject:        "Kalanjiyam · Backup FAILED · ${{ steps.meta.outputs.today }}"
           convert_markdown: false
-          body: |
-            Database backup FAILED for ${{ steps.meta.outputs.today }}.
-
-            Run logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            Triage checklist:
-              - Was the DB reachable from GitHub Actions runners (IP allowlist / SSL)?
-              - Is the postgres:NN image major version >= server major?
-              - Is AWS_ACCESS_KEY_ID still valid for the bucket?
-              - Is DB_BACKUP_DATABASE_URL still valid?
+          body:           ${{ steps.fail_email.outputs.text }}
+          html_body:      ${{ steps.fail_email.outputs.html }}
