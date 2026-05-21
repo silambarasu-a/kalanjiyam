@@ -1,0 +1,160 @@
+name: DB Backup
+
+on:
+  schedule:
+    # 18:30 UTC = 00:00 IST — daily, off-peak.
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve date + S3 key
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TODAY=$(date -u +%Y-%m-%d)
+          PREFIX="${{ secrets.AWS_S3_BACKUP_PREFIX }}"
+          PREFIX="${PREFIX:-db-backups}"
+          PREFIX="${PREFIX#/}"; PREFIX="${PREFIX%/}"
+          echo "today=$TODAY"             >> "$GITHUB_OUTPUT"
+          echo "prefix=$PREFIX"           >> "$GITHUB_OUTPUT"
+          echo "key=$PREFIX/$TODAY.dump"  >> "$GITHUB_OUTPUT"
+
+      - name: pg_dump → file
+        id: dump
+        env:
+          DATABASE_URL: ${{ secrets.DB_BACKUP_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # pg_dump must be >= server major version. Bump the postgres
+          # image tag when you upgrade the database engine.
+          docker run --rm \
+            -e DATABASE_URL \
+            -e PGCONNECT_TIMEOUT=15 \
+            -v "$PWD":/work -w /work \
+            postgres:17-alpine \
+            sh -c 'pg_dump --no-owner --no-privileges --format=custom "$DATABASE_URL" > backup.dump' \
+            2> dump.log
+
+          SIZE=$(stat -c %s backup.dump)
+          if [ "$SIZE" -lt 1024 ]; then
+            echo "::error::Backup file suspiciously small ($SIZE bytes) — likely failed"
+            tail -50 dump.log || true
+            exit 1
+          fi
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    ${{ secrets.AWS_S3_REGION }}
+          BUCKET:                ${{ secrets.AWS_S3_BUCKET }}
+          KEY:                   ${{ steps.meta.outputs.key }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp backup.dump "s3://$BUCKET/$KEY" \
+            --content-type application/octet-stream \
+            --no-progress
+
+      - name: Prune backups (keep newest 3)
+        id: prune
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    ${{ secrets.AWS_S3_REGION }}
+          BUCKET:                ${{ secrets.AWS_S3_BUCKET }}
+          PREFIX:                ${{ steps.meta.outputs.prefix }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api list-objects-v2 \
+            --bucket "$BUCKET" \
+            --prefix "$PREFIX/" \
+            --query 'reverse(sort_by(Contents,&Key))[].Key' \
+            --output text 2>/dev/null \
+            | tr '\t' '\n' \
+            | grep -E '\.dump$' > all-keys.txt || true
+
+          TOTAL=$(wc -l < all-keys.txt | tr -d ' ')
+          KEEP=3
+          {
+            echo "found=$TOTAL"
+            echo "kept<<EOF"
+            head -n "$KEEP" all-keys.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          DELETED_FILE=$(mktemp)
+          if [ "$TOTAL" -gt "$KEEP" ]; then
+            tail -n +"$((KEEP+1))" all-keys.txt > "$DELETED_FILE"
+            while IFS= read -r K; do
+              [ -z "$K" ] && continue
+              echo "Pruning: $K"
+              aws s3 rm "s3://$BUCKET/$K"
+            done < "$DELETED_FILE"
+          fi
+          {
+            echo "deleted<<EOF"
+            cat "$DELETED_FILE" 2>/dev/null || true
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port:    ${{ secrets.SMTP_PORT }}
+          username:       ${{ secrets.SMTP_USER }}
+          password:       ${{ secrets.SMTP_PASS }}
+          from:           Kalanjiyam Backup <${{ secrets.SMTP_USER }}>
+          to:             ${{ secrets.BACKUP_NOTIFY_EMAIL }}
+          subject:        "[Kalanjiyam] Backup OK - ${{ steps.meta.outputs.today }}"
+          convert_markdown: false
+          body: |
+            Database backup completed successfully.
+
+            Key:    ${{ steps.meta.outputs.key }}
+            Size:   ${{ steps.dump.outputs.size }} bytes
+            Total in bucket: ${{ steps.prune.outputs.found }}
+
+            Kept (newest 3):
+            ${{ steps.prune.outputs.kept }}
+
+            Pruned (older than 3 days):
+            ${{ steps.prune.outputs.deleted }}
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port:    ${{ secrets.SMTP_PORT }}
+          username:       ${{ secrets.SMTP_USER }}
+          password:       ${{ secrets.SMTP_PASS }}
+          from:           Kalanjiyam Backup <${{ secrets.SMTP_USER }}>
+          to:             ${{ secrets.BACKUP_NOTIFY_EMAIL }}
+          subject:        "[Kalanjiyam] Backup FAILED - ${{ steps.meta.outputs.today }}"
+          convert_markdown: false
+          body: |
+            Database backup FAILED for ${{ steps.meta.outputs.today }}.
+
+            Run logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Triage checklist:
+              - Was the DB reachable from GitHub Actions runners (IP allowlist / SSL)?
+              - Is the postgres:NN image major version >= server major?
+              - Is AWS_ACCESS_KEY_ID still valid for the bucket?
+              - Is DB_BACKUP_DATABASE_URL still valid?
