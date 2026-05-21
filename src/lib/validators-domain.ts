@@ -436,6 +436,21 @@ export const livestockEventCreateSchema = z
     { message: "Sale/Purchase needs a unit value", path: ["unitValue"] }
   );
 
+export const livestockEventUpdateSchema = z.object({
+  // eventType + count drive head-count cascades; both are safely
+  // editable here because the PATCH recomputes the count delta.
+  eventType: z.enum(["PURCHASE", "BIRTH", "DEATH", "SALE"]).optional(),
+  date: z.string().optional(),
+  count: z.number().int().positive().optional(),
+  // Editing money-affecting fields is forbidden when a Transaction is
+  // already linked (same discipline as feed/milk/egg edits — re-pricing
+  // means delete + recreate so the linked txn stays honest).
+  unitValue: z.number().nonnegative().optional().nullable(),
+  avgWeightKg: z.number().positive().optional().nullable(),
+  totalWeightKg: z.number().positive().optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
 export const weighingLogCreateSchema = z.object({
   animalId: z.string().uuid().optional().nullable(),
   phase: z.enum(["ARRIVAL", "INTERIM", "WEEKLY", "EXIT"]),

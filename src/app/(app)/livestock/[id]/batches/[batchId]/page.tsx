@@ -59,6 +59,7 @@ import { CloseBatchDialog } from "@/components/livestock/close-batch-dialog";
 import { EditBatchDialog } from "@/components/livestock/edit-batch-dialog";
 import { EditVaccinationDialog } from "@/components/livestock/edit-vaccination-dialog";
 import { EditFeedDialog } from "@/components/livestock/edit-feed-dialog";
+import { EditEventDialog } from "@/components/livestock/edit-event-dialog";
 import {
   BatchActionDialog,
   type BatchActionTab,
@@ -294,6 +295,9 @@ export default function BatchDetailPage({
   const [editHealth, setEditHealth] = useState<
     BatchDetail["healthLogs"][number] | null
   >(null);
+  const [editEvent, setEditEvent] = useState<
+    BatchDetail["events"][number] | null
+  >(null);
   const [editWeighing, setEditWeighing] = useState<
     BatchDetail["weighings"][number] | null
   >(null);
@@ -446,6 +450,24 @@ export default function BatchDetailPage({
       { method: "DELETE" },
     );
     if (res.ok) refresh();
+  }
+  async function deleteEvent(id: string) {
+    if (
+      !confirm(
+        "Delete this event? The head count will be re-balanced and any linked transaction removed.",
+      )
+    )
+      return;
+    const res = await fetch(
+      `/api/livestock-batches/${batchId}/events/${id}`,
+      { method: "DELETE" },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(body.error ?? "Failed to delete");
+      return;
+    }
+    refresh();
   }
   async function deleteFeed(id: string) {
     if (
@@ -1490,6 +1512,7 @@ export default function BatchDetailPage({
                       Unit ₹
                     </th>
                     <th className="px-3 py-2 text-right font-medium">Total</th>
+                    <th className="px-3 py-2 text-right" />
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -1522,6 +1545,24 @@ export default function BatchDetailPage({
                         </td>
                         <td className="px-3 py-2 text-right text-xs font-medium tabular-nums">
                           {total != null ? formatINR(total) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditEvent(e)}
+                              className="text-[10px] hover:underline"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteEvent(e.id)}
+                              className="text-[10px] text-destructive hover:underline"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2071,6 +2112,16 @@ export default function BatchDetailPage({
           onOpenChange={(o) => !o && setEditFeed(null)}
           batchId={batchId}
           initial={editFeed}
+          onSaved={refresh}
+        />
+      )}
+      {editEvent && (
+        <EditEventDialog
+          key={`edit-event-${editEvent.id}`}
+          open={!!editEvent}
+          onOpenChange={(o) => !o && setEditEvent(null)}
+          batchId={batchId}
+          initial={editEvent}
           onSaved={refresh}
         />
       )}

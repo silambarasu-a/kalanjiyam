@@ -4,7 +4,12 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { livestockEventCreateSchema } from "@/lib/validators-domain";
-import { TransactionType, LivestockEventType } from "@/generated/prisma/client";
+import {
+  LivestockEventType,
+  TransactionKind,
+  TransactionType,
+} from "@/generated/prisma/client";
+import { resolveLivestockCategoryId } from "@/lib/livestock-category";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -78,6 +83,14 @@ export async function POST(
     const totalAmount =
       data.unitValue != null ? Number((data.unitValue * data.count).toFixed(2)) : 0;
 
+    // Look up the right category so the transaction shows up bucketed
+    // correctly on the cashflow / agri-income reports. Null is tolerated
+    // when the seed is missing (event still succeeds, txn just gets
+    // "Uncategorised").
+    const categoryId = isFinancial
+      ? await resolveLivestockCategoryId(ctx.workspaceId, data.eventType)
+      : null;
+
     const created = await prisma.$transaction(async (tx) => {
       let txnId: string | null = null;
       if (isFinancial && totalAmount > 0) {
@@ -88,6 +101,11 @@ export async function POST(
               data.eventType === "SALE"
                 ? TransactionType.INCOME
                 : TransactionType.EXPENSE,
+            kind:
+              data.eventType === "SALE"
+                ? TransactionKind.AGRI_INCOME
+                : TransactionKind.FARM_DEV,
+            categoryId,
             amount: totalAmount,
             description: `${data.eventType === "SALE" ? "Sale" : "Purchase"} of ${data.count} (${data.notes ?? "livestock"})`,
             date: new Date(data.date),
@@ -107,6 +125,11 @@ export async function POST(
           date: new Date(data.date),
           count: data.count,
           unitValue: data.unitValue ?? null,
+          // Phase-1 added these to the schema + validator; the route
+          // wasn't reading them. Now per-kg sale/purchase + lift event
+          // both land here with weight context preserved.
+          avgWeightKg: data.avgWeightKg ?? null,
+          totalWeightKg: data.totalWeightKg ?? null,
           notes: data.notes,
           transactionId: txnId,
         },

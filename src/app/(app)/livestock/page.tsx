@@ -2,7 +2,6 @@
 import { toast } from "sonner";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import {
   ArrowRight,
@@ -30,6 +29,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BulkImportDialog } from "@/components/livestock/bulk-import-dialog";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 
 type Livestock = {
   id: string;
@@ -247,10 +247,11 @@ export default function LivestockPage() {
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             {contracts.map((c) => (
-              <Link
+              <NavigatingCard
                 key={c.id}
                 href={`/livestock-contracts/${c.id}`}
-                className="rounded-xl border bg-card p-3 transition-shadow hover:shadow-sm"
+                ariaLabel={`Open ${c.integratorName} contract`}
+                className="rounded-xl border bg-card p-3 hover:shadow-sm hover:border-primary/30"
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
@@ -267,7 +268,7 @@ export default function LivestockPage() {
                     {c.batchCount} batch{c.batchCount === 1 ? "" : "es"}
                   </span>
                 </div>
-              </Link>
+              </NavigatingCard>
             ))}
           </div>
         </section>
@@ -301,16 +302,22 @@ function LivestockCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const stop = (handler: () => void) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handler();
+  };
   return (
-    <div className="group rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm">
+    <NavigatingCard
+      href={`/livestock/${livestock.id}`}
+      ariaLabel={`Open ${livestock.name}`}
+      className="rounded-xl border bg-card p-4 hover:shadow-sm hover:border-primary/30"
+    >
       <div className="flex items-start gap-3">
         <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <PawPrint className="h-4 w-4" />
         </div>
-        <Link
-          href={`/livestock/${livestock.id}`}
-          className="min-w-0 flex-1"
-        >
+        <div className="min-w-0 flex-1">
           <h3 className="truncate text-base font-semibold">{livestock.name}</h3>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
             {livestock.species && <span>{livestock.species}</span>}
@@ -329,12 +336,12 @@ function LivestockCard({
               {livestock.description}
             </p>
           )}
-        </Link>
+        </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon"
-            onClick={onEdit}
+            onClick={stop(onEdit)}
             aria-label="Edit"
           >
             <Pencil className="h-4 w-4" />
@@ -342,20 +349,17 @@ function LivestockCard({
           <Button
             variant="ghost"
             size="icon"
-            onClick={onDelete}
+            onClick={stop(onDelete)}
             aria-label="Delete"
           >
             <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
         </div>
       </div>
-      <Link
-        href={`/livestock/${livestock.id}`}
-        className="mt-3 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-      >
+      <span className="mt-3 inline-flex items-center gap-1 text-[11px] text-muted-foreground group-hover:text-foreground">
         Open batches <ArrowRight className="h-3 w-3" />
-      </Link>
-    </div>
+      </span>
+    </NavigatingCard>
   );
 }
 

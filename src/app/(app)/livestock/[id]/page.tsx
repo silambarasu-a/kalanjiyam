@@ -32,6 +32,7 @@ import {
   BatchActionDialog,
   type BatchActionTab,
 } from "@/components/livestock/batch-action-dialog";
+import { NavigatingCard } from "@/components/ui/navigating-card";
 import { formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -352,9 +353,10 @@ function BatchCard({
   };
 
   return (
-    <Link
+    <NavigatingCard
       href={`/livestock/${batch.livestock.id}/batches/${batch.id}`}
-      className="group block rounded-xl border bg-card p-4 transition-shadow hover:shadow-sm hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      ariaLabel={`Open batch ${batch.name}`}
+      className="rounded-xl border bg-card p-4 hover:shadow-sm hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -455,7 +457,7 @@ function BatchCard({
           Details <ArrowRight className="h-3 w-3" />
         </span>
       </div>
-    </Link>
+    </NavigatingCard>
   );
 }
 
