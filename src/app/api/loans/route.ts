@@ -6,6 +6,7 @@ import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { loanCreateSchema } from "@/lib/validators-domain";
 import { calculateEMI, countPaidEmis, monthsPerCycle, advanceByCycle } from "@/lib/loan-math";
 import { nextStatementDueDate } from "@/lib/statement-period";
+import { computeAccountBalance } from "@/lib/account-balance";
 import {
   LoanKind,
   LoanSource,
@@ -121,6 +122,7 @@ export async function POST(request: Request) {
     // For CREDIT_CARD_LOAN we also need the card's linked account so we can
      // read the statementDate / gracePeriod for billing-cycle math.
     let cardStatement: { statementDate: number | null; gracePeriod: number | null } | null = null;
+    let cardAccountId: string | null = null;
     if (data.cardId) {
       const card = await prisma.card.findUnique({
         where: { id: data.cardId },
@@ -134,6 +136,7 @@ export async function POST(request: Request) {
       if (!canAccessRecord(session, card)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      cardAccountId = card.accountId ?? null;
       cardStatement = card.account
         ? {
             statementDate: card.account.statementDate,
@@ -276,6 +279,32 @@ export async function POST(request: Request) {
     const initialOutstanding = data.outstanding ?? data.principal;
     const isAlreadyPaid = initialOutstanding <= 0;
 
+    // CARD_EMI reconciliation. An existing card EMI's outstanding is already
+    // sitting in the linked card's statement balance (the user entered it as
+    // the card's "Existing outstanding"), so it's *already* reducing the
+    // card's available limit. Move that principal out of the card's
+    // outstanding into this loan (the EMI bucket) so the limit isn't
+    // double-counted — and so future EMI payments, which shrink the loan,
+    // free the limit back up. Capped at the card's current balance so we
+    // never push it negative or reclaim unrelated revolving spend. The moved
+    // amount is recorded on the loan (cardLimitOffset) so it can be restored
+    // if the EMI is deleted.
+    let cardLimitOffset = 0;
+    let cardOpeningAfter: number | null = null;
+    if (
+      data.source === "CARD_EMI" &&
+      cardAccountId &&
+      !isAlreadyPaid &&
+      initialOutstanding > 0
+    ) {
+      const bal = await computeAccountBalance(cardAccountId);
+      cardLimitOffset = Math.min(initialOutstanding, Math.max(0, bal.balance));
+      if (cardLimitOffset > 0) {
+        cardOpeningAfter =
+          Math.round((bal.openingBalance - cardLimitOffset) * 100) / 100;
+      }
+    }
+
     const result = await prisma.$transaction(async (tx) => {
       const loan = await tx.loan.create({
         data: {
@@ -310,6 +339,7 @@ export async function POST(request: Request) {
               ? data.loanGracePeriod ?? null
               : null,
           isExisting: data.isExisting ?? false,
+          cardLimitOffset,
           startedAt: new Date(data.startedAt),
           maturityAt: computedMaturity,
           nextDueDate: isAlreadyPaid ? null : computedNextDueDate,
@@ -329,6 +359,15 @@ export async function POST(request: Request) {
             : undefined,
         },
       });
+
+      // Apply the CARD_EMI reconciliation: shrink the linked card account's
+      // outstanding by the moved principal so it now lives only in this loan.
+      if (cardOpeningAfter != null && cardAccountId) {
+        await tx.account.update({
+          where: { id: cardAccountId },
+          data: { openingBalance: cardOpeningAfter },
+        });
+      }
 
       // Disbursement INCOME — full principal credited to the chosen
       // account. Applies to both BANK loans (passbook credit from the bank)

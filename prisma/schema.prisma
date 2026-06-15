@@ -1641,6 +1641,13 @@ model Loan {
   loanStatementDate Int?
   loanGracePeriod   Int?
   isExisting        Boolean       @default(false)
+  // CARD_EMI only: how much of this EMI's principal was reconciled OUT of
+  // the linked card's outstanding statement balance when the EMI was added,
+  // because that amount was already blocking the card's available limit.
+  // The principal now lives solely in this loan (the EMI bucket), so the
+  // limit isn't double-counted. Stored so the reconciliation can be undone
+  // (added back to the card's outstanding) if the EMI is deleted.
+  cardLimitOffset   Decimal       @default(0) @db.Decimal(14, 2)
   foreclosedAt      DateTime?
   foreclosureAmt    Decimal?      @db.Decimal(14, 2)
   startedAt         DateTime

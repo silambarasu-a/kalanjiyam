@@ -1077,6 +1077,27 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </div>
       )}
 
+      {/* Card EMIs are always treated as already-existing (the purchase
+          expense is recorded elsewhere), so there's no "existing?" toggle —
+          but a plan you've already been paying down has a reduced balance.
+          Let the user enter it; blank means a brand-new conversion at full
+          principal. */}
+      {source === "CARD_EMI" && !editing && (
+        <label className="block">
+          <span className="text-xs font-medium">Current outstanding (₹)</span>
+          <AmountInput
+            value={outstanding}
+            onChange={setOutstanding}
+            placeholder={principalNum > 0 ? String(principalNum) : "Same as principal"}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {outstanding !== "" && Number(outstanding) === 0
+              ? "EMI will be marked as paid and closed automatically."
+              : "Leave blank for a brand-new EMI. For one you've already been paying, enter the balance remaining after the EMIs paid so far."}
+          </p>
+        </label>
+      )}
+
       {editing && (
         <label className="block">
           <span className="text-xs font-medium">Current outstanding (₹)</span>

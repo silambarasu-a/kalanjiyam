@@ -602,7 +602,10 @@ export async function DELETE(
 ) {
   try {
     const { id } = await context.params;
-    const loan = await prisma.loan.findUnique({ where: { id } });
+    const loan = await prisma.loan.findUnique({
+      where: { id },
+      include: { card: { select: { accountId: true } } },
+    });
     if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const ctx = await requireWorkspace(featureForSource(loan.source), "write");
     const session = await auth();
@@ -627,6 +630,10 @@ export async function DELETE(
         { status: 400 },
       );
     }
+    // Undo any CARD_EMI reconciliation: the principal we moved out of the
+    // card's outstanding when the EMI was added goes back, so the card's
+    // available limit returns to what it was before the EMI existed.
+    const cardLimitOffset = Number(loan.cardLimitOffset ?? 0);
     await prisma.$transaction(async (tx) => {
       await archiveAttachmentsForOwner({
         workspaceId: ctx.workspaceId,
@@ -635,6 +642,12 @@ export async function DELETE(
         userId: ctx.userId,
         tx,
       });
+      if (loan.source === "CARD_EMI" && cardLimitOffset > 0 && loan.card?.accountId) {
+        await tx.account.update({
+          where: { id: loan.card.accountId },
+          data: { openingBalance: { increment: cardLimitOffset } },
+        });
+      }
       await tx.loan.delete({ where: { id } });
     });
     return NextResponse.json({ ok: true });
