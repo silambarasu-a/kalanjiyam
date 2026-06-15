@@ -183,6 +183,16 @@ export function loanTotals(
  * Walk the schedule and count how many EMI cycles the current
  * outstanding has already amortized — used to skip past-paid rows for
  * loans flagged `isExisting`.
+ *
+ * We pick the cycle whose recomputed balance is *closest* to the entered
+ * outstanding rather than the last cycle that stays above it. Both the EMI
+ * (rounded to a whole rupee) and the outstanding (entered as a whole rupee
+ * off a statement) carry rounding error, so the true post-payment balance
+ * routinely lands a rupee or so on either side of the entered figure. A
+ * "must stay >= outstanding" check undercounts by one whenever it lands just
+ * below; matching the nearest cycle is symmetric and rounding-robust. The
+ * balance sequence is monotonically decreasing, so |balance − outstanding|
+ * is unimodal — once it starts growing we've passed the best match and stop.
  */
 export function countPaidEmis(
   principal: number,
@@ -196,11 +206,18 @@ export function countPaidEmis(
   const r = periodicRate(annualRate, frequency);
   let balance = principal;
   let paid = 0;
+  let bestDiff = Math.abs(principal - outstanding);
   for (let i = 1; i <= tenureCycles; i++) {
     const interest = balance * r;
     balance = Math.max(0, balance - (emi - interest));
-    if (balance < outstanding - 0.01) break;
-    paid = i;
+    const diff = Math.abs(balance - outstanding);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      paid = i;
+    } else {
+      break;
+    }
+    if (balance <= 0) break;
   }
   return paid;
 }
