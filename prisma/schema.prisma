@@ -605,6 +605,7 @@ model Contact {
   lessorLeases       Lease[]            @relation("LeaseLessor")
   lesseeLeases       Lease[]            @relation("LeaseLessee")
   lenderLoans        Loan[]             @relation("LoanLenderContact")
+  memberLoans        Loan[]             @relation("LoanMemberContact")
   insuredMemberships InsuredMember[]    @relation("InsuredMemberContact")
   ownedVehicles      Vehicle[]          @relation("VehicleOwner")
   vehiclesBought     Vehicle[]          @relation("VehicleDisposalBuyer")
@@ -1615,6 +1616,11 @@ model Loan {
   lenderContactId   String?
   lenderContact     Contact?      @relation("LoanLenderContact", fields: [lenderContactId], references: [id], onDelete: SetNull)
   borrower          String?
+  // The workspace contact (family member) whose name / account the loan is
+  // under — e.g. a loan taken in the wife's or father's name. Distinct from
+  // lenderContact (who you borrowed FROM on a hand loan).
+  memberContactId   String?
+  memberContact     Contact?      @relation("LoanMemberContact", fields: [memberContactId], references: [id], onDelete: SetNull)
   principal         Decimal       @db.Decimal(14, 2)
   outstanding       Decimal       @db.Decimal(14, 2)
   interestRate      Decimal?      @db.Decimal(6, 3)
@@ -1628,10 +1634,11 @@ model Loan {
   account           Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
   cardId            String?
   card              Card?         @relation("CardEmiLoan", fields: [cardId], references: [id], onDelete: SetNull)
-  // Optional virtual loan-account number issued for CREDIT_CARD_LOAN kinds
-  // (e.g. HDFC Insta Jumbo Loan AAN). The parent credit card stays usable;
-  // EMIs are billed against this separate account number on the same
-  // statement cycle as the parent card.
+  // The loan account number the lender issued for this loan (bank loan
+  // account number, NBFC reference, etc.). For CREDIT_CARD_LOAN kinds this
+  // is the virtual loan-account number / AAN (e.g. HDFC Insta Jumbo Loan):
+  // the parent credit card stays usable and EMIs bill against this number on
+  // the same statement cycle as the parent card.
   loanAccountNumber String?
   // Per-loan billing-cycle overrides for CREDIT_CARD_LOAN kinds. When set,
   // they take precedence over the linked card's account.statementDate /

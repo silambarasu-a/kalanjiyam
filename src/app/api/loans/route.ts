@@ -47,6 +47,7 @@ export async function GET(request: Request) {
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
         lenderContact: { select: { id: true, name: true } },
+        memberContact: { select: { id: true, name: true, relationship: true } },
         goldItems: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -70,6 +71,8 @@ export async function GET(request: Request) {
         lender: l.lenderContact?.name ?? l.lender,
         lenderContact: l.lenderContact,
         borrower: l.borrower,
+        memberContactId: l.memberContactId,
+        memberContact: l.memberContact,
         principal: Number(l.principal),
         outstanding: Number(l.outstanding),
         interestRate: l.interestRate == null ? null : Number(l.interestRate),
@@ -170,12 +173,25 @@ export async function POST(request: Request) {
     if (data.source === "HAND_FORMAL" && data.lenderContactId) {
       const contact = await prisma.contact.findUnique({
         where: { id: data.lenderContactId },
+        select: { id: true, name: true, workspaceId: true },
       });
       if (!contact || contact.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Contact not found" }, { status: 404 });
       }
       resolvedLenderName = contact.name;
       resolvedLenderContactId = contact.id;
+    }
+
+    // memberContactId: the family member (workspace contact) whose name /
+    // account the loan is under. Any source can set it. Verify it belongs to
+    // this workspace.
+    if (data.memberContactId) {
+      const memberOk = await prisma.contact.count({
+        where: { id: data.memberContactId, workspaceId: ctx.workspaceId },
+      });
+      if (!memberOk) {
+        return NextResponse.json({ error: "Member not found" }, { status: 404 });
+      }
     }
 
     // tenure is the number of payment cycles (months for MONTHLY,
@@ -315,6 +331,7 @@ export async function POST(request: Request) {
           lender: resolvedLenderName,
           lenderContactId: resolvedLenderContactId,
           borrower: data.borrower,
+          memberContactId: data.memberContactId ?? null,
           principal: data.principal,
           outstanding: initialOutstanding,
           interestRate: data.interestRate ?? null,
@@ -326,10 +343,9 @@ export async function POST(request: Request) {
           chargeBreakdown: breakdown.length ? breakdown : undefined,
           accountId: data.accountId ?? null,
           cardId: data.cardId ?? null,
-          loanAccountNumber:
-            data.kind === "CREDIT_CARD_LOAN"
-              ? data.loanAccountNumber?.trim() || null
-              : null,
+          // The loan account number applies to every loan kind (bank loan
+          // a/c, NBFC ref, or — for card loans — the AAN).
+          loanAccountNumber: data.loanAccountNumber?.trim() || null,
           loanStatementDate:
             data.kind === "CREDIT_CARD_LOAN"
               ? data.loanStatementDate ?? null

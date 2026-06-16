@@ -104,6 +104,8 @@ export type EditingLoan = {
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   lender: string;
   lenderContact: { id: string; name: string } | null;
+  memberContactId: string | null;
+  memberContact: { id: string; name: string; relationship: string | null } | null;
   principal: number;
   outstanding: number;
   interestRate: number | null;
@@ -147,16 +149,22 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const editing = !!editingLoan;
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
+  // Contacts back the HAND_FORMAL lender picker AND the "Member" picker
+  // (the family member whose name/account the loan is under), so fetch them
+  // for every source.
   const { data: contactsData, isLoading: contactsLoading } = useSWR<{
     members: Contact[];
-  }>(source === "HAND_FORMAL" ? "/api/contacts" : null, fetcher);
+  }>("/api/contacts", fetcher);
   const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
   const creditCards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT");
-  // Show all active contacts, plus the currently-linked one even if it's
+  // Show all active contacts, plus the currently-linked lender/member even if
   // archived so the edit form doesn't drop the selection silently.
   const linkedContactId = editingLoan?.lenderContact?.id;
   const contacts = (contactsData?.members ?? []).filter(
-    (m) => m.active || m.id === linkedContactId,
+    (m) =>
+      m.active ||
+      m.id === linkedContactId ||
+      m.id === editingLoan?.memberContactId,
   );
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -164,6 +172,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     n == null || !Number.isFinite(n) ? "" : String(n);
   const [kind, setKind] = useState<LoanKind>(
     (editingLoan?.kind as LoanKind) ?? "PERSONAL"
+  );
+  const [memberContactId, setMemberContactId] = useState(
+    editingLoan?.memberContactId ?? ""
   );
   const [lender, setLender] = useState(editingLoan?.lender ?? "");
   const [lenderContactId, setLenderContactId] = useState(
@@ -213,8 +224,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     editingLoan?.loanGracePeriod != null ? String(editingLoan.loanGracePeriod) : ""
   );
   const [hasSeparateLoanCard, setHasSeparateLoanCard] = useState(
-    !!editingLoan?.loanAccountNumber ||
-      editingLoan?.loanStatementDate != null ||
+    editingLoan?.loanStatementDate != null ||
       editingLoan?.loanGracePeriod != null
   );
   const [isExisting, setIsExisting] = useState(
@@ -367,6 +377,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         lender: submittedLender,
         lenderContactId:
           source === "HAND_FORMAL" ? lenderContactId || null : undefined,
+        memberContactId: memberContactId || null,
         principal: principalNum,
         outstanding: outstandingPayload,
         interestRate: interestRate ? Number(interestRate) : null,
@@ -382,10 +393,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN"
             ? cardId || null
             : null,
-        loanAccountNumber:
-          kind === "CREDIT_CARD_LOAN" && (hasSeparateLoanCard || !cardId)
-            ? loanAccountNumber.trim() || null
-            : null,
+        loanAccountNumber: loanAccountNumber.trim() || null,
         loanStatementDate:
           kind === "CREDIT_CARD_LOAN" &&
           (hasSeparateLoanCard || !cardId) &&
@@ -518,6 +526,66 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           </label>
         </div>
       )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium">
+            Loan account number{" "}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </span>
+          <Input
+            value={loanAccountNumber}
+            onChange={(e) => setLoanAccountNumber(e.target.value)}
+            placeholder={
+              kind === "CREDIT_CARD_LOAN"
+                ? "AAN / loan a/c number"
+                : "e.g. 3012 5XXXX 7890"
+            }
+            maxLength={40}
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium">
+            Member{" "}
+            <span className="font-normal text-muted-foreground">(optional)</span>
+          </span>
+          <div className="mt-1">
+            <NativeSelect
+              value={memberContactId}
+              onChange={setMemberContactId}
+              searchable
+              placeholder={
+                contactsLoading
+                  ? "Loading…"
+                  : contacts.length > 0
+                    ? "— Not linked —"
+                    : "No contacts yet"
+              }
+              disabled={contactsLoading || contacts.length === 0}
+              options={[
+                { value: "", label: "— Not linked —" },
+                ...contacts.map((c) => ({
+                  value: c.id,
+                  label: c.active ? c.name : `${c.name} (archived)`,
+                  hint: c.relationship ?? undefined,
+                })),
+              ]}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Whose name / account this loan is under (e.g. wife, father).{" "}
+            {contacts.length === 0 && !contactsLoading && (
+              <>
+                Add people under{" "}
+                <Link href="/contacts" className="underline">
+                  Contacts
+                </Link>
+                .
+              </>
+            )}
+          </p>
+        </label>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
@@ -717,18 +785,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 </p>
               )}
               <div className={cardId ? "space-y-2 pl-6" : "space-y-2"}>
-                <label className="block">
-                  <span className="text-xs font-medium">
-                    Loan account number
-                    <span className="text-muted-foreground"> (optional)</span>
-                  </span>
-                  <Input
-                    value={loanAccountNumber}
-                    onChange={(e) => setLoanAccountNumber(e.target.value)}
-                    placeholder="e.g. 5524 67XX XXXX 1234"
-                    maxLength={40}
-                  />
-                </label>
+                {/* Loan account number (AAN) is captured by the general
+                    field at the top of the form. Here we only need the
+                    separate billing cycle. */}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
                     <span className="text-xs font-medium">
@@ -865,15 +924,41 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   aria-label="Quantity"
                 />
                 <div className="col-span-3">
-                  <AmountInput
-                    value={row.weightGrams}
-                    onChange={(next) =>
-                      setGoldItems((rows) =>
-                        rows.map((r, j) => (j === i ? { ...r, weightGrams: next } : r))
-                      )
-                    }
-                    placeholder="g / piece"
-                  />
+                  {/* Grams — a weight, not a currency: no ₹ prefix, no
+                      lakh/crore grouping, and up to 3 decimals (jewellers
+                      quote to the milligram). */}
+                  <div className="relative">
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={row.weightGrams}
+                      onChange={(e) => {
+                        let v = e.target.value.replace(/[^\d.]/g, "");
+                        const dot = v.indexOf(".");
+                        if (dot !== -1) {
+                          v =
+                            v.slice(0, dot + 1) +
+                            v.slice(dot + 1).replace(/\./g, "");
+                          const [ip, dp] = v.split(".");
+                          if (dp.length > 3) v = `${ip}.${dp.slice(0, 3)}`;
+                        }
+                        setGoldItems((rows) =>
+                          rows.map((r, j) =>
+                            j === i ? { ...r, weightGrams: v } : r
+                          )
+                        );
+                      }}
+                      placeholder="grams / piece"
+                      aria-label="Weight in grams"
+                      className="pr-7 tabular-nums"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none"
+                    >
+                      g
+                    </span>
+                  </div>
                 </div>
                 <Input
                   className="col-span-2"

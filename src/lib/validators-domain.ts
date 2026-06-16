@@ -894,6 +894,7 @@ const loanFieldsSchema = z.object({
   lender: z.string().trim().min(1).max(120),
   lenderContactId: z.string().uuid().optional().nullable(),
   borrower: z.string().trim().max(120).optional().nullable(),
+  memberContactId: z.string().uuid().optional().nullable(),
   principal: z.number().positive(),
   outstanding: z.number().nonnegative().optional(),
   interestRate: z.number().nonnegative().optional().nullable(),

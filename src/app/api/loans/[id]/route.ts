@@ -42,6 +42,7 @@ export async function GET(
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
         lenderContact: { select: { id: true, name: true } },
+        memberContact: { select: { id: true, name: true, relationship: true } },
         goldItems: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -77,6 +78,8 @@ export async function GET(
         lender: loan.lenderContact?.name ?? loan.lender,
         lenderContact: loan.lenderContact,
         borrower: loan.borrower,
+        memberContactId: loan.memberContactId,
+        memberContact: loan.memberContact,
         principal: Number(loan.principal),
         outstanding: Number(loan.outstanding),
         interestRate: loan.interestRate == null ? null : Number(loan.interestRate),
@@ -141,6 +144,17 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const data = parsed.data;
+
+    // If a member (family-member contact) is being set, it must belong to
+    // this workspace.
+    if (data.memberContactId) {
+      const memberOk = await prisma.contact.count({
+        where: { id: data.memberContactId, workspaceId: ctx.workspaceId },
+      });
+      if (!memberOk) {
+        return NextResponse.json({ error: "Member not found" }, { status: 404 });
+      }
+    }
 
     // Closed loans are immutable. The closing EMI itself can still be
     // adjusted (or reversed) inside its 3-day grace window via the
@@ -397,6 +411,10 @@ export async function PATCH(
               : loan.lenderContactId,
           borrower:
             data.borrower !== undefined ? data.borrower : loan.borrower,
+          memberContactId:
+            data.memberContactId !== undefined
+              ? data.memberContactId
+              : loan.memberContactId,
           principal: data.principal ?? loan.principal,
           outstanding: data.outstanding ?? loan.outstanding,
           interestRate:
@@ -427,11 +445,9 @@ export async function PATCH(
             data.accountId !== undefined ? data.accountId : loan.accountId,
           cardId: data.cardId !== undefined ? data.cardId : loan.cardId,
           loanAccountNumber:
-            effectiveKind !== "CREDIT_CARD_LOAN"
-              ? null
-              : data.loanAccountNumber !== undefined
-                ? data.loanAccountNumber?.trim() || null
-                : loan.loanAccountNumber,
+            data.loanAccountNumber !== undefined
+              ? data.loanAccountNumber?.trim() || null
+              : loan.loanAccountNumber,
           loanStatementDate:
             effectiveKind !== "CREDIT_CARD_LOAN"
               ? null

@@ -23,6 +23,13 @@ import {
 } from "@/components/loans/loan-payment-history";
 import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
 import { LoanEditButton } from "@/components/loans/loan-edit-button";
+import { AttachmentList } from "@/components/attachments/attachment-list";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import { TIMING, ONE_DAY_MS } from "@/lib/timing";
 
@@ -75,6 +82,7 @@ export default async function LoanDetailPage({
         },
       },
       lenderContact: { select: { id: true, name: true } },
+      memberContact: { select: { id: true, name: true, relationship: true } },
       ownerUser: { select: { name: true } },
       goldItems: { orderBy: { createdAt: "asc" } },
     },
@@ -249,7 +257,15 @@ export default async function LoanDetailPage({
           </div>
           <p className="text-xs uppercase tracking-widest text-muted-foreground">
             {loan.kind} · {SOURCE_LABEL[sourceKey]}
+            {loan.loanAccountNumber ? ` · A/c ${loan.loanAccountNumber}` : ""}
             {loan.borrower ? ` · for ${loan.borrower}` : ""}
+            {loan.memberContact
+              ? ` · ${loan.memberContact.name}${
+                  loan.memberContact.relationship
+                    ? ` (${loan.memberContact.relationship})`
+                    : ""
+                }`
+              : ""}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +280,8 @@ export default async function LoanDetailPage({
                 source: loan.source,
                 lender: loan.lender,
                 lenderContact: loan.lenderContact,
+                memberContactId: loan.memberContactId,
+                memberContact: loan.memberContact,
                 principal,
                 outstanding,
                 interestRate:
@@ -698,17 +716,35 @@ export default async function LoanDetailPage({
         </section>
       )}
 
-      <LoanPaymentHistory
-        payments={payments.map<LoanPaymentRow>((p) => ({
-          id: p.id,
-          type: p.type,
-          kind: p.kind,
-          amount: Number(p.amount),
-          date: p.date.toISOString(),
-          description: p.description,
-        }))}
-        totalRepaid={totalRepaid}
-      />
+      <Tabs defaultValue="history" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="history">Payment history</TabsTrigger>
+          <TabsTrigger value="documents">Documents</TabsTrigger>
+        </TabsList>
+        <TabsContent value="history">
+          <LoanPaymentHistory
+            payments={payments.map<LoanPaymentRow>((p) => ({
+              id: p.id,
+              type: p.type,
+              kind: p.kind,
+              amount: Number(p.amount),
+              date: p.date.toISOString(),
+              description: p.description,
+            }))}
+            totalRepaid={totalRepaid}
+          />
+        </TabsContent>
+        <TabsContent value="documents">
+          <section className="rounded-lg border bg-card p-5">
+            <h2 className="text-sm font-semibold">Documents</h2>
+            <p className="mb-3 mt-0.5 text-xs text-muted-foreground">
+              Sanction letters, agreements, statements, receipts — anything
+              about this loan. PDFs and images.
+            </p>
+            <AttachmentList ownerKind="LOAN_DOCUMENT" ownerId={loan.id} />
+          </section>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

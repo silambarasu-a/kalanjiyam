@@ -39,6 +39,8 @@ type Loan = {
   kind: string;
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   lender: string;
+  loanAccountNumber: string | null;
+  memberContact: { id: string; name: string; relationship: string | null } | null;
   principal: number;
   outstanding: number;
   interestRate: number | null;
@@ -228,6 +230,21 @@ export function LoansView({
                       ? ` · ${l.tenure}${FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].tenureUnit}`
                       : ""}
                   </div>
+                  {l.loanAccountNumber && (
+                    <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                      A/c {l.loanAccountNumber}
+                    </div>
+                  )}
+                  {l.memberContact && (
+                    <div className="mt-1 text-[11px]">
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                        {l.memberContact.name}
+                        {l.memberContact.relationship
+                          ? ` · ${l.memberContact.relationship}`
+                          : ""}
+                      </span>
+                    </div>
+                  )}
                   {l.kind === "GOLD" && l.goldItems && l.goldItems.length > 0 && (
                     <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
                       {l.goldItems.reduce((s, g) => s + g.quantity, 0)} gold item(s) ·{" "}
