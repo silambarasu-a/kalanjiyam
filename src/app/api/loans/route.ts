@@ -230,9 +230,11 @@ export async function POST(request: Request) {
     // already-paid cycles for `isExisting` loans.
     //
     // The CREDIT_CARD_LOAN kind is repaid through the linked card's
-    // monthly statement, so the next due date is the next statement-close
-    // after `startedAt` (or "today" for an existing partly-paid loan) plus
-    // the grace period — not a fixed monthly anniversary. Per-loan
+    // monthly statement, so the next due date is the next statement DUE
+    // DATE on/after `startedAt` (or "today" for an existing partly-paid
+    // loan) — the most recently closed statement, still within its grace
+    // window, counts as the upcoming due, so this lands one cycle earlier
+    // than "next close + grace". Not a fixed monthly anniversary. Per-loan
     // overrides win over the linked card's account values (handles the
     // HDFC AAN case where the loan bills on its own cycle, and the case
     // where the linked card has no statementDate configured).

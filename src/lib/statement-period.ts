@@ -119,21 +119,29 @@ export function cardStatementPeriods(
 }
 
 /**
- * Due date of the billing cycle that BILLS a transaction posted on `after`.
+ * The next credit-card statement DUE DATE on or after `after`.
  *
  * Credit-card loans are repaid through the card's monthly statement: each
- * billing cycle closes on day `statementDate` and the bill is due
- * `gracePeriod` days later. The cycle that bills `after` ends on the first
- * sd-of-month ≥ `after.day` — if `after.day` is already past this month's
- * close, the bill has been generated and the transaction lands on the next
- * cycle's bill instead.
+ * billing cycle closes on day `statementDate` and that bill is due
+ * `gracePeriod` days later. Because of the grace window the statement that
+ * MOST RECENTLY closed is usually still awaiting payment — its due date is
+ * the loan's *next* due date, even though this month's statement hasn't
+ * closed yet. So the answer is the earliest `close + gracePeriod` that is
+ * not before `after`.
  *
- * Example: statementDate=13, gracePeriod=20
- *   after=Apr 28 → already past Apr 13 close, so cycle [Apr 14 — May 13]
- *                  closes May 13 → due Jun 2 ✓
- *   after=May 4  → still inside cycle [Apr 14 — May 13]   → due Jun 2 ✓
- *   after=May 13 → tx on close day bills on that day's cut → due Jun 2 ✓
- *   after=May 14 → already past May 13 close, next cycle  → due Jul 3 ✓
+ * Note this is NOT the due date of the statement that would bill a fresh
+ * purchase made on `after` — that statement is a whole cycle later (it has
+ * to close first). A loan's outstanding is already on the card, so its next
+ * payment is the upcoming due date, in-grace closed statement included.
+ *
+ * Example: statementDate=13, gracePeriod=30
+ *   after=Jul 2  → Jun 13 close is due Jul 13 (≥ Jul 2)        → Jul 13 ✓
+ *                  (this month's Jul 13 close isn't due till Aug 12)
+ *   after=Jul 20 → Jul 13 due already passed; Jul 13 close     → Aug 12 ✓
+ *   after=Dec 29 → Dec 13 close is due Jan 12 (≥ Dec 29)       → Jan 12 ✓
+ *
+ * To advance to the due date one cycle LATER (e.g. after paying the current
+ * bill, or when chaining a schedule), pass the current due date + 1 day.
  */
 export function nextStatementDueDate(
   after: Date,
@@ -142,24 +150,31 @@ export function nextStatementDueDate(
 ): Date {
   const sd = Math.max(1, Math.min(31, statementDate));
   const grace = Math.max(0, gracePeriod);
-  let y = after.getUTCFullYear();
-  let m = after.getUTCMonth();
-  const d = after.getUTCDate();
-  // If `after` is past this month's close, the bill is already generated —
-  // roll forward to next month so the transaction lands on the next cycle.
-  const closeThisMonth = Math.min(sd, new Date(Date.UTC(y, m + 1, 0)).getUTCDate());
-  if (d > closeThisMonth) {
-    m += 1;
-    if (m > 11) {
-      m = 0;
-      y += 1;
-    }
+  const DAY = 24 * 60 * 60 * 1000;
+  const anchor = Date.UTC(
+    after.getUTCFullYear(),
+    after.getUTCMonth(),
+    after.getUTCDate(),
+  );
+  // Walk consecutive monthly closes, starting far enough back that any close
+  // whose due date could still be ≥ anchor is covered (close ≥ anchor −
+  // grace), and return the first due ≥ anchor.
+  const y = after.getUTCFullYear();
+  const monthsBack = Math.ceil(grace / 28) + 1;
+  const iterations = monthsBack + 3;
+  const firstMonth = after.getUTCMonth() - monthsBack;
+  let lastDue = anchor;
+  for (let i = 0; i < iterations; i++) {
+    const m = firstMonth + i;
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const close = Date.UTC(y, m, Math.min(sd, lastDay));
+    const due = close + grace * DAY;
+    lastDue = due;
+    if (due >= anchor) return new Date(due);
   }
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const close = new Date(Date.UTC(y, m, Math.min(sd, lastDay)));
-  const due = new Date(close);
-  due.setUTCDate(due.getUTCDate() + grace);
-  return due;
+  // Unreachable for realistic grace periods (the scan always overshoots the
+  // anchor by ~3 months); return the last, largest due as a safe fallback.
+  return new Date(lastDue);
 }
 
 /** Parse a period id from the URL search param into a {start, end} pair. */

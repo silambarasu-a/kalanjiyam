@@ -169,17 +169,22 @@ export default async function LoanDetailPage({
       : 0;
   const useStatementCycle =
     loan.kind === "CREDIT_CARD_LOAN" && effectiveSd != null;
-  // Pre-compute due dates by chaining nextStatementDueDate from startedAt
-  // up through the last cycle we'll display.
+  // Pre-compute due dates by chaining from startedAt up through the last
+  // cycle we'll display. Cycle 1 is the next statement due on/after the loan
+  // start; each later cycle advances one statement cycle (prev due + 1 day
+  // so the on-or-after lookup lands on the next due, not the same one).
   const statementDueByCycle: Date[] = [];
   if (useStatementCycle && fullSchedule.length > 0) {
     const lastCycleNeeded = Math.min(
       fullSchedule.length,
       cyclesPaid + 12,
     );
-    let prev = new Date(loan.startedAt);
+    let prev: Date | null = null;
     for (let i = 0; i < lastCycleNeeded; i++) {
-      const next = nextStatementDueDate(prev, effectiveSd!, effectiveGrace);
+      const anchor = prev
+        ? new Date(prev.getTime() + 24 * 60 * 60 * 1000)
+        : new Date(loan.startedAt);
+      const next = nextStatementDueDate(anchor, effectiveSd!, effectiveGrace);
       statementDueByCycle.push(next);
       prev = next;
     }

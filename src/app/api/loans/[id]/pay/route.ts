@@ -96,8 +96,10 @@ export async function POST(
     // do — partial pre-payments don't shift the schedule.
     //
     // The CREDIT_CARD_LOAN kind advances along the linked card's billing
-    // cycle — the next due is "next statement-close + grace" relative to
-    // the payment date, not a fixed monthly anniversary.
+    // cycle — the next due is the statement due date one cycle after the
+    // current one, not a fixed monthly anniversary. We advance from the
+    // current due date (+1 day) rather than the payment date so paying
+    // early or late doesn't shift the schedule.
     // Per-loan overrides win over the linked card's account values.
     let cardStatement: { statementDate: number | null; gracePeriod: number | null } | null = null;
     if (loan.kind === "CREDIT_CARD_LOAN" && loan.cardId) {
@@ -129,8 +131,10 @@ export async function POST(
         loan.kind === "CREDIT_CARD_LOAN" &&
         effectiveStatementDate != null
       ) {
+        // +1 day so the on-or-after lookup lands on the NEXT cycle's due
+        // date rather than returning the current due date unchanged.
         return nextStatementDueDate(
-          new Date(data.paidAt),
+          new Date(loan.nextDueDate.getTime() + 24 * 60 * 60 * 1000),
           effectiveStatementDate,
           effectiveGracePeriod,
         );
