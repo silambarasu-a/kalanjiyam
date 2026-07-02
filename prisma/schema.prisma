@@ -1971,7 +1971,9 @@ model Vehicle {
   make           String?
   model          String?
   year           Int?
-  registrationNo String?          @unique
+  // Unique WITHIN a workspace (see @@unique below), not globally — the
+  // same plate can legitimately exist in two different workspaces.
+  registrationNo String?
   // Drives the unit on fuel-fill inputs and the mileage formula.
   // Nullable so legacy rows are unaffected.
   fuelType       VehicleFuelType?
@@ -2004,6 +2006,7 @@ model Vehicle {
   transactions Transaction[]     @relation("VehicleTransaction")
   documents    VehicleDocument[]
 
+  @@unique([workspaceId, registrationNo])
   @@index([workspaceId, active])
   @@index([workspaceId, ownerContactId])
   @@index([disposalContactId])

@@ -6,12 +6,24 @@ import {
   assertWorkspaceContact,
 } from "@/lib/workspace";
 import { vehicleUpdateSchema } from "@/lib/validators-domain";
-import { VehicleKind, VehicleFuelType } from "@/generated/prisma/client";
+import { VehicleKind, VehicleFuelType, Prisma } from "@/generated/prisma/client";
 import { archiveAttachmentsForOwners } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
+  }
+  if (
+    e instanceof Prisma.PrismaClientKnownRequestError &&
+    e.code === "P2002"
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "A vehicle with this registration number already exists in this workspace.",
+      },
+      { status: 409 },
+    );
   }
   console.error("[vehicles/:id]", e);
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
