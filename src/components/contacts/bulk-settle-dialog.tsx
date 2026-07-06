@@ -161,7 +161,7 @@ export function BulkSettleDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="w-[min(42rem,calc(100%-2rem))]">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -172,8 +172,8 @@ export function BulkSettleDialog({
               : "Pick which obligations to pay down. Partial amounts are fine — the rest stays outstanding."}
           </p>
 
-          <div className="max-h-72 overflow-y-auto rounded-md border bg-card">
-            <table className="w-full text-sm">
+          <div className="max-h-72 overflow-auto rounded-md border bg-card">
+            <table className="w-full min-w-[26rem] text-sm">
               <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-2 py-1.5 text-left font-medium">

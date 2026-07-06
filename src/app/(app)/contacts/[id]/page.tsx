@@ -835,26 +835,15 @@ function SettleDialog({
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium">Amount (₹)</span>
               {remaining > 0 && (
-                <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                    onClick={() => setAmount((remaining / 2).toFixed(2))}
-                  >
-                    Half
-                  </Button>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                    onClick={() => setAmount(remaining.toFixed(2))}
-                  >
-                    Full
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => setAmount(remaining.toFixed(2))}
+                >
+                  Full
+                </Button>
               )}
             </div>
             <AmountInput value={amount} onChange={setAmount} autoFocus />
