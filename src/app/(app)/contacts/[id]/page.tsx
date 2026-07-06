@@ -693,6 +693,7 @@ export default function MemberLedgerDetail() {
       <SettleDialog
         charge={settleCharge}
         accounts={accounts}
+        contactName={data.member.name}
         onClose={() => setSettleCharge(null)}
       />
 
@@ -741,12 +742,18 @@ function Stat({
 function SettleDialog({
   charge,
   accounts,
+  contactName,
   onClose,
 }: {
   charge: Charge | null;
   accounts: Account[];
+  contactName: string;
   onClose: () => void;
 }) {
+  // Settle wording flips with the charge direction:
+  //   OWED_TO_USER → contact pays me back  → INCOME  ("Receive")
+  //   USER_OWES    → I pay this contact    → EXPENSE ("Pay")
+  const isIncoming = charge?.direction !== "USER_OWES";
   const remaining = charge ? charge.amount - charge.settledAmount : 0;
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
@@ -755,6 +762,10 @@ function SettleDialog({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const amtNum = Number(amount) || 0;
+  const overpay = amtNum > remaining + 0.01;
+  const isPartial = amtNum > 0 && amtNum < remaining - 0.01;
 
   useEffect(() => {
     if (!charge) return;
@@ -775,6 +786,14 @@ function SettleDialog({
       setError("Enter an amount");
       return;
     }
+    if (amt > remaining + 0.01) {
+      setError(
+        `Amount exceeds ${
+          isIncoming ? "what they owe" : "what you owe"
+        } (${formatINR(remaining)})`,
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch(`/api/member-charges/${charge.id}/settle`, {
@@ -790,7 +809,7 @@ function SettleDialog({
       const body = await res.json();
       if (!res.ok) setError(body.error ?? "Failed");
       else {
-        toast.success("Settlement recorded");
+        toast.success(isIncoming ? "Payment received" : "Payment recorded");
         await mutateBalances();
         onClose();
       }
@@ -803,34 +822,86 @@ function SettleDialog({
     <Dialog open={charge !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record settlement</DialogTitle>
+          <DialogTitle>
+            {isIncoming ? `Receive from ${contactName}` : `Pay ${contactName}`}
+          </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Outstanding: {formatINR(remaining)}.
+          {isIncoming ? "They owe you" : "You owe them"}:{" "}
+          {formatINR(remaining)}.
         </p>
         <div className="space-y-3">
           <label className="block">
-            <span className="text-xs font-medium">Amount (₹)</span>
-            <AmountInput value={amount} onChange={setAmount}
-              autoFocus
-            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium">Amount (₹)</span>
+              {remaining > 0 && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setAmount((remaining / 2).toFixed(2))}
+                  >
+                    Half
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setAmount(remaining.toFixed(2))}
+                  >
+                    Full
+                  </Button>
+                </div>
+              )}
+            </div>
+            <AmountInput value={amount} onChange={setAmount} autoFocus />
+            {overpay ? (
+              <p className="mt-1 text-xs text-destructive">
+                Exceeds {isIncoming ? "what they owe" : "what you owe"} (
+                {formatINR(remaining)}).
+              </p>
+            ) : isPartial ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Partial {isIncoming ? "receipt" : "payment"} —{" "}
+                {formatINR(remaining - amtNum)} stays outstanding.
+              </p>
+            ) : amtNum > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Settles in full.
+              </p>
+            ) : null}
           </label>
           <label className="block">
-            <span className="text-xs font-medium">Paid on</span>
+            <span className="text-xs font-medium">
+              {isIncoming ? "Received on" : "Paid on"}
+            </span>
             <DateInput value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
           </label>
           <label className="block">
-            <span className="text-xs font-medium">Received into account (optional)</span>
+            <span className="text-xs font-medium">
+              {isIncoming
+                ? "Received into account (optional)"
+                : "Paid from account (optional)"}
+            </span>
             <div className="mt-1">
               <NativeSelect
                 value={accountId}
                 onChange={setAccountId}
-                placeholder="— don't create income transaction —"
-                options={groupAccountOptions(accounts, 0)}
+                placeholder={
+                  isIncoming
+                    ? "— don't create income transaction —"
+                    : "— don't create expense transaction —"
+                }
+                options={groupAccountOptions(accounts, isIncoming ? 0 : Number(amount) || 0)}
               />
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Pick to auto-create an INCOME transaction when this member pays you back.
+              {isIncoming
+                ? `Pick to auto-create an INCOME transaction when ${contactName} pays you back.`
+                : `Pick to auto-create an EXPENSE transaction when you pay ${contactName}.`}
             </p>
           </label>
           <label className="block">
@@ -841,8 +912,12 @@ function SettleDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting}>
-            {submitting ? "Saving…" : "Record"}
+          <Button onClick={submit} disabled={submitting || amtNum <= 0 || overpay}>
+            {submitting
+              ? "Saving…"
+              : isIncoming
+                ? "Record receipt"
+                : "Record payment"}
           </Button>
         </DialogFooter>
       </DialogContent>
