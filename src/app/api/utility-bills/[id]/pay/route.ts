@@ -189,8 +189,8 @@ export async function POST(
           description:
             d.notes?.trim() ||
             billDescription({
+              kind: provider.kind,
               providerName: provider.providerName,
-              connectionNumber: provider.connectionNumber,
               billDate: bill.billDate,
               cycle: provider.billingCycle,
             }),

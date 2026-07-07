@@ -41,6 +41,7 @@ type Props = {
     autoPay: boolean;
     autoPayLeadDays?: number | null;
     defaultDueDay: number | null;
+    gracePeriodDays?: number | null;
     recurring?: boolean;
     billingCycle?: BillingCycle | null;
     billingDay?: number | null;
@@ -73,8 +74,21 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const [autoPayLeadDays, setAutoPayLeadDays] = useState(
     initial?.autoPayLeadDays?.toString() ?? "0",
   );
+  // Due-date basis: "grace" = N days after the statement (common for
+  // internet/electricity), "fixed" = a set day-of-month. Restore the mode
+  // from whichever field the provider has.
+  const [dueMode, setDueMode] = useState<"grace" | "fixed">(
+    initial?.gracePeriodDays != null
+      ? "grace"
+      : initial?.defaultDueDay != null
+        ? "fixed"
+        : "grace",
+  );
   const [defaultDueDay, setDefaultDueDay] = useState(
     initial?.defaultDueDay?.toString() ?? "",
+  );
+  const [gracePeriodDays, setGracePeriodDays] = useState(
+    initial?.gracePeriodDays != null ? String(initial.gracePeriodDays) : "15",
   );
   // Recurrence — auto-create a bill each cycle.
   const [recurring, setRecurring] = useState(initial?.recurring ?? false);
@@ -132,7 +146,13 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         cardId: sourceMode === "card" ? effectiveCardId || null : null,
         autoPay,
         autoPayLeadDays: autoPay ? Number(autoPayLeadDays) || 0 : 0,
-        defaultDueDay: defaultDueDay ? Number(defaultDueDay) : null,
+        // Exactly one due-date basis is stored; the other is nulled.
+        defaultDueDay:
+          dueMode === "fixed" && defaultDueDay ? Number(defaultDueDay) : null,
+        gracePeriodDays:
+          dueMode === "grace" && gracePeriodDays !== ""
+            ? Number(gracePeriodDays)
+            : null,
         recurring,
         billingCycle,
         billingDay: recurring && billingDay ? Number(billingDay) : null,
@@ -191,12 +211,55 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
           />
         </div>
         <div>
-          <Label>Default due day (1–31)</Label>
-          <Input
-            value={defaultDueDay}
-            onChange={(e) => setDefaultDueDay(e.target.value.replace(/\D/g, "").slice(0, 2))}
-            placeholder="Optional"
-          />
+          <Label>Due date</Label>
+          <div className="mt-1 flex gap-1.5 text-xs">
+            {(
+              [
+                ["grace", "Days after bill"],
+                ["fixed", "Fixed day"],
+              ] as const
+            ).map(([m, lbl]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setDueMode(m)}
+                className={`rounded-md border px-2.5 py-1.5 ${
+                  dueMode === m
+                    ? "bg-foreground text-background"
+                    : "bg-background"
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+          {dueMode === "grace" ? (
+            <div className="mt-1.5 flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Due</span>
+              <Input
+                value={gracePeriodDays}
+                onChange={(e) =>
+                  setGracePeriodDays(e.target.value.replace(/\D/g, "").slice(0, 2))
+                }
+                className="h-8 w-14 text-center"
+                placeholder="15"
+              />
+              <span className="text-muted-foreground">days after the bill</span>
+            </div>
+          ) : (
+            <div className="mt-1.5 flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Due on day</span>
+              <Input
+                value={defaultDueDay}
+                onChange={(e) =>
+                  setDefaultDueDay(e.target.value.replace(/\D/g, "").slice(0, 2))
+                }
+                className="h-8 w-14 text-center"
+                placeholder="20"
+              />
+              <span className="text-muted-foreground">of the month</span>
+            </div>
+          )}
         </div>
         <div className="sm:col-span-2">
           <DescriptionField
@@ -294,16 +357,22 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
                 />
               </div>
               <div>
-                <Label>Bill day (1–31)</Label>
+                <Label>Statement day (1–31)</Label>
                 <Input
                   value={billingDay}
                   onChange={(e) =>
                     setBillingDay(e.target.value.replace(/\D/g, "").slice(0, 2))
                   }
-                  placeholder="Day the bill is generated"
+                  placeholder="e.g. 4"
                 />
               </div>
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              The bill is issued on the statement day and covers the
+              <strong> previous</strong> {billingCycle === "MONTHLY" ? "month" : "cycle"} (postpaid).
+              Payment is then due per the <strong>Due date</strong> rule set
+              above — a later date, before which auto-pay runs.
+            </p>
             <div>
               <Label>Amount</Label>
               <div className="mt-1 flex gap-2 text-xs">

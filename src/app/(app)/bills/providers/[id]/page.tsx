@@ -49,6 +49,7 @@ import { AddAdvanceDialog } from "@/components/bills/add-advance-dialog";
 import { UtilityBillForm } from "@/components/bills/utility-bill-form";
 import { PayBillDialog } from "@/components/bills/pay-bill-dialog";
 import { EnterBillAmountDialog } from "@/components/bills/enter-bill-amount-dialog";
+import { billPeriodRange } from "@/lib/bill-schedule";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -65,6 +66,7 @@ type Provider = {
   autoPay: boolean;
   autoPayLeadDays: number;
   defaultDueDay: number | null;
+  gracePeriodDays: number | null;
   recurring: boolean;
   billingCycle: "MONTHLY" | "BIMONTHLY" | "QUARTERLY" | "HALF_YEARLY" | "YEARLY";
   billingDay: number | null;
@@ -114,6 +116,22 @@ const CYCLE_LABEL: Record<Provider["billingCycle"], string> = {
   HALF_YEARLY: "every 6 months",
   YEARLY: "every year",
 };
+
+// Compact service-period label ("04 May – 03 Jun") for a bill, computed
+// from its statement date + the provider's billing cycle (arrears).
+function periodLabel(
+  billDateIso: string,
+  cycle: Provider["billingCycle"],
+): string {
+  const { from, to } = billPeriodRange(new Date(billDateIso), cycle);
+  const f = (d: Date) =>
+    d.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      timeZone: "UTC",
+    });
+  return `${f(from)} – ${f(to)}`;
+}
 
 export default function ProviderDetailPage({
   params,
@@ -481,6 +499,7 @@ export default function ProviderDetailPage({
                 autoPay: provider.autoPay,
                 autoPayLeadDays: provider.autoPayLeadDays,
                 defaultDueDay: provider.defaultDueDay,
+                gracePeriodDays: provider.gracePeriodDays,
                 recurring: provider.recurring,
                 billingCycle: provider.billingCycle,
                 billingDay: provider.billingDay,
@@ -526,6 +545,7 @@ export default function ProviderDetailPage({
               kind: provider.kind,
               providerName: provider.providerName,
               defaultDueDay: provider.defaultDueDay,
+              gracePeriodDays: provider.gracePeriodDays,
             }}
             previousMeterReading={lastPaidBill?.currentReading ?? null}
             onSaved={() => {
@@ -764,7 +784,12 @@ function BillsTable({
               const overdue = !b.paidAt && new Date(b.dueDate) < new Date();
               return (
                 <tr key={b.id} className="hover:bg-muted/30">
-                  <td className="px-3 py-2 text-xs">{fmtDate(b.billDate)}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {fmtDate(b.billDate)}
+                    <div className="text-[10px] text-muted-foreground">
+                      covers {periodLabel(b.billDate, provider.billingCycle)}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-xs">
                     {fmtDate(b.dueDate)}
                   </td>

@@ -124,6 +124,21 @@ type DueSubscription = {
   amount: number;
   status: string;
   nextBillingDate: string;
+  categoryId: string | null;
+};
+
+// Maps a utility kind to the seeded category NAME it resolves to (mirrors
+// KIND_TO_CATEGORY_NAME in src/lib/utility-category.ts). Lets the pay
+// picker show only the bills that match the category the user selected.
+const UTILITY_KIND_TO_CATEGORY_NAME: Record<string, string> = {
+  ELECTRICITY: "Electricity",
+  INTERNET: "Internet / Broadband",
+  MOBILE_POSTPAID: "Mobile / Phone",
+  MOBILE_PREPAID: "Mobile / Phone",
+  DTH: "DTH / Cable",
+  GAS: "Gas",
+  WATER: "Water",
+  OTHER: "Utilities",
 };
 
 
@@ -544,10 +559,20 @@ function IncomeExpenseForm({
     type === "EXPENSE" ? "/api/subscriptions" : null,
     fetcher,
   );
-  // Estimated (placeholder) bills can't be paid until their amount is set.
-  const unpaidBills = (unpaidBillsData?.bills ?? []).filter((b) => !b.estimated);
+  // The pay picker is category-scoped: only bills / subscriptions whose
+  // category matches the one the user picked show up. A bill's category is
+  // resolved from its provider kind (same mapping the server uses); a
+  // subscription carries its categoryId directly.
+  const selectedCategoryName = selectedCategory?.name ?? null;
+  const unpaidBills = (unpaidBillsData?.bills ?? []).filter(
+    (b) =>
+      !b.estimated &&
+      !!categoryId &&
+      b.provider != null &&
+      UTILITY_KIND_TO_CATEGORY_NAME[b.provider.kind] === selectedCategoryName,
+  );
   const activeSubs = (activeSubsData?.subscriptions ?? []).filter(
-    (s) => s.status === "ACTIVE",
+    (s) => s.status === "ACTIVE" && !!categoryId && s.categoryId === categoryId,
   );
   const isPayMode = payTarget !== "";
   function onPickPayTarget(v: string) {
@@ -942,51 +967,6 @@ function IncomeExpenseForm({
 
   return (
     <div className="space-y-3">
-      {type === "EXPENSE" &&
-        (unpaidBills.length > 0 || activeSubs.length > 0) && (
-          <label className="block">
-            <span className="text-xs font-medium">
-              Pay a bill / subscription{" "}
-              <span className="font-normal text-muted-foreground">
-                (optional)
-              </span>
-            </span>
-            <div className="mt-1">
-              <NativeSelect
-                value={payTarget}
-                onChange={onPickPayTarget}
-                placeholder="— none (regular expense) —"
-                options={
-                  [
-                    unpaidBills.length > 0 && {
-                      label: "Unpaid bills",
-                      options: unpaidBills.map((b) => ({
-                        value: `bill:${b.id}`,
-                        label: `${b.provider?.providerName ?? "Bill"} · ${formatINR(b.billAmount)}`,
-                        hint: `due ${new Date(b.dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
-                      })),
-                    },
-                    activeSubs.length > 0 && {
-                      label: "Subscriptions",
-                      options: activeSubs.map((s) => ({
-                        value: `sub:${s.id}`,
-                        label: `${s.name} · ${formatINR(s.amount)}`,
-                        hint: `next ${new Date(s.nextBillingDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
-                      })),
-                    },
-                  ].filter(Boolean) as NativeSelectGroup[]
-                }
-              />
-            </div>
-            {isPayMode && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Category is set automatically. Saving marks this item paid
-                and records the expense.
-              </p>
-            )}
-          </label>
-        )}
-
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
@@ -1030,28 +1010,27 @@ function IncomeExpenseForm({
         <div className="block">
           <span className="text-xs font-medium">Category</span>
           <div className="mt-1">
-            {isPayMode ? (
-              <div className="flex h-9 items-center rounded-md border border-dashed bg-muted/40 px-3 text-xs text-muted-foreground">
-                Set automatically
-              </div>
-            ) : (
-              <CategoryCombobox
-                value={categoryId || null}
-                onChange={(id) => setCategoryId(id)}
-                categories={categories.map((c) => ({
-                  id: c.id,
-                  name: c.name,
-                  parentCategoryId: c.parentCategoryId,
-                  group: c.group,
-                }))}
-                placeholder="— optional —"
-                canCreate
-                onRequestCreate={(typedText) => {
-                  setQuickCreateName(typedText);
-                  setQuickCreateOpen(true);
-                }}
-              />
-            )}
+            <CategoryCombobox
+              value={categoryId || null}
+              onChange={(id) => {
+                setCategoryId(id);
+                // Category drives the bill/subscription picker below —
+                // dropping/switching it invalidates any picked item.
+                setPayTarget("");
+              }}
+              categories={categories.map((c) => ({
+                id: c.id,
+                name: c.name,
+                parentCategoryId: c.parentCategoryId,
+                group: c.group,
+              }))}
+              placeholder="— optional —"
+              canCreate
+              onRequestCreate={(typedText) => {
+                setQuickCreateName(typedText);
+                setQuickCreateOpen(true);
+              }}
+            />
           </div>
         </div>
         <CategoryQuickCreateDialog
@@ -1068,6 +1047,55 @@ function IncomeExpenseForm({
           onCreated={(id) => setCategoryId(id)}
         />
       </div>
+
+      {/* Pay a bill / subscription — scoped to the selected category, so
+          it only surfaces the items that belong under it. Appears below
+          the category picker that drives it. */}
+      {type === "EXPENSE" &&
+        !!categoryId &&
+        (unpaidBills.length > 0 || activeSubs.length > 0) && (
+          <label className="block">
+            <span className="text-xs font-medium">
+              Pay a bill / subscription{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional · matches this category)
+              </span>
+            </span>
+            <div className="mt-1">
+              <NativeSelect
+                value={payTarget}
+                onChange={onPickPayTarget}
+                placeholder="— none (regular expense) —"
+                options={
+                  [
+                    unpaidBills.length > 0 && {
+                      label: "Unpaid bills",
+                      options: unpaidBills.map((b) => ({
+                        value: `bill:${b.id}`,
+                        label: `${b.provider?.providerName ?? "Bill"} · ${formatINR(b.billAmount)}`,
+                        hint: `due ${new Date(b.dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
+                      })),
+                    },
+                    activeSubs.length > 0 && {
+                      label: "Subscriptions",
+                      options: activeSubs.map((s) => ({
+                        value: `sub:${s.id}`,
+                        label: `${s.name} · ${formatINR(s.amount)}`,
+                        hint: `next ${new Date(s.nextBillingDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
+                      })),
+                    },
+                  ].filter(Boolean) as NativeSelectGroup[]
+                }
+              />
+            </div>
+            {isPayMode && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Amount is taken from the bill. Saving marks it paid and
+                records the expense.
+              </p>
+            )}
+          </label>
+        )}
 
       {effectivePaymentSource.startsWith("contact:") && (
         <ContactRepaymentToggle

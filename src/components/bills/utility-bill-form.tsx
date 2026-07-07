@@ -24,6 +24,9 @@ type Provider = {
   /** Day of month (1–31) the provider typically bills on. Used to
    *  pre-fill the due date so the user doesn't pick it every time. */
   defaultDueDay?: number | null;
+  /** Days after the bill date until it's due (grace period). Takes
+   *  precedence over defaultDueDay for the due-date prefill. */
+  gracePeriodDays?: number | null;
 };
 
 type Props = {
@@ -85,12 +88,14 @@ export function UtilityBillForm({
     previousMeterReading ?? lastBillRes?.bills?.[0]?.currentReading ?? null;
 
   const [billDate, setBillDate] = useState(todayIso());
-  // Default due date: provider's configured default day if set,
-  // otherwise today + 10 days as a safe fallback.
+  // Default due date: grace period (days after the bill) wins, else the
+  // provider's fixed due day, else today + 10 days as a safe fallback.
   const [dueDate, setDueDate] = useState(
-    provider.defaultDueDay != null
-      ? nextDueDateFor(provider.defaultDueDay)
-      : inDays(10),
+    provider.gracePeriodDays != null
+      ? inDays(provider.gracePeriodDays)
+      : provider.defaultDueDay != null
+        ? nextDueDateFor(provider.defaultDueDay)
+        : inDays(10),
   );
   const [billAmount, setBillAmount] = useState("");
   // User-typed override of previousReading. When blank, we fall through

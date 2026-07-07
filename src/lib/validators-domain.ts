@@ -1509,6 +1509,9 @@ const utilityProviderBase = z.object({
   autoPay: z.boolean().optional().default(false),
   autoPayLeadDays: z.number().int().min(0).max(31).optional().default(0),
   defaultDueDay: z.number().int().min(1).max(31).optional().nullable(),
+  // Days after the statement date until the bill is due (grace period).
+  // When set it takes precedence over defaultDueDay.
+  gracePeriodDays: z.number().int().min(0).max(90).optional().nullable(),
   // Recurrence config.
   recurring: z.boolean().optional().default(false),
   billingCycle: utilityBillCycleEnum.optional().default("MONTHLY"),

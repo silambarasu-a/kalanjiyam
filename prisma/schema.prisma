@@ -1564,7 +1564,13 @@ model UtilityProvider {
   cardId            String?
   card              Card?                 @relation("UtilityProviderCard", fields: [cardId], references: [id], onDelete: SetNull)
   autoPay           Boolean               @default(false)
+  // Due-date basis. Exactly one applies (Zod/UI enforced):
+  //   defaultDueDay   → a FIXED day-of-month (e.g. always the 20th).
+  //   gracePeriodDays → N days AFTER the statement date (e.g. due 15 days
+  //                     from the bill date). Takes precedence when set.
+  // Neither set → a 15-day grace fallback.
   defaultDueDay     Int?
+  gracePeriodDays   Int?
   // Auto-pay lead time: pay this many days BEFORE the bill's due date
   // (0 = on the due date itself). Lets payment clear ahead of a deadline.
   autoPayLeadDays   Int                   @default(0)

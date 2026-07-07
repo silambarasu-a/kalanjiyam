@@ -15,7 +15,7 @@ import {
   sendPaymentFailedEmail,
 } from "@/lib/notifications-payment";
 import { createNotification } from "@/lib/notifications";
-import { billDescription } from "@/lib/bill-schedule";
+import { billDescription, subscriptionDescription } from "@/lib/bill-schedule";
 import { resolveUtilityCategoryId } from "@/lib/utility-category";
 import { isAdvanceNonNegViolation } from "@/lib/utility-advance-guard";
 
@@ -184,7 +184,11 @@ async function runSubscriptions(today: Date) {
             type: TransactionType.EXPENSE,
             kind: TransactionKind.SUBSCRIPTION,
             amount,
-            description: `${sub.name} · auto-pay`,
+            description: subscriptionDescription(
+              sub.name,
+              sub.nextBillingDate,
+              sub.cycle,
+            ),
             date: new Date(),
             accountId: resolvedAccountId,
             cardId,
@@ -361,11 +365,10 @@ async function runBills(today: Date) {
             kind: TransactionKind.UTILITY_BILL,
             amount: cashAmount,
             description: billDescription({
+              kind: provider.kind,
               providerName: provider.providerName,
-              connectionNumber: provider.connectionNumber,
               billDate: bill.billDate,
               cycle: provider.billingCycle,
-              autopay: true,
             }),
             date: paidOn,
             categoryId,

@@ -53,6 +53,7 @@ export async function GET(
         autoPay: p.autoPay,
         autoPayLeadDays: p.autoPayLeadDays,
         defaultDueDay: p.defaultDueDay,
+        gracePeriodDays: p.gracePeriodDays,
         recurring: p.recurring,
         billingCycle: p.billingCycle,
         billingDay: p.billingDay,
@@ -136,6 +137,8 @@ export async function PATCH(
         autoPayLeadDays: d.autoPayLeadDays === undefined ? undefined : d.autoPayLeadDays,
         defaultDueDay:
           d.defaultDueDay === undefined ? undefined : d.defaultDueDay,
+        gracePeriodDays:
+          d.gracePeriodDays === undefined ? undefined : d.gracePeriodDays,
         recurring: d.recurring === undefined ? undefined : d.recurring,
         billingCycle:
           (d.billingCycle as UtilityBillCycle | undefined) ?? undefined,

@@ -76,7 +76,10 @@ async function run() {
 
       while (cursor <= today && generatedForProvider < CATCHUP_CAP) {
         const billDate = new Date(cursor);
-        const dueDate = computeDueDate(billDate, provider.defaultDueDay);
+        const dueDate = computeDueDate(billDate, {
+          defaultDueDay: provider.defaultDueDay,
+          gracePeriodDays: provider.gracePeriodDays,
+        });
 
         // Secondary idempotency guard: skip if a bill already sits on this
         // exact bill date (e.g. cursor was re-anchored after a manual add).

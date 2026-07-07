@@ -6,6 +6,7 @@ import { subscriptionPaySchema } from "@/lib/validators-domain";
 import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
 import { advanceCycle } from "@/lib/cascades";
+import { subscriptionDescription } from "@/lib/bill-schedule";
 import {
   ReminderKind,
   ReminderStatus,
@@ -159,7 +160,9 @@ export async function POST(
           type: TransactionType.EXPENSE,
           kind: TransactionKind.SUBSCRIPTION,
           amount,
-          description: d.notes?.trim() || sub.name,
+          description:
+            d.notes?.trim() ||
+            subscriptionDescription(sub.name, schedule.dueDate, sub.cycle),
           date: paidOn,
           accountId: resolvedAccountId,
           cardId,
