@@ -6,12 +6,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { AmountInput } from "@/components/ui/amount-input";
 import { DescriptionField } from "@/components/ui/description-field";
 import { UTILITY_KINDS, type UtilityKindValue } from "@/components/bills/utility-kind";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = { id: string; name: string; kind: string };
 type Card = { id: string; name: string };
+
+type BillingCycle =
+  | "MONTHLY"
+  | "BIMONTHLY"
+  | "QUARTERLY"
+  | "HALF_YEARLY"
+  | "YEARLY";
+
+const CYCLE_OPTIONS: { value: BillingCycle; label: string }[] = [
+  { value: "MONTHLY", label: "Every month" },
+  { value: "BIMONTHLY", label: "Every 2 months" },
+  { value: "QUARTERLY", label: "Every 3 months" },
+  { value: "HALF_YEARLY", label: "Every 6 months" },
+  { value: "YEARLY", label: "Every year" },
+];
 
 type Props = {
   initial?: {
@@ -23,7 +39,13 @@ type Props = {
     accountId: string | null;
     cardId: string | null;
     autoPay: boolean;
+    autoPayLeadDays?: number | null;
     defaultDueDay: number | null;
+    recurring?: boolean;
+    billingCycle?: BillingCycle | null;
+    billingDay?: number | null;
+    amountMode?: "FIXED" | "VARIABLE" | null;
+    defaultAmount?: number | null;
     notes: string | null;
   };
   onSaved: (id: string) => void;
@@ -48,8 +70,25 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const [accountId, setAccountId] = useState(initial?.accountId ?? "");
   const [cardId, setCardId] = useState(initial?.cardId ?? "");
   const [autoPay, setAutoPay] = useState(initial?.autoPay ?? false);
+  const [autoPayLeadDays, setAutoPayLeadDays] = useState(
+    initial?.autoPayLeadDays?.toString() ?? "0",
+  );
   const [defaultDueDay, setDefaultDueDay] = useState(
     initial?.defaultDueDay?.toString() ?? "",
+  );
+  // Recurrence — auto-create a bill each cycle.
+  const [recurring, setRecurring] = useState(initial?.recurring ?? false);
+  const [billingCycle, setBillingCycle] = useState<BillingCycle>(
+    initial?.billingCycle ?? "MONTHLY",
+  );
+  const [billingDay, setBillingDay] = useState(
+    initial?.billingDay?.toString() ?? "",
+  );
+  const [amountMode, setAmountMode] = useState<"FIXED" | "VARIABLE">(
+    initial?.amountMode ?? "VARIABLE",
+  );
+  const [defaultAmount, setDefaultAmount] = useState(
+    initial?.defaultAmount != null ? String(initial.defaultAmount) : "",
   );
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
@@ -77,6 +116,11 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   async function submit() {
     setError(null);
     if (!providerName.trim()) return setError("Provider name is required");
+    if (recurring && amountMode === "FIXED") {
+      const amt = Number(defaultAmount);
+      if (!amt || amt <= 0)
+        return setError("Set a monthly amount for a fixed recurring bill");
+    }
     setSubmitting(true);
     try {
       const payload = {
@@ -87,7 +131,13 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         accountId: sourceMode === "account" ? effectiveAccountId || null : null,
         cardId: sourceMode === "card" ? effectiveCardId || null : null,
         autoPay,
+        autoPayLeadDays: autoPay ? Number(autoPayLeadDays) || 0 : 0,
         defaultDueDay: defaultDueDay ? Number(defaultDueDay) : null,
+        recurring,
+        billingCycle,
+        billingDay: recurring && billingDay ? Number(billingDay) : null,
+        amountMode,
+        defaultAmount: defaultAmount ? Number(defaultAmount) : null,
         notes: notes.trim() || null,
       };
       const res = await fetch(
@@ -198,8 +248,105 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
             checked={autoPay}
             onChange={(e) => setAutoPay(e.target.checked)}
           />
-          Auto-pay is configured with the provider
+          Auto-pay bills from this source when they&apos;re due
         </label>
+        {autoPay && (
+          <div className="flex items-center gap-2 pl-6 text-xs">
+            <span className="text-muted-foreground">Pay</span>
+            <Input
+              value={autoPayLeadDays}
+              onChange={(e) =>
+                setAutoPayLeadDays(e.target.value.replace(/\D/g, "").slice(0, 2))
+              }
+              className="h-7 w-14 text-center"
+              placeholder="0"
+            />
+            <span className="text-muted-foreground">
+              day(s) before the due date (0 = on the due date)
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Recurrence — auto-create a fresh bill each cycle. */}
+      <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+        <label className="flex items-center gap-2 text-xs font-medium">
+          <input
+            type="checkbox"
+            checked={recurring}
+            onChange={(e) => setRecurring(e.target.checked)}
+          />
+          Auto-create this bill on a schedule
+        </label>
+        <p className="pl-6 text-[11px] text-muted-foreground">
+          A new bill is added for you each cycle — no more entering it by
+          hand.
+        </p>
+        {recurring && (
+          <div className="space-y-3 pl-6">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label>Repeats</Label>
+                <NativeSelect
+                  value={billingCycle}
+                  onChange={(v) => setBillingCycle(v as BillingCycle)}
+                  options={CYCLE_OPTIONS}
+                />
+              </div>
+              <div>
+                <Label>Bill day (1–31)</Label>
+                <Input
+                  value={billingDay}
+                  onChange={(e) =>
+                    setBillingDay(e.target.value.replace(/\D/g, "").slice(0, 2))
+                  }
+                  placeholder="Day the bill is generated"
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Amount</Label>
+              <div className="mt-1 flex gap-2 text-xs">
+                {(
+                  [
+                    ["FIXED", "Fixed each cycle"],
+                    ["VARIABLE", "Varies (I'll confirm)"],
+                  ] as const
+                ).map(([m, lbl]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setAmountMode(m)}
+                    className={`rounded-md border px-3 py-1.5 ${
+                      amountMode === m
+                        ? "bg-foreground text-background"
+                        : "bg-background"
+                    }`}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label>
+                {amountMode === "FIXED"
+                  ? "Amount each cycle"
+                  : "Estimated amount (optional)"}
+              </Label>
+              <AmountInput
+                value={defaultAmount}
+                onChange={setDefaultAmount}
+                placeholder="0"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {amountMode === "FIXED"
+                  ? "Fixed bills are auto-paid at this amount when auto-pay is on."
+                  : "Each generated bill waits for you to enter the real amount before it can be paid."}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       <DescriptionField

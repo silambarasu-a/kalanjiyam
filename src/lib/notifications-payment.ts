@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email/send";
 import { getAppUrl } from "@/lib/email/mailer";
 import { paymentConfirmationTemplate } from "@/lib/email/templates/payment-confirmation";
+import { paymentFailedTemplate } from "@/lib/email/templates/payment-failed";
 import { signUnsubscribeToken } from "@/lib/email/unsubscribe-token";
 import {
   hasPermission,
@@ -170,6 +171,78 @@ export async function sendPaymentConfirmationEmail(
         `[payment-confirmation] failed to email ${m.user.email}`,
         e,
       );
+    }
+  }
+}
+
+export type PaymentFailedInput = {
+  workspaceId: string;
+  /** Who to notify — the item's owner (or workspace owner fallback). */
+  recipientUserIds: string[];
+  kind: PaymentKind;
+  /** Headline ("TNEB — Jun 2026 bill", subscription name). */
+  label: string;
+  /** Amount that failed to pay. */
+  amount: number;
+  /** Human reason the auto-pay couldn't be recorded. */
+  reason: string;
+  /** Deep link so the user can pay it by hand. */
+  link: string;
+};
+
+/**
+ * Notify the owner that an auto-pay could NOT be recorded. Mirrors
+ * `sendPaymentConfirmationEmail`'s recipient resolution (accepted members,
+ * `enabled` opt-out honored) but always targets an explicit recipient list
+ * — a failed payment must reach whoever owns the source, so no feature
+ * gate. Best-effort; never throws into the caller's cron loop.
+ */
+export async function sendPaymentFailedEmail(
+  input: PaymentFailedInput,
+): Promise<void> {
+  const appUrl = getAppUrl();
+  if (!input.recipientUserIds.length) return;
+
+  const members = await prisma.workspaceMember.findMany({
+    where: {
+      workspaceId: input.workspaceId,
+      acceptedAt: { not: null },
+      userId: { in: input.recipientUserIds },
+    },
+    include: { user: { select: { id: true, name: true, email: true } } },
+  });
+
+  for (const m of members) {
+    const prefs = (m.emailPrefs ?? {}) as { enabled?: boolean };
+    if (prefs.enabled === false) continue;
+
+    let unsubscribeUrl: string | undefined;
+    try {
+      const token = signUnsubscribeToken(m.id);
+      unsubscribeUrl = `${appUrl}/unsubscribe?t=${encodeURIComponent(token)}`;
+    } catch {
+      unsubscribeUrl = undefined;
+    }
+
+    const tpl = paymentFailedTemplate({
+      label: input.label,
+      amount: input.amount,
+      kindLabel: KIND_LABEL[input.kind].replace(/ paid$/i, "").trim() || "Payment",
+      reason: input.reason,
+      link: input.link.startsWith("http") ? input.link : `${appUrl}${input.link}`,
+      appUrl,
+      unsubscribeUrl,
+    });
+
+    try {
+      await sendEmail({
+        to: m.user.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+      });
+    } catch (e) {
+      console.warn(`[payment-failed] failed to email ${m.user.email}`, e);
     }
   }
 }

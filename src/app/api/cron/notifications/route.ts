@@ -100,6 +100,7 @@ async function run() {
           id: true,
           dueDate: true,
           billAmount: true,
+          estimated: true,
           provider: { select: { id: true, providerName: true, kind: true } },
         },
       },
@@ -179,8 +180,15 @@ async function run() {
     }
 
     const isExpiry = r.kind === ReminderKind.VEHICLE_DOC_RENEWAL;
-    const title =
-      daysOut === 0
+    // Auto-generated VARIABLE bills land with a placeholder amount — the
+    // reminder's job is to prompt the user to enter the real figure.
+    const isEstimatedBill =
+      r.kind === ReminderKind.UTILITY_BILL_DUE && !!r.utilityBill?.estimated;
+    const title = isEstimatedBill
+      ? daysOut < 0
+        ? `Enter amount for ${label} (overdue)`
+        : `Enter amount for ${label}`
+      : daysOut === 0
         ? isExpiry
           ? `${label} expires today`
           : `${label} is due today`
@@ -213,11 +221,13 @@ async function run() {
                 ? `/loans/${r.loan.id}`
                 : "/notifications";
 
-    const body = isExpiry
-      ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`
-      : r.amount != null
-        ? `Amount: ₹${Number(r.amount).toLocaleString("en-IN")}`
-        : null;
+    const body = isEstimatedBill
+      ? "Auto-generated bill — set the actual amount so it can be paid."
+      : isExpiry
+        ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`
+        : r.amount != null
+          ? `Amount: ₹${Number(r.amount).toLocaleString("en-IN")}`
+          : null;
     const result = await createNotification({
       workspaceId: r.workspaceId,
       kind,

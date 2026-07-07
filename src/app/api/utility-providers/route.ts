@@ -7,8 +7,11 @@ import {
   utilityProviderListQuerySchema,
 } from "@/lib/validators-domain";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
+import { initialNextBillDate } from "@/lib/bill-schedule";
 import {
   type Prisma,
+  UtilityAmountMode,
+  UtilityBillCycle,
   UtilityKind,
   UtilityProviderStatus,
 } from "@/generated/prisma/client";
@@ -115,7 +118,14 @@ export async function GET(request: Request) {
         account: p.account,
         card: p.card,
         autoPay: p.autoPay,
+        autoPayLeadDays: p.autoPayLeadDays,
         defaultDueDay: p.defaultDueDay,
+        recurring: p.recurring,
+        billingCycle: p.billingCycle,
+        billingDay: p.billingDay,
+        amountMode: p.amountMode,
+        defaultAmount: p.defaultAmount != null ? Number(p.defaultAmount) : null,
+        nextBillDate: p.nextBillDate?.toISOString() ?? null,
         advanceBalance: Number(p.advanceBalance),
         status: p.status,
         notes: p.notes,
@@ -172,6 +182,15 @@ export async function POST(request: Request) {
       }
     }
 
+    // When recurrence is on, seed the generator's cursor: the first bill
+    // lands on the next occurrence of the billing day (never back-dated).
+    const recurring = data.recurring ?? false;
+    const billingDay = recurring ? (data.billingDay ?? 1) : (data.billingDay ?? null);
+    const nextBillDate =
+      recurring && billingDay
+        ? initialNextBillDate(new Date(), billingDay)
+        : null;
+
     const created = await prisma.utilityProvider.create({
       data: {
         workspaceId: ctx.workspaceId,
@@ -183,7 +202,14 @@ export async function POST(request: Request) {
         accountId: data.accountId ?? null,
         cardId: data.cardId ?? null,
         autoPay: data.autoPay ?? false,
+        autoPayLeadDays: data.autoPayLeadDays ?? 0,
         defaultDueDay: data.defaultDueDay ?? null,
+        recurring,
+        billingCycle: (data.billingCycle ?? "MONTHLY") as UtilityBillCycle,
+        billingDay,
+        amountMode: (data.amountMode ?? "VARIABLE") as UtilityAmountMode,
+        defaultAmount: data.defaultAmount ?? null,
+        nextBillDate,
         status: (data.status ?? "ACTIVE") as UtilityProviderStatus,
         notes: data.notes ?? null,
       },

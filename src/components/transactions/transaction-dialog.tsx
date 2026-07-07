@@ -110,6 +110,21 @@ type LivestockBatch = {
   currentCount: number;
   livestock: { id: string; name: string };
 };
+// Pay-a-bill / subscription picker (EXPENSE mode).
+type UnpaidBill = {
+  id: string;
+  billAmount: number;
+  dueDate: string;
+  estimated: boolean;
+  provider: { providerName: string; kind: string } | null;
+};
+type DueSubscription = {
+  id: string;
+  name: string;
+  amount: number;
+  status: string;
+  nextBillingDate: string;
+};
 
 
 // uploadReceiptsToAttachment was extracted to
@@ -515,6 +530,39 @@ function IncomeExpenseForm({
   );
   const episodes = hospitalizationsData?.hospitalizations ?? [];
 
+  // ── Pay a bill / subscription (EXPENSE only) ──────────────────────
+  // Lets the user settle an unpaid utility bill or a due subscription
+  // straight from this dialog. The category is auto-resolved server-side
+  // and the item is marked paid via its dedicated pay endpoint — we don't
+  // route through POST /api/transactions. Mirrors the wage-mode fan-out.
+  const [payTarget, setPayTarget] = useState(""); // "" | "bill:<id>" | "sub:<id>"
+  const { data: unpaidBillsData } = useSWR<{ bills: UnpaidBill[] }>(
+    type === "EXPENSE" ? "/api/utility-bills?status=unpaid" : null,
+    fetcher,
+  );
+  const { data: activeSubsData } = useSWR<{ subscriptions: DueSubscription[] }>(
+    type === "EXPENSE" ? "/api/subscriptions" : null,
+    fetcher,
+  );
+  // Estimated (placeholder) bills can't be paid until their amount is set.
+  const unpaidBills = (unpaidBillsData?.bills ?? []).filter((b) => !b.estimated);
+  const activeSubs = (activeSubsData?.subscriptions ?? []).filter(
+    (s) => s.status === "ACTIVE",
+  );
+  const isPayMode = payTarget !== "";
+  function onPickPayTarget(v: string) {
+    setPayTarget(v);
+    // Snap the amount to the picked item so the source picker's
+    // insufficient-balance check is accurate; blank source stays as-is.
+    if (v.startsWith("bill:")) {
+      const b = unpaidBills.find((x) => `bill:${x.id}` === v);
+      if (b) setAmount(String(b.billAmount));
+    } else if (v.startsWith("sub:")) {
+      const s = activeSubs.find((x) => `sub:${x.id}` === v);
+      if (s) setAmount(String(s.amount));
+    }
+  }
+
   const amtNum = parseFloat(amount) || 0;
   // Pay-from picker grouped by funding-source kind so users scan by
   // category (Bank → Wallet → Cash → Debit Card → Credit Card) rather
@@ -617,6 +665,50 @@ function IncomeExpenseForm({
       return;
     }
     const [kind, sid] = effectivePaymentSource.split(":");
+
+    // Pay-mode → settle the picked bill / subscription via its dedicated
+    // pay endpoint (category auto-resolved, item marked paid). Does not
+    // route through POST /api/transactions.
+    if (isPayMode) {
+      if (kind !== "account" && kind !== "card") {
+        setError("Pick an account or card to pay from");
+        return;
+      }
+      setSubmitting(true);
+      try {
+        const isBill = payTarget.startsWith("bill:");
+        const id = payTarget.split(":")[1];
+        const url = isBill
+          ? `/api/utility-bills/${id}/pay`
+          : `/api/subscriptions/${id}/pay`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            accountId: kind === "account" ? sid : null,
+            cardId: kind === "card" ? sid : null,
+            paidOn: date,
+            notes: description.trim() || undefined,
+            ...(isBill ? {} : { amount: amt }),
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(body.error ?? "Payment failed");
+        } else {
+          toast.success(isBill ? "Bill paid" : "Subscription paid");
+          globalMutate("/api/utility-bills?status=unpaid");
+          globalMutate("/api/subscriptions");
+          await mutateBalances();
+          onClose();
+        }
+      } catch {
+        setError("Network error");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     // Wage mode → fan out to /api/wage-payments, one call per worker.
     if (isWageMode) {
@@ -850,12 +942,58 @@ function IncomeExpenseForm({
 
   return (
     <div className="space-y-3">
+      {type === "EXPENSE" &&
+        (unpaidBills.length > 0 || activeSubs.length > 0) && (
+          <label className="block">
+            <span className="text-xs font-medium">
+              Pay a bill / subscription{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </span>
+            <div className="mt-1">
+              <NativeSelect
+                value={payTarget}
+                onChange={onPickPayTarget}
+                placeholder="— none (regular expense) —"
+                options={
+                  [
+                    unpaidBills.length > 0 && {
+                      label: "Unpaid bills",
+                      options: unpaidBills.map((b) => ({
+                        value: `bill:${b.id}`,
+                        label: `${b.provider?.providerName ?? "Bill"} · ${formatINR(b.billAmount)}`,
+                        hint: `due ${new Date(b.dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
+                      })),
+                    },
+                    activeSubs.length > 0 && {
+                      label: "Subscriptions",
+                      options: activeSubs.map((s) => ({
+                        value: `sub:${s.id}`,
+                        label: `${s.name} · ${formatINR(s.amount)}`,
+                        hint: `next ${new Date(s.nextBillingDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`,
+                      })),
+                    },
+                  ].filter(Boolean) as NativeSelectGroup[]
+                }
+              />
+            </div>
+            {isPayMode && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Category is set automatically. Saving marks this item paid
+                and records the expense.
+              </p>
+            )}
+          </label>
+        )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Amount (₹)</span>
           <AmountInput value={amount} onChange={setAmount}
             placeholder="0"
             autoFocus
+            disabled={isPayMode}
           />
         </label>
         <label className="block">
@@ -892,22 +1030,28 @@ function IncomeExpenseForm({
         <div className="block">
           <span className="text-xs font-medium">Category</span>
           <div className="mt-1">
-            <CategoryCombobox
-              value={categoryId || null}
-              onChange={(id) => setCategoryId(id)}
-              categories={categories.map((c) => ({
-                id: c.id,
-                name: c.name,
-                parentCategoryId: c.parentCategoryId,
-                group: c.group,
-              }))}
-              placeholder="— optional —"
-              canCreate
-              onRequestCreate={(typedText) => {
-                setQuickCreateName(typedText);
-                setQuickCreateOpen(true);
-              }}
-            />
+            {isPayMode ? (
+              <div className="flex h-9 items-center rounded-md border border-dashed bg-muted/40 px-3 text-xs text-muted-foreground">
+                Set automatically
+              </div>
+            ) : (
+              <CategoryCombobox
+                value={categoryId || null}
+                onChange={(id) => setCategoryId(id)}
+                categories={categories.map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  parentCategoryId: c.parentCategoryId,
+                  group: c.group,
+                }))}
+                placeholder="— optional —"
+                canCreate
+                onRequestCreate={(typedText) => {
+                  setQuickCreateName(typedText);
+                  setQuickCreateOpen(true);
+                }}
+              />
+            )}
           </div>
         </div>
         <CategoryQuickCreateDialog
@@ -1181,7 +1325,8 @@ function IncomeExpenseForm({
         </div>
       )}
 
-      {(cropBatches.length > 0 ||
+      {!isPayMode &&
+        (cropBatches.length > 0 ||
         livestockBatches.length > 0 ||
         events.length > 0) && (
         <label className="block">
@@ -1233,7 +1378,7 @@ function IncomeExpenseForm({
         </label>
       )}
 
-      {type === "EXPENSE" && (
+      {type === "EXPENSE" && !isPayMode && (
         <div className="rounded-md border bg-card p-4 space-y-3">
           {splits.length === 0 ? (
             <button
@@ -1283,7 +1428,7 @@ function IncomeExpenseForm({
         maxLength={200}
       />
 
-      {(() => {
+      {!isPayMode && (() => {
         // Predict the eventual owner so we can show a meaningful hint
         // and pick the right uploader. TRANSACTION_RECEIPT (the common
         // case) uses instant-upload — files hit S3 immediately.
@@ -1395,9 +1540,13 @@ function IncomeExpenseForm({
         >
           {submitting
             ? "Saving…"
-            : isWageMode
-              ? `Pay ${workerIds.length || ""} worker${workerIds.length === 1 ? "" : "s"}`.trim()
-              : `Save ${type === "INCOME" ? "income" : "expense"}`}
+            : isPayMode
+              ? payTarget.startsWith("bill:")
+                ? "Pay bill"
+                : "Pay subscription"
+              : isWageMode
+                ? `Pay ${workerIds.length || ""} worker${workerIds.length === 1 ? "" : "s"}`.trim()
+                : `Save ${type === "INCOME" ? "income" : "expense"}`}
         </Button>
       </DialogFooter>
     </div>

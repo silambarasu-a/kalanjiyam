@@ -4,7 +4,10 @@ import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { utilityProviderUpdateSchema } from "@/lib/validators-domain";
 import { canModifyRecord } from "@/lib/permissions";
+import { initialNextBillDate } from "@/lib/bill-schedule";
 import {
+  UtilityAmountMode,
+  UtilityBillCycle,
   UtilityKind,
   UtilityProviderStatus,
 } from "@/generated/prisma/client";
@@ -48,7 +51,14 @@ export async function GET(
         card: p.card,
         owner: p.owner,
         autoPay: p.autoPay,
+        autoPayLeadDays: p.autoPayLeadDays,
         defaultDueDay: p.defaultDueDay,
+        recurring: p.recurring,
+        billingCycle: p.billingCycle,
+        billingDay: p.billingDay,
+        amountMode: p.amountMode,
+        defaultAmount: p.defaultAmount != null ? Number(p.defaultAmount) : null,
+        nextBillDate: p.nextBillDate?.toISOString() ?? null,
         advanceBalance: Number(p.advanceBalance),
         status: p.status,
         notes: p.notes,
@@ -83,6 +93,36 @@ export async function PATCH(
       );
     }
     const d = parsed.data;
+
+    // Recompute the generator cursor (`nextBillDate`) when recurrence is
+    // toggled or the billing day moves. Effective values merge the patch
+    // over the existing row.
+    const effectiveRecurring = d.recurring ?? existing.recurring;
+    const effectiveBillingDay =
+      d.billingDay !== undefined ? d.billingDay : existing.billingDay;
+    let nextBillDate: Date | null | undefined = undefined; // undefined = leave as-is
+    if (!effectiveRecurring) {
+      // Turned off (or stays off): clear the cursor so nothing generates.
+      nextBillDate = existing.nextBillDate ? null : undefined;
+    } else {
+      const justEnabled = !existing.recurring;
+      const dayChanged =
+        d.billingDay !== undefined && d.billingDay !== existing.billingDay;
+      if (justEnabled || existing.nextBillDate == null || dayChanged) {
+        nextBillDate = initialNextBillDate(
+          new Date(),
+          effectiveBillingDay ?? 1,
+        );
+      }
+    }
+    // Persist a sensible billing day when recurrence is on but none set.
+    const billingDayToStore =
+      effectiveRecurring && effectiveBillingDay == null
+        ? 1
+        : d.billingDay === undefined
+          ? undefined
+          : d.billingDay;
+
     await prisma.utilityProvider.update({
       where: { id },
       data: {
@@ -93,8 +133,17 @@ export async function PATCH(
         accountId: d.accountId === undefined ? undefined : d.accountId,
         cardId: d.cardId === undefined ? undefined : d.cardId,
         autoPay: d.autoPay ?? undefined,
+        autoPayLeadDays: d.autoPayLeadDays === undefined ? undefined : d.autoPayLeadDays,
         defaultDueDay:
           d.defaultDueDay === undefined ? undefined : d.defaultDueDay,
+        recurring: d.recurring === undefined ? undefined : d.recurring,
+        billingCycle:
+          (d.billingCycle as UtilityBillCycle | undefined) ?? undefined,
+        billingDay: billingDayToStore,
+        amountMode: (d.amountMode as UtilityAmountMode | undefined) ?? undefined,
+        defaultAmount:
+          d.defaultAmount === undefined ? undefined : d.defaultAmount,
+        nextBillDate,
         status: (d.status as UtilityProviderStatus | undefined) ?? undefined,
         notes: d.notes === undefined ? undefined : d.notes,
       },

@@ -27,6 +27,9 @@ export type CreateNotificationInput = {
   link?: string | null;
   reminderId?: string | null;
   claimId?: string | null;
+  /** Persist the in-app row but don't send the generic email — used when
+   *  the caller sends its own richer email (e.g. payment-failed). */
+  skipEmail?: boolean;
 };
 
 type EmailPrefs = {
@@ -53,6 +56,9 @@ const KIND_FEATURES: Record<NotificationKind, Feature[] | null> = {
   UTILITY_BILL_OVERDUE: ["bills"],
   VACCINATION_DUE: ["livestock"],
   LIVESTOCK_CYCLE_ENDING: ["livestock"],
+  // Payment-failed alerts are targeted at the payer/owner directly, so no
+  // feature gate — they must always reach the person who owns the source.
+  PAYMENT_FAILED: null,
   GENERIC: null,
 };
 
@@ -115,9 +121,11 @@ export async function createNotification(
   // Best-effort email — never fails the notification create. The targeted
   // recipients are: the specific user (when userId is set), or every
   // workspace member who has opted in for this kind (when broadcast).
-  void dispatchEmail(row.id, input).catch((e) => {
-    console.error("[notifications] email dispatch failed", e);
-  });
+  if (!input.skipEmail) {
+    void dispatchEmail(row.id, input).catch((e) => {
+      console.error("[notifications] email dispatch failed", e);
+    });
+  }
 
   return { id: row.id, created: true };
 }

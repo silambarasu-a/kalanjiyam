@@ -5,6 +5,8 @@ export const COLORS = {
   primarySoft: "#059669",
   primaryTint: "#ECFDF5",
   accent: "#0EA5E9",
+  danger: "#B91C1C",
+  dangerTint: "#FEF2F2",
   cta: "#047857",
   softPanel: "#ECFDF5",
   pageBg: "#FAFAFB",

@@ -6,6 +6,7 @@ import { utilityBillPaySchema } from "@/lib/validators-domain";
 import { canAccessRecord } from "@/lib/permissions";
 import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
 import { resolveUtilityCategoryId } from "@/lib/utility-category";
+import { billDescription } from "@/lib/bill-schedule";
 import {
   ADVANCE_NONNEG_MESSAGE,
   isAdvanceNonNegViolation,
@@ -186,7 +187,13 @@ export async function POST(
           kind: TransactionKind.UTILITY_BILL,
           amount: cashAmount,
           description:
-            d.notes?.trim() || `${provider.providerName} bill`,
+            d.notes?.trim() ||
+            billDescription({
+              providerName: provider.providerName,
+              connectionNumber: provider.connectionNumber,
+              billDate: bill.billDate,
+              cycle: provider.billingCycle,
+            }),
           date: paidOn,
           categoryId,
           accountId: cashAmount > 0 ? resolvedAccountId : null,

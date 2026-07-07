@@ -1490,6 +1490,14 @@ const utilityKindEnum = z.enum([
 ]);
 
 const utilityProviderStatusEnum = z.enum(["ACTIVE", "INACTIVE"]);
+const utilityBillCycleEnum = z.enum([
+  "MONTHLY",
+  "BIMONTHLY",
+  "QUARTERLY",
+  "HALF_YEARLY",
+  "YEARLY",
+]);
+const utilityAmountModeEnum = z.enum(["FIXED", "VARIABLE"]);
 
 const utilityProviderBase = z.object({
   kind: utilityKindEnum,
@@ -1499,20 +1507,48 @@ const utilityProviderBase = z.object({
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
   autoPay: z.boolean().optional().default(false),
+  autoPayLeadDays: z.number().int().min(0).max(31).optional().default(0),
   defaultDueDay: z.number().int().min(1).max(31).optional().nullable(),
+  // Recurrence config.
+  recurring: z.boolean().optional().default(false),
+  billingCycle: utilityBillCycleEnum.optional().default("MONTHLY"),
+  billingDay: z.number().int().min(1).max(31).optional().nullable(),
+  amountMode: utilityAmountModeEnum.optional().default("VARIABLE"),
+  defaultAmount: z.number().positive().max(10_000_000).optional().nullable(),
   status: utilityProviderStatusEnum.optional().default("ACTIVE"),
   notes: z.string().trim().max(1000).optional().nullable(),
 });
 
-export const utilityProviderCreateSchema = utilityProviderBase.refine(
-  (d) => {
-    if (!d.accountId && !d.cardId) return true; // default source is optional
-    return !!d.accountId !== !!d.cardId;
-  },
-  { message: "Pick exactly one default source — account or card", path: ["accountId"] },
-);
+// A FIXED recurring provider must carry a default amount so both the
+// generator and autopay know what to charge.
+function fixedNeedsAmount(d: {
+  recurring?: boolean;
+  amountMode?: "FIXED" | "VARIABLE";
+  defaultAmount?: number | null;
+}): boolean {
+  if (!d.recurring || d.amountMode !== "FIXED") return true;
+  return d.defaultAmount != null && d.defaultAmount > 0;
+}
 
-export const utilityProviderUpdateSchema = utilityProviderBase.partial();
+export const utilityProviderCreateSchema = utilityProviderBase
+  .refine(
+    (d) => {
+      if (!d.accountId && !d.cardId) return true; // default source is optional
+      return !!d.accountId !== !!d.cardId;
+    },
+    { message: "Pick exactly one default source — account or card", path: ["accountId"] },
+  )
+  .refine(fixedNeedsAmount, {
+    message: "Set a monthly amount for a fixed recurring bill",
+    path: ["defaultAmount"],
+  });
+
+export const utilityProviderUpdateSchema = utilityProviderBase
+  .partial()
+  .refine(fixedNeedsAmount, {
+    message: "Set a monthly amount for a fixed recurring bill",
+    path: ["defaultAmount"],
+  });
 
 export const utilityAdvanceCreateSchema = z
   .object({

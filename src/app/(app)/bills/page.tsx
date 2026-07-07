@@ -38,6 +38,7 @@ type Provider = {
   connectionNumber: string | null;
   advanceBalance: number;
   autoPay: boolean;
+  recurring: boolean;
   status: "ACTIVE" | "INACTIVE";
   account: { id: string; name: string; kind: string } | null;
   card: { id: string; name: string } | null;
@@ -221,6 +222,20 @@ function ProviderCard({ provider }: { provider: Provider }) {
             {utilityKindLabel(provider.kind)}
             {provider.connectionNumber ? ` · #${provider.connectionNumber}` : ""}
           </div>
+          {(provider.recurring || provider.autoPay) && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {provider.recurring && (
+                <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                  Recurring
+                </span>
+              )}
+              {provider.autoPay && (
+                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  Auto-pay
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
