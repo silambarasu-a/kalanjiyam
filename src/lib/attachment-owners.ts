@@ -69,6 +69,15 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "CONTACT_DOCUMENT": {
+      // General documents (ID proofs, agreements, photos) attached
+      // directly to a Contact.
+      const row = await prisma.contact.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     case "EVENT_DOCUMENT": {
       const row = await prisma.event.findUnique({
         where: { id: ownerId },

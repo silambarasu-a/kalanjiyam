@@ -63,6 +63,15 @@ export async function DELETE(
         userId: ctx.userId,
         tx,
       });
+      // Contact-owned documents (ID proofs, agreements, photos) are
+      // archived alongside the contact so they don't dangle in S3.
+      await archiveAttachmentsForOwner({
+        workspaceId: ctx.workspaceId,
+        ownerKind: "CONTACT_DOCUMENT",
+        ownerId: id,
+        userId: ctx.userId,
+        tx,
+      });
       await tx.contact.delete({ where: { id } });
     });
     return NextResponse.json({ ok: true });

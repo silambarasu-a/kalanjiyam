@@ -29,6 +29,7 @@ import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 import { ContactAttachmentsPanel } from "@/components/contacts/contact-attachments-panel";
+import { AttachmentList } from "@/components/attachments/attachment-list";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
@@ -145,7 +146,16 @@ export default function MemberLedgerDetail() {
     id ? `/api/contacts/${id}/attachments` : null,
     fetcher,
   );
-  const attachmentCount = attachData?.count ?? 0;
+  // Contact-owned documents. Same SWR key AttachmentList uses, so the badge
+  // stays in sync as documents are uploaded / deleted below.
+  const { data: contactDocsData } = useSWR<{ attachments: unknown[] }>(
+    id
+      ? `/api/attachments?ownerKind=CONTACT_DOCUMENT&ownerId=${encodeURIComponent(id)}`
+      : null,
+    fetcher,
+  );
+  const attachmentCount =
+    (attachData?.count ?? 0) + (contactDocsData?.attachments.length ?? 0);
 
   async function forgiveCharge(chargeId: string) {
     setForgivingChargeId(chargeId);
@@ -561,11 +571,30 @@ export default function MemberLedgerDetail() {
           </div>
         </TabsContent>
 
-        <TabsContent value="attachments">
-          <ContactAttachmentsPanel
-            contactId={id ?? ""}
-            onViewTransaction={(txnId) => setDetailTxnId(txnId)}
-          />
+        <TabsContent value="attachments" className="space-y-6">
+          <section className="space-y-2">
+            <div>
+              <h3 className="text-sm font-semibold">Documents</h3>
+              <p className="text-xs text-muted-foreground">
+                ID proofs, agreements, photos and other files kept on{" "}
+                {data.member.name}. PDFs and images, up to 25&nbsp;MB each.
+              </p>
+            </div>
+            <AttachmentList
+              ownerKind="CONTACT_DOCUMENT"
+              ownerId={id ?? ""}
+              accept="image/*,application/pdf"
+              emptyMessage="No documents yet — upload one above."
+            />
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold">From transactions</h3>
+            <ContactAttachmentsPanel
+              contactId={id ?? ""}
+              onViewTransaction={(txnId) => setDetailTxnId(txnId)}
+            />
+          </section>
         </TabsContent>
 
         {data.expenses.length > 0 && (

@@ -20,6 +20,7 @@ export type AttachmentOwnerKind =
   | "CROP_BATCH_BILL"
   | "LOAN_DOCUMENT"
   | "INCOME_PROOF"
+  | "CONTACT_DOCUMENT"
   | "EVENT_DOCUMENT"
   | "UTILITY_BILL"
   | "SUBSCRIPTION_DOCUMENT"
@@ -88,6 +89,13 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     mime: ["application/pdf", "image/*"],
     maxMB: 25,
     sensitive: true,
+  },
+  CONTACT_DOCUMENT: {
+    entityPath: "contact-documents",
+    feature: "members",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    sensitive: false,
   },
   EVENT_DOCUMENT: {
     entityPath: "events",
