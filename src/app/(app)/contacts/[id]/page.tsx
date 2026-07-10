@@ -27,6 +27,8 @@ import {
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
+import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
+import { ContactAttachmentsPanel } from "@/components/contacts/contact-attachments-panel";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Settlement = { id: string; amount: number; paidAt: string; notes: string | null };
@@ -137,6 +139,13 @@ export default function MemberLedgerDetail() {
   const [bulkSettleDirection, setBulkSettleDirection] = useState<
     "OWED_TO_USER" | "USER_OWES" | null
   >(null);
+  // Transaction opened in the read-only detail dialog (full data + receipts).
+  const [detailTxnId, setDetailTxnId] = useState<string | null>(null);
+  const { data: attachData } = useSWR<{ count: number }>(
+    id ? `/api/contacts/${id}/attachments` : null,
+    fetcher,
+  );
+  const attachmentCount = attachData?.count ?? 0;
 
   async function forgiveCharge(chargeId: string) {
     setForgivingChargeId(chargeId);
@@ -244,6 +253,14 @@ export default function MemberLedgerDetail() {
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="attachments">
+            Attachments
+            {attachmentCount > 0 && (
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                ({attachmentCount})
+              </span>
+            )}
+          </TabsTrigger>
           {data.expenses.length > 0 && (
             <TabsTrigger value="expenses">
               Spent on them
@@ -322,14 +339,31 @@ export default function MemberLedgerDetail() {
               return (
                 <div key={c.id} className="px-5 py-3">
                   <div className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">
-                        {c.origin?.description ?? "Charge"}
+                    {c.origin ? (
+                      <button
+                        type="button"
+                        onClick={() => setDetailTxnId(c.origin!.id)}
+                        className="group flex-1 min-w-0 text-left"
+                        title="View full transaction details"
+                      >
+                        <div className="font-medium truncate group-hover:underline">
+                          {c.origin.description}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDate(c.origin.date)} · {c.status} ·{" "}
+                          <span className="text-primary group-hover:underline">
+                            View details
+                          </span>
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">Charge</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDate(c.createdAt)} · {c.status}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {c.origin ? formatDate(c.origin.date) : formatDate(c.createdAt)} · {c.status}
-                      </div>
-                    </div>
+                    )}
                     <div className="text-right">
                       <div className="font-semibold">{formatINR(c.amount)}</div>
                       {c.settledAmount > 0 && (
@@ -527,6 +561,13 @@ export default function MemberLedgerDetail() {
           </div>
         </TabsContent>
 
+        <TabsContent value="attachments">
+          <ContactAttachmentsPanel
+            contactId={id ?? ""}
+            onViewTransaction={(txnId) => setDetailTxnId(txnId)}
+          />
+        </TabsContent>
+
         {data.expenses.length > 0 && (
           <TabsContent value="expenses">
             <p className="text-xs text-muted-foreground mb-2">
@@ -535,9 +576,17 @@ export default function MemberLedgerDetail() {
             </p>
             <div className="rounded-lg border bg-card divide-y">
               {data.expenses.map((e) => (
-                <div key={e.id} className="flex items-center gap-3 px-5 py-2.5">
+                <button
+                  type="button"
+                  key={e.id}
+                  onClick={() => setDetailTxnId(e.id)}
+                  className="group flex w-full items-center gap-3 px-5 py-2.5 text-left hover:bg-muted/40"
+                  title="View full transaction details"
+                >
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{e.description}</div>
+                    <div className="text-sm font-medium truncate group-hover:underline">
+                      {e.description}
+                    </div>
                     <div className="text-xs text-muted-foreground truncate">
                       {formatDate(e.date)}
                       {e.account ? ` · ${e.account.name}` : ""}
@@ -550,7 +599,7 @@ export default function MemberLedgerDetail() {
                   <div className="text-sm font-semibold tabular-nums">
                     {formatINR(e.amount)}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </TabsContent>
@@ -565,9 +614,15 @@ export default function MemberLedgerDetail() {
             </p>
             <div className="rounded-lg border bg-card divide-y">
               {data.paidForMe!.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 px-5 py-2.5">
+                <button
+                  type="button"
+                  key={p.id}
+                  onClick={() => setDetailTxnId(p.id)}
+                  className="group flex w-full items-center gap-3 px-5 py-2.5 text-left hover:bg-muted/40"
+                  title="View full transaction details"
+                >
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">
+                    <div className="text-sm font-medium truncate group-hover:underline">
                       {p.description}
                     </div>
                     <div className="text-xs text-muted-foreground truncate">
@@ -589,7 +644,7 @@ export default function MemberLedgerDetail() {
                   <div className="text-sm font-semibold tabular-nums">
                     {formatINR(p.amount)}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </TabsContent>
@@ -695,6 +750,12 @@ export default function MemberLedgerDetail() {
         accounts={accounts}
         contactName={data.member.name}
         onClose={() => setSettleCharge(null)}
+      />
+
+      <TransactionDetailDialog
+        transactionId={detailTxnId}
+        open={detailTxnId !== null}
+        onOpenChange={(o) => !o && setDetailTxnId(null)}
       />
 
       {bulkSettleDirection && (

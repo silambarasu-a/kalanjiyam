@@ -139,6 +139,23 @@ export const transactionCreateSchema = z
     loanId: z.string().uuid().optional().nullable(),
     investmentId: z.string().uuid().optional().nullable(),
     investmentAction: z.enum(["BUY", "SELL"]).optional().nullable(),
+    // When paying an insurance premium via the transaction dialog, the
+    // caller passes the InvestmentReminder it's clearing so the route can
+    // mark it CONFIRMED (instead of leaving a stale UPCOMING due). Optional
+    // — ad-hoc premium pays without a specific reminder still advance the
+    // policy's nextDueDate and confirm the earliest matching reminder.
+    reminderId: z.string().uuid().optional().nullable(),
+    // Paying an insurance premium in installments (EMI). `amount` is the
+    // per-installment figure paid now (installment #1); the route seeds the
+    // remaining installments as their own upcoming reminders. Only honoured
+    // for INSURANCE BUY transactions.
+    premiumEmi: z
+      .object({
+        installments: z.number().int().min(2).max(120),
+        frequency: z.enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY"]),
+      })
+      .optional()
+      .nullable(),
     investmentQty: z.number().positive().optional().nullable(),
     investmentPrice: z.number().positive().optional().nullable(),
     exchangeRate: z.number().positive().optional().nullable(),
@@ -1043,7 +1060,16 @@ const investmentKindEnum = z.enum([
   "GOLD",
   "OTHER",
 ]);
-const premiumFreqEnum = z.enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"]);
+const premiumFreqEnum = z.enum([
+  "MONTHLY",
+  "QUARTERLY",
+  "HALF_YEARLY",
+  "YEARLY",
+  "EVERY_2_YEARS",
+  "EVERY_3_YEARS",
+  "EVERY_5_YEARS",
+  "ONE_TIME",
+]);
 
 const investmentCreateBase = z.object({
   kind: investmentKindEnum,

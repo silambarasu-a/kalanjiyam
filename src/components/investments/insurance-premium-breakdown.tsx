@@ -32,9 +32,22 @@ interface Props {
   premiumAmount: number;
   nextDueDate?: string | Date | null;
   frequency?: string | null;
+  /** Amount the user pays now — the full total, or the first EMI installment. */
   onTotalChange: (total: number) => void;
   onNotesChange?: (notes: string) => void;
+  /** Reports the EMI plan (or null when paying in full) so the parent form
+   *  can seed the remaining installments as reminders. */
+  onEmiChange?: (
+    emi: { installments: number; frequency: string } | null,
+  ) => void;
 }
+
+const EMI_FREQUENCIES: { value: string; label: string }[] = [
+  { value: "MONTHLY", label: "Monthly" },
+  { value: "QUARTERLY", label: "Quarterly" },
+  { value: "HALF_YEARLY", label: "Half-yearly" },
+  { value: "YEARLY", label: "Yearly" },
+];
 
 /**
  * Premium + late-fee breakdown shown when a user pays an INSURANCE premium
@@ -50,29 +63,69 @@ export function InsurancePremiumBreakdown({
   frequency,
   onTotalChange,
   onNotesChange,
+  onEmiChange,
 }: Props) {
   const [includeLateFee, setIncludeLateFee] = useState(false);
   const [lateFeeAmount, setLateFeeAmount] = useState("");
+  const [emiEnabled, setEmiEnabled] = useState(false);
+  const [emiInstallments, setEmiInstallments] = useState("12");
+  const [emiFrequency, setEmiFrequency] = useState("MONTHLY");
+  const [emiCharge, setEmiCharge] = useState("");
 
   const dueInfo = getDueInfo(nextDueDate ?? null);
   const isOverdue = dueInfo?.tone === "overdue";
   const lateFee = parseFloat(lateFeeAmount) || 0;
-  const total = premiumAmount + (includeLateFee ? lateFee : 0);
 
-   
+  // EMI is only worth offering for cycles long enough to split — short
+  // cycles (monthly/quarterly/half-yearly) are already frequent.
+  const emiEligible = !["MONTHLY", "QUARTERLY", "HALF_YEARLY"].includes(
+    frequency ?? "",
+  );
+  const emiActive = emiEligible && emiEnabled;
+  const installments = Math.max(1, parseInt(emiInstallments, 10) || 1);
+  const emiExtra = emiActive ? parseFloat(emiCharge) || 0 : 0;
+
+  // Full cost of this premium cycle = premium + late fee + any EMI charge.
+  const grossTotal = premiumAmount + (includeLateFee ? lateFee : 0) + emiExtra;
+  // What the user pays now: the whole thing, or the first installment.
+  const perInstallment =
+    emiActive && installments > 1
+      ? Math.round((grossTotal / installments) * 100) / 100
+      : grossTotal;
+  const dueNow = perInstallment;
+
+
   useEffect(() => {
-    onTotalChange(total);
-  }, [total, onTotalChange]);
+    onTotalChange(dueNow);
+  }, [dueNow, onTotalChange]);
+
+  useEffect(() => {
+    if (!onEmiChange) return;
+    onEmiChange(
+      emiActive && installments > 1
+        ? { installments, frequency: emiFrequency }
+        : null,
+    );
+  }, [emiActive, installments, emiFrequency, onEmiChange]);
 
   useEffect(() => {
     if (!onNotesChange) return;
-    if (includeLateFee && lateFee > 0) {
-      onNotesChange(`Premium ${formatINR(premiumAmount)} + Late fee ${formatINR(lateFee)}`);
-    } else {
-      onNotesChange(`Premium — ${policyName}`);
+    const parts: string[] = [`Premium — ${policyName}`];
+    if (includeLateFee && lateFee > 0) parts.push(`late fee ${formatINR(lateFee)}`);
+    if (emiActive && installments > 1) {
+      parts.push(`EMI ${installments}× ${formatINR(perInstallment)}`);
     }
-  }, [includeLateFee, lateFee, premiumAmount, policyName, onNotesChange]);
-   
+    onNotesChange(parts.join(" · "));
+  }, [
+    includeLateFee,
+    lateFee,
+    emiActive,
+    installments,
+    perInstallment,
+    policyName,
+    onNotesChange,
+  ]);
+
 
   return (
     <div className="rounded-lg border bg-muted/30 overflow-hidden">
@@ -143,10 +196,107 @@ export function InsurancePremiumBreakdown({
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t pt-3">
-          <span className="text-xs font-semibold">Total payable</span>
-          <span className="text-lg font-bold tabular-nums">{formatINR(total)}</span>
-        </div>
+        {emiEligible && (
+          <div className="space-y-2 border-t pt-3">
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={emiEnabled}
+                onChange={(e) => setEmiEnabled(e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              <span className="text-xs font-medium">Pay in installments (EMI)</span>
+            </label>
+
+            {emiActive && (
+              <div className="space-y-2 pl-6">
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] text-muted-foreground">
+                      Installments
+                    </span>
+                    <Input
+                      type="number"
+                      min="2"
+                      max="120"
+                      step="1"
+                      value={emiInstallments}
+                      onChange={(e) => setEmiInstallments(e.target.value)}
+                      className="h-8 text-sm tabular-nums"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] text-muted-foreground">
+                      Every
+                    </span>
+                    <select
+                      value={emiFrequency}
+                      onChange={(e) => setEmiFrequency(e.target.value)}
+                      className="mt-0.5 h-8 w-full rounded-md border bg-background px-2 text-sm"
+                    >
+                      {EMI_FREQUENCIES.map((f) => (
+                        <option key={f.value} value={f.value}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    Interest / processing charge
+                  </span>
+                  <div className="relative w-36">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground/70">
+                      ₹
+                    </span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={emiCharge}
+                      onChange={(e) => setEmiCharge(e.target.value)}
+                      placeholder="0"
+                      className="h-8 pl-6 text-sm text-right tabular-nums"
+                    />
+                  </div>
+                </label>
+              </div>
+            )}
+          </div>
+        )}
+
+        {emiActive && installments > 1 ? (
+          <div className="space-y-1 border-t pt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold">
+                Paying now (installment 1 of {installments})
+              </span>
+              <span className="text-lg font-bold tabular-nums">
+                {formatINR(perInstallment)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>
+                {installments} × {formatINR(perInstallment)} ·{" "}
+                {EMI_FREQUENCIES.find((f) => f.value === emiFrequency)?.label.toLowerCase() ??
+                  "monthly"}
+              </span>
+              <span>total {formatINR(grossTotal)}</span>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              The remaining {installments - 1} installments are added to
+              your reminders.
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between border-t pt-3">
+            <span className="text-xs font-semibold">Total payable</span>
+            <span className="text-lg font-bold tabular-nums">
+              {formatINR(grossTotal)}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

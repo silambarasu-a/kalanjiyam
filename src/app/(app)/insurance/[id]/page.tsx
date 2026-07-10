@@ -26,6 +26,13 @@ import {
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import { useTransactionDialog } from "@/contexts/transaction-dialog";
+import {
+  PREMIUM_FREQUENCY_OPTIONS,
+  formatPremiumFrequency,
+  monthsForFrequency,
+  type PremiumFrequency,
+} from "@/lib/reminder-schedule";
 
 type Contact = { id: string; name: string; relationship: string | null };
 
@@ -109,7 +116,6 @@ function isLifeFamily(t: string | null): boolean {
 }
 
 
-const FREQUENCIES = ["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"];
 
 const CLAIM_STATUSES = [
   "FILED",
@@ -228,7 +234,7 @@ export default function InsuranceDetailPage({
           label="Premium"
           value={
             policy.premiumAmount != null
-              ? `${formatINR(policy.premiumAmount)} · ${policy.premiumFrequency?.toLowerCase() ?? "—"}`
+              ? `${formatINR(policy.premiumAmount)} · ${formatPremiumFrequency(policy.premiumFrequency)}`
               : "—"
           }
         />
@@ -739,9 +745,23 @@ function PremiumsPanel({
   policy: Policy;
   reminders: Reminder[];
 }) {
+  const { openDialog } = useTransactionDialog();
   const today = new Date();
   const upcoming = reminders.filter((r) => r.status === "UPCOMING");
   const confirmed = reminders.filter((r) => r.status === "CONFIRMED");
+
+  function payPremium(r: Reminder) {
+    // Pay through the shared transaction dialog — supports paying by credit
+    // card and confirms this reminder + rolls the policy's next-due forward.
+    openDialog("INVESTMENT", {
+      premiumPayment: {
+        investmentId: policy.id,
+        reminderId: r.id,
+        amount: r.amount ?? policy.premiumAmount ?? undefined,
+      },
+    });
+  }
+
   return (
     <div className="space-y-4">
       <div className="rounded-lg border bg-card p-4">
@@ -769,15 +789,20 @@ function PremiumsPanel({
           {upcoming.map((r) => {
             const overdue = new Date(r.dueDate) < today;
             return (
-              <div key={r.id} className="flex items-center justify-between p-3 text-sm">
+              <div key={r.id} className="flex items-center justify-between gap-3 p-3 text-sm">
                 <div>
                   <div className={overdue ? "text-amber-600 dark:text-amber-400" : ""}>
                     {formatDate(r.dueDate)}
                   </div>
                   <div className="text-xs text-muted-foreground">{r.kind}</div>
                 </div>
-                <div className="font-medium">
-                  {r.amount != null ? formatINR(r.amount) : "—"}
+                <div className="flex items-center gap-2">
+                  <div className="font-medium">
+                    {r.amount != null ? formatINR(r.amount) : "—"}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => payPremium(r)}>
+                    Pay
+                  </Button>
                 </div>
               </div>
             );
@@ -1387,9 +1412,9 @@ function EditPolicyDialog({
                 value={premiumFrequency}
                 onChange={(e) => setPremiumFrequency(e.target.value)}
               >
-                {FREQUENCIES.map((f) => (
-                  <option key={f} value={f}>
-                    {f.toLowerCase().replace("_", " ")}
+                {PREMIUM_FREQUENCY_OPTIONS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
                   </option>
                 ))}
               </select>
@@ -1555,7 +1580,9 @@ function RenewDialog({
     const base = policy.nextDueDate ? new Date(policy.nextDueDate) : new Date();
     const months = policy.policyTermYears
       ? policy.policyTermYears * 12
-      : freqMonths(policy.premiumFrequency);
+      : (monthsForFrequency(
+          (policy.premiumFrequency as PremiumFrequency) ?? "YEARLY",
+        ) ?? 12);
     if (months) base.setMonth(base.getMonth() + months);
     setNextDueDate(base.toISOString().slice(0, 10));
     setPremiumAmount(policy.premiumAmount != null ? String(policy.premiumAmount) : "");
@@ -1716,19 +1743,4 @@ function RenewDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function freqMonths(f: string | null): number {
-  switch (f) {
-    case "MONTHLY":
-      return 1;
-    case "QUARTERLY":
-      return 3;
-    case "HALF_YEARLY":
-      return 6;
-    case "YEARLY":
-      return 12;
-    default:
-      return 12;
-  }
 }

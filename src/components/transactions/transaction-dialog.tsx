@@ -69,9 +69,11 @@ import {
 import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
+import { PREMIUM_FREQUENCY_OPTIONS } from "@/lib/reminder-schedule";
 import {
   useTransactionDialog,
   type TransactionDefault,
+  type PremiumPaymentContext,
 } from "@/contexts/transaction-dialog";
 
 type Account = {
@@ -181,8 +183,14 @@ const TABS: { value: TransactionDefault; label: string; icon: React.ElementType;
 ];
 
 export function TransactionDialog() {
-  const { open, defaultType, defaultCreatingNew, editingInvestmentId, closeDialog } =
-    useTransactionDialog();
+  const {
+    open,
+    defaultType,
+    defaultCreatingNew,
+    editingInvestmentId,
+    premiumPayment,
+    closeDialog,
+  } = useTransactionDialog();
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -197,10 +205,15 @@ export function TransactionDialog() {
 
   const body = (
     <DialogBody
-      key={open ? `open-${editingInvestmentId ?? ""}` : "closed"}
+      key={
+        open
+          ? `open-${editingInvestmentId ?? ""}-${premiumPayment?.investmentId ?? ""}`
+          : "closed"
+      }
       defaultType={defaultType}
       defaultCreatingNew={defaultCreatingNew}
       editingInvestmentId={editingInvestmentId}
+      premiumPayment={premiumPayment}
       onClose={closeDialog}
     />
   );
@@ -234,11 +247,13 @@ function DialogBody({
   defaultType,
   defaultCreatingNew,
   editingInvestmentId,
+  premiumPayment,
   onClose,
 }: {
   defaultType: TransactionDefault;
   defaultCreatingNew: boolean;
   editingInvestmentId: string | null;
+  premiumPayment: PremiumPaymentContext | null;
   onClose: () => void;
 }) {
   const [type, setType] = useState<TransactionDefault>(defaultType);
@@ -332,6 +347,7 @@ function DialogBody({
           categories={investmentCategories}
           defaultCreatingNew={defaultCreatingNew}
           editingInvestmentId={editingInvestmentId}
+          premiumPayment={premiumPayment}
           onClose={onClose}
           onSwitchToExpense={() => setType("EXPENSE")}
         />
@@ -2710,6 +2726,7 @@ function InvestmentForm({
   categories,
   defaultCreatingNew = false,
   editingInvestmentId = null,
+  premiumPayment = null,
   onClose,
   onSwitchToExpense,
 }: {
@@ -2722,6 +2739,10 @@ function InvestmentForm({
   /** When set, fetch this investment + its BUY splits and pre-fill all
    * fields. Submit then PATCHes instead of POSTing. */
   editingInvestmentId?: string | null;
+  /** When set, open pre-targeted at paying this insurance policy's premium:
+   * the holding is preselected, a card is an allowed funding source, and
+   * the linked reminder is confirmed on submit. */
+  premiumPayment?: PremiumPaymentContext | null;
   onClose: () => void;
   /** Switch the parent dialog to the Expense tab. Used by the GOLD →
    * ORNAMENTS warning to nudge users toward recording jewellery as
@@ -2735,9 +2756,24 @@ function InvestmentForm({
   );
   const investments = (invData?.investments ?? []).filter((i) => i.active);
 
-  const [investmentId, setInvestmentId] = useState("");
+  const [investmentId, setInvestmentId] = useState(
+    premiumPayment?.investmentId ?? "",
+  );
   const [action, setAction] = useState<"BUY" | "SELL">("BUY");
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(
+    premiumPayment?.amount != null ? String(premiumPayment.amount) : "",
+  );
+  // Funding source for an insurance premium payment, encoded as
+  // "account:<id>" / "card:<id>" (same scheme as the gold split rows) so a
+  // premium can be paid from a bank account OR a credit card.
+  const [premiumSource, setPremiumSource] = useState("");
+  // EMI plan for the premium (null = pay in full). Reported by the premium
+  // breakdown; the paid `amount` is installment #1 and the API seeds the
+  // rest as reminders.
+  const [premiumEmi, setPremiumEmi] = useState<{
+    installments: number;
+    frequency: string;
+  } | null>(null);
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [date, setDate] = useState(today);
@@ -2895,6 +2931,23 @@ function InvestmentForm({
   const [fetchingRate, setFetchingRate] = useState(false);
 
   const selected = investments.find((i) => i.id === investmentId) ?? null;
+  // Paying a premium on an existing insurance holding — the branch that gets
+  // the premium-breakdown widget and the account-or-card funding picker.
+  const isInsurancePremium =
+    !creatingNew && action === "BUY" && selected?.kind === "INSURANCE";
+  // Premium base for the breakdown: when this payment targets a specific
+  // reminder, honour that reminder's amount (matches /api/reminders/confirm)
+  // — a policy whose premium was edited later shouldn't silently re-price an
+  // already-seeded due. Falls back to the policy's current premium otherwise
+  // (incl. when the user switched to a different policy in the picker).
+  const premiumBase =
+    premiumPayment &&
+    investmentId === premiumPayment.investmentId &&
+    premiumPayment.amount != null
+      ? premiumPayment.amount
+      : selected?.premiumAmount != null
+        ? Number(selected.premiumAmount)
+        : 0;
   const isStock =
     creatingNew ? newKind === "STOCK" : selected?.kind === "STOCK" && !!selected?.symbol;
 
@@ -3380,6 +3433,12 @@ function InvestmentForm({
           return;
         }
       }
+    } else if (isInsurancePremium) {
+      // Premium pays use the account-or-card source picker, not `accountId`.
+      if (!premiumSource) {
+        setError("Pick an account or card to pay the premium from");
+        return;
+      }
     } else if (!accountId) {
       setError("Pick an account");
       return;
@@ -3622,6 +3681,23 @@ function InvestmentForm({
         onClose();
         return;
       }
+      // Insurance premiums can be paid from a bank account OR a credit card.
+      // Decode the picked source into the account/card the API expects.
+      let payAccountId: string | undefined = accountId || undefined;
+      let payCardId: string | undefined;
+      if (isInsurancePremium) {
+        if (!premiumSource) {
+          setError("Pick an account or card to pay the premium from");
+          return;
+        }
+        const [srcKind, srcId] = premiumSource.split(":");
+        if (srcKind === "card") {
+          payCardId = srcId;
+          payAccountId = undefined;
+        } else {
+          payAccountId = srcId;
+        }
+      }
       const payload: Record<string, unknown> = {
         clientId: investClientId,
         type: "INVESTMENT",
@@ -3630,7 +3706,8 @@ function InvestmentForm({
           description.trim() ||
           `${action === "BUY" ? "Buy" : "Sell"} · ${selected?.name ?? "Investment"}`,
         date,
-        accountId,
+        accountId: payAccountId ?? null,
+        cardId: payCardId ?? null,
         categoryId: categoryId || null,
         investmentId,
         investmentAction: action,
@@ -3638,6 +3715,25 @@ function InvestmentForm({
         investmentPrice: price ? Number(price) : null,
         exchangeRate:
           isForeignCurrency && exchangeRate ? Number(exchangeRate) : null,
+        // Confirm the specific reminder this premium clears (when opened from
+        // a reminder / due). The API also advances the policy's next-due.
+        // Only send it when the still-selected holding is the one the
+        // reminder belongs to — the picker stays editable, and a stale
+        // reminderId for a different policy would dangle. When the user
+        // switched policies, the API falls back to that policy's earliest
+        // open reminder.
+        ...(isInsurancePremium &&
+        premiumPayment?.reminderId &&
+        investmentId === premiumPayment.investmentId
+          ? { reminderId: premiumPayment.reminderId }
+          : {}),
+        // EMI plan (installments #2..N seeded server-side as reminders).
+        // Gate on premiumBase > 0 — the same condition that renders the
+        // breakdown — so a stale plan from a previously-selected policy
+        // can't leak onto a premium-less holding whose EMI UI never showed.
+        ...(isInsurancePremium && premiumBase > 0 && premiumEmi
+          ? { premiumEmi }
+          : {}),
       };
       const res = await fetch("/api/transactions", {
         method: "POST",
@@ -3649,10 +3745,21 @@ function InvestmentForm({
         setError(body.error ?? "Failed");
         return;
       }
-      toast.success(action === "BUY" ? "Investment purchase recorded" : "Investment sale recorded");
+      toast.success(
+        isInsurancePremium
+          ? "Premium paid"
+          : action === "BUY"
+            ? "Investment purchase recorded"
+            : "Investment sale recorded",
+      );
       // Instant uploader already pushed receipts to S3 under `clientId`,
       // which is now the saved txn's id. Nothing else to do.
       await mutateBalances();
+      // Paying a premium confirms its reminder + rolls the policy forward —
+      // refresh the reminders list so the cleared due drops off.
+      if (isInsurancePremium) {
+        globalMutate("/api/reminders?status=UPCOMING");
+      }
       onClose();
     } finally {
       setSubmitting(false);
@@ -3679,6 +3786,18 @@ function InvestmentForm({
         : activeKind === "GOLD"
           ? "Sell gold"
           : "Sell";
+
+  // A premium payment targets a specific holding — wait for the holdings
+  // list before rendering so `selected` (and therefore isInsurancePremium,
+  // the premium breakdown, and the account-or-card picker) resolves on the
+  // first paint instead of flickering through the generic BUY layout.
+  if (premiumPayment && !invData) {
+    return (
+      <div className="py-10 text-center text-sm text-muted-foreground">
+        Loading policy…
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -3916,13 +4035,7 @@ function InvestmentForm({
                     <NativeSelect
                       value={newPremiumFrequency}
                       onChange={setNewPremiumFrequency}
-                      options={[
-                        { value: "MONTHLY", label: "Monthly" },
-                        { value: "QUARTERLY", label: "Quarterly" },
-                        { value: "HALF_YEARLY", label: "Half-yearly" },
-                        { value: "YEARLY", label: "Yearly" },
-                        { value: "ONE_TIME", label: "One-time" },
-                      ]}
+                      options={PREMIUM_FREQUENCY_OPTIONS}
                     />
                   </div>
                 </label>
@@ -4424,20 +4537,18 @@ function InvestmentForm({
       {/* Insurance: when an existing INSURANCE holding with a known premium
           is being paid, show the premium-breakdown widget INSTEAD of the
           generic Amount/Qty/Price fields. */}
-      {action === "BUY" &&
-      !creatingNew &&
-      selected?.kind === "INSURANCE" &&
-      selected.premiumAmount &&
-      Number(selected.premiumAmount) > 0 ? (
+      {isInsurancePremium && premiumBase > 0 ? (
         <>
           <InsurancePremiumBreakdown
+            key={investmentId}
             policyName={selected.name}
             institution={selected.institution ?? null}
-            premiumAmount={Number(selected.premiumAmount)}
+            premiumAmount={premiumBase}
             nextDueDate={selected.nextDueDate ?? null}
             frequency={selected.premiumFrequency ?? null}
             onTotalChange={(total) => setAmount(String(total))}
             onNotesChange={(n) => setDescription(n)}
+            onEmiChange={setPremiumEmi}
           />
           <label className="block">
             <span className="text-xs font-medium">Date</span>
@@ -4705,23 +4816,39 @@ function InvestmentForm({
         </>
       )}
 
-      {!isGoldCreate && (
-        <label className="block">
-          <span className="text-xs font-medium">
-            {action === "BUY" ? "Pay from" : "Deposit to"}
-          </span>
-          <div className="mt-1">
-            <NativeSelect
-              value={accountId}
-              onChange={setAccountId}
-              options={groupAccountOptions(
-                accounts,
-                action === "BUY" ? Number(amount) || 0 : 0,
-              )}
-            />
-          </div>
-        </label>
-      )}
+      {!isGoldCreate &&
+        (isInsurancePremium ? (
+          <label className="block">
+            <span className="text-xs font-medium">Pay from</span>
+            <div className="mt-1">
+              <NativeSelect
+                value={premiumSource}
+                onChange={setPremiumSource}
+                options={goldSourceOptions}
+                placeholder="Pick account or credit card"
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Premiums can be paid from a bank account or a credit card.
+            </p>
+          </label>
+        ) : (
+          <label className="block">
+            <span className="text-xs font-medium">
+              {action === "BUY" ? "Pay from" : "Deposit to"}
+            </span>
+            <div className="mt-1">
+              <NativeSelect
+                value={accountId}
+                onChange={setAccountId}
+                options={groupAccountOptions(
+                  accounts,
+                  action === "BUY" ? Number(amount) || 0 : 0,
+                )}
+              />
+            </div>
+          </label>
+        ))}
 
       <DescriptionField
         value={description}
@@ -4768,9 +4895,11 @@ function InvestmentForm({
             ? "Saving…"
             : isEditing
               ? "Update"
-              : action === "BUY"
-                ? "Record purchase"
-                : "Record sale"}
+              : isInsurancePremium
+                ? "Pay premium"
+                : action === "BUY"
+                  ? "Record purchase"
+                  : "Record sale"}
         </Button>
       </DialogFooter>
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ import {
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import { useTransactionDialog } from "@/contexts/transaction-dialog";
 
 type Reminder = {
   id: string;
@@ -85,6 +86,28 @@ export default function RemindersPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [consumedConfirm, setConsumedConfirm] = useState(false);
+  const { openDialog } = useTransactionDialog();
+
+  // Insurance premiums are paid through the shared transaction dialog (so
+  // they can go on a credit card and correctly roll the policy's next-due
+  // forward). Everything else (SIP buys, FD interest) keeps the lightweight
+  // Confirm dialog.
+  const payReminder = useCallback(
+    (r: Reminder) => {
+      if (r.kind === "INSURANCE_PREMIUM" && r.investment) {
+        openDialog("INVESTMENT", {
+          premiumPayment: {
+            investmentId: r.investment.id,
+            reminderId: r.id,
+            amount: r.amount ?? r.investment.premiumAmount ?? undefined,
+          },
+        });
+        return;
+      }
+      setConfirmRow(r);
+    },
+    [openDialog],
+  );
 
   // Memoised so the deep-link auto-open effect's deps are stable —
   // `data?.reminders ?? []` would otherwise produce a fresh array each
@@ -94,8 +117,8 @@ export default function RemindersPage() {
   const overdue = reminders.filter((r) => new Date(r.dueDate) < now);
   const upcoming = reminders.filter((r) => new Date(r.dueDate) >= now);
 
-  // Deep-link auto-open: `?confirm=<reminderId>` opens the Confirm dialog
-  // for that reminder (used by Pay shortcuts on the dashboard / notif).
+  // Deep-link auto-open: `?confirm=<reminderId>` opens the pay flow for that
+  // reminder (used by Pay shortcuts on the dashboard / notifications).
   useEffect(() => {
     if (consumedConfirm) return;
     const target = searchParams.get("confirm");
@@ -104,13 +127,13 @@ export default function RemindersPage() {
     if (!match) return; // wait for the list to load
     /* eslint-disable react-hooks/set-state-in-effect -- one-shot URL trigger */
     setConsumedConfirm(true);
-    setConfirmRow(match);
+    payReminder(match);
     /* eslint-enable react-hooks/set-state-in-effect */
     const params = new URLSearchParams(searchParams.toString());
     params.delete("confirm");
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [searchParams, reminders, consumedConfirm, pathname, router]);
+  }, [searchParams, reminders, consumedConfirm, pathname, router, payReminder]);
 
   return (
     <div className="space-y-6">
@@ -131,7 +154,7 @@ export default function RemindersPage() {
           <h2 className="text-sm font-semibold mb-2 text-destructive">Overdue</h2>
           <div className="rounded-xl border bg-card divide-y">
             {overdue.map((r) => (
-              <ReminderRow key={r.id} reminder={r} onConfirm={() => setConfirmRow(r)} />
+              <ReminderRow key={r.id} reminder={r} onConfirm={() => payReminder(r)} />
             ))}
           </div>
         </section>
@@ -141,7 +164,7 @@ export default function RemindersPage() {
         <h2 className="text-sm font-semibold mb-2">Upcoming</h2>
         <div className="rounded-xl border bg-card divide-y">
           {upcoming.map((r) => (
-            <ReminderRow key={r.id} reminder={r} onConfirm={() => setConfirmRow(r)} />
+            <ReminderRow key={r.id} reminder={r} onConfirm={() => payReminder(r)} />
           ))}
           {upcoming.length === 0 && !isLoading && (
             <div className="px-5 py-8 text-sm text-muted-foreground text-center">

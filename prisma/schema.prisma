@@ -252,6 +252,9 @@ enum PremiumFrequency {
   QUARTERLY
   HALF_YEARLY
   YEARLY
+  EVERY_2_YEARS
+  EVERY_3_YEARS
+  EVERY_5_YEARS
   ONE_TIME
 }
 

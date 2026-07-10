@@ -26,6 +26,10 @@ import {
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import {
+  PREMIUM_FREQUENCY_OPTIONS,
+  formatPremiumFrequency,
+} from "@/lib/reminder-schedule";
 
 type PolicyType =
   | "LIFE"
@@ -219,7 +223,7 @@ function PolicyRow({ policy }: { policy: Policy }) {
           <div className="font-medium">
             {formatINR(policy.premiumAmount)}
             <span className="text-xs text-muted-foreground">
-              {policy.premiumFrequency ? ` · ${policy.premiumFrequency.toLowerCase()}` : ""}
+              {policy.premiumFrequency ? ` · ${formatPremiumFrequency(policy.premiumFrequency)}` : ""}
             </span>
           </div>
         )}
@@ -255,8 +259,6 @@ const POLICY_TYPES: { value: PolicyType; label: string }[] = [
   { value: "TRAVEL", label: "Travel" },
   { value: "OTHER", label: "Other" },
 ];
-
-const FREQUENCIES = ["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY", "ONE_TIME"];
 
 function NewPolicyDialog({
   open,
@@ -458,9 +460,9 @@ function NewPolicyDialog({
                 value={premiumFrequency}
                 onChange={(e) => setPremiumFrequency(e.target.value)}
               >
-                {FREQUENCIES.map((f) => (
-                  <option key={f} value={f}>
-                    {f.toLowerCase().replace("_", " ")}
+                {PREMIUM_FREQUENCY_OPTIONS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
                   </option>
                 ))}
               </select>

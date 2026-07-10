@@ -8,8 +8,15 @@ import {
   TransactionType,
   MemberChargeType,
   MemberChargeStatus,
+  ReminderKind,
+  ReminderStatus,
   Prisma,
 } from "@/generated/prisma/client";
+import {
+  advanceDate,
+  computeReminderSchedule,
+  type PremiumFrequency,
+} from "@/lib/reminder-schedule";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -405,12 +412,15 @@ export async function POST(request: Request) {
 
     let investmentForUpdate: {
       id: string;
+      kind: string;
       amount: number;
       quantity: number | null;
       purchasePrice: number | null;
       purchaseExchangeRate: number | null;
       currency: string | null;
       currentValue: number | null;
+      premiumFrequency: string | null;
+      nextDueDate: Date | null;
     } | null = null;
     if (data.investmentId) {
       const inv = await prisma.investment.findUnique({
@@ -424,6 +434,7 @@ export async function POST(request: Request) {
       }
       investmentForUpdate = {
         id: inv.id,
+        kind: inv.kind,
         amount: Number(inv.amount),
         quantity: inv.quantity == null ? null : Number(inv.quantity),
         purchasePrice: inv.purchasePrice == null ? null : Number(inv.purchasePrice),
@@ -431,7 +442,35 @@ export async function POST(request: Request) {
           inv.purchaseExchangeRate == null ? null : Number(inv.purchaseExchangeRate),
         currency: inv.currency,
         currentValue: inv.currentValue == null ? null : Number(inv.currentValue),
+        premiumFrequency: inv.premiumFrequency,
+        nextDueDate: inv.nextDueDate,
       };
+    }
+
+    // Idempotency for the reminder-driven premium flow: when a specific
+    // reminder is named it must still be UPCOMING. A stale tab, a double
+    // submit, or a second workspace member paying the same due would
+    // otherwise create a duplicate BUY, double-count the premium in
+    // investment.amount, and advance nextDueDate twice (skipping a cycle).
+    // Mirrors the "Already processed" guard on /api/reminders/[id]/confirm.
+    // (Ad-hoc premium pays with no reminderId aren't deduped — same as any
+    // other manually-entered transaction.)
+    if (data.reminderId && data.investmentAction === "BUY" && investmentForUpdate) {
+      const rem = await prisma.investmentReminder.findFirst({
+        where: {
+          id: data.reminderId,
+          workspaceId: ctx.workspaceId,
+          investmentId: investmentForUpdate.id,
+          kind: ReminderKind.INSURANCE_PREMIUM,
+        },
+        select: { status: true },
+      });
+      if (rem && rem.status !== ReminderStatus.UPCOMING) {
+        return NextResponse.json(
+          { error: "This premium has already been paid." },
+          { status: 400 },
+        );
+      }
     }
 
     const txDate = new Date(data.date);
@@ -598,6 +637,122 @@ export async function POST(request: Request) {
           ) {
             // Derived from the cost identity: amount = qty × pp × rate.
             updateData.purchaseExchangeRate = newAmount / (newQty * newPP);
+          }
+        }
+
+        // ---- Insurance premium side-effects (BUY only) ----
+        // Runs before investment.update so nextDueDate reflects the
+        // post-payment reminder state. Three steps: (1) confirm the due
+        // this payment clears, (2) if paying by EMI, seed the remaining
+        // installments as their own reminders, (3) repoint nextDueDate at
+        // whatever is genuinely next — the following installment or the
+        // next renewal — falling back to advancing one full premium cycle.
+        if (
+          investmentForUpdate.kind === "INSURANCE" &&
+          data.investmentAction === "BUY"
+        ) {
+          // 1. Confirm the reminder being paid. Prefer the explicit
+          //    reminderId from the transaction dialog; otherwise the
+          //    earliest still-pending premium reminder for this policy.
+          const reminderToConfirm = data.reminderId
+            ? await tx.investmentReminder.findFirst({
+                where: {
+                  id: data.reminderId,
+                  workspaceId: ctx.workspaceId,
+                  investmentId: investmentForUpdate.id,
+                  kind: ReminderKind.INSURANCE_PREMIUM,
+                  status: ReminderStatus.UPCOMING,
+                },
+              })
+            : await tx.investmentReminder.findFirst({
+                where: {
+                  workspaceId: ctx.workspaceId,
+                  investmentId: investmentForUpdate.id,
+                  kind: ReminderKind.INSURANCE_PREMIUM,
+                  status: ReminderStatus.UPCOMING,
+                },
+                orderBy: { dueDate: "asc" },
+              });
+          if (reminderToConfirm) {
+            await tx.investmentReminder.update({
+              where: { id: reminderToConfirm.id },
+              data: {
+                status: ReminderStatus.CONFIRMED,
+                confirmedTransactionId: txn.id,
+              },
+            });
+          }
+
+          // 2. EMI: the paid `amount` is installment #1; seed installments
+          //    #2..N as UPCOMING reminders one EMI cycle apart, same amount.
+          if (data.premiumEmi && data.premiumEmi.installments > 1) {
+            const anchor =
+              reminderToConfirm?.dueDate ??
+              investmentForUpdate.nextDueDate ??
+              txDate;
+            // EMI splits ONE premium cycle. Stop the ladder before the next
+            // already-scheduled renewal so an over-long plan can't stack a
+            // second reminder on a renewal date or spill into the next cycle.
+            const nextRenewal = await tx.investmentReminder.findFirst({
+              where: {
+                workspaceId: ctx.workspaceId,
+                investmentId: investmentForUpdate.id,
+                kind: ReminderKind.INSURANCE_PREMIUM,
+                status: ReminderStatus.UPCOMING,
+                dueDate: { gt: anchor },
+              },
+              orderBy: { dueDate: "asc" },
+              select: { dueDate: true },
+            });
+            const installmentDates = computeReminderSchedule({
+              firstDueDate: anchor,
+              frequency: data.premiumEmi.frequency as PremiumFrequency,
+              count: data.premiumEmi.installments,
+            })
+              .slice(1) // installment #1 was just paid
+              .filter((d) => !nextRenewal || d < nextRenewal.dueDate);
+            if (installmentDates.length > 0) {
+              await tx.investmentReminder.createMany({
+                data: installmentDates.map((d) => ({
+                  workspaceId: ctx.workspaceId,
+                  investmentId: investmentForUpdate!.id,
+                  kind: ReminderKind.INSURANCE_PREMIUM,
+                  dueDate: d,
+                  amount: data.amount,
+                  status: ReminderStatus.UPCOMING,
+                })),
+              });
+            }
+          }
+
+          // 3. Repoint nextDueDate at the earliest remaining premium
+          //    reminder (next installment or next renewal); if none remain,
+          //    advance one full premium cycle so the policy still resurfaces.
+          const nextRem = await tx.investmentReminder.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              investmentId: investmentForUpdate.id,
+              kind: ReminderKind.INSURANCE_PREMIUM,
+              status: ReminderStatus.UPCOMING,
+            },
+            orderBy: { dueDate: "asc" },
+            select: { dueDate: true },
+          });
+          if (nextRem) {
+            updateData.nextDueDate = nextRem.dueDate;
+          } else if (
+            investmentForUpdate.nextDueDate &&
+            investmentForUpdate.premiumFrequency
+          ) {
+            const advanced = advanceDate(
+              investmentForUpdate.nextDueDate,
+              investmentForUpdate.premiumFrequency as PremiumFrequency,
+            );
+            if (
+              advanced.getTime() !== investmentForUpdate.nextDueDate.getTime()
+            ) {
+              updateData.nextDueDate = advanced;
+            }
           }
         }
 
