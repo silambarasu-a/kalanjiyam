@@ -27,6 +27,7 @@ import {
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
+import { ContactStatement } from "@/components/contacts/contact-statement";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 import { ContactAttachmentsPanel } from "@/components/contacts/contact-attachments-panel";
 import { AttachmentList } from "@/components/attachments/attachment-list";
@@ -191,12 +192,15 @@ export default function MemberLedgerDetail() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 print-container">
       <div>
-        <Link href="/contacts" className="text-xs text-muted-foreground">
+        <Link href="/contacts" className="text-xs text-muted-foreground no-print">
           ← Contacts
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.member.name}</h1>
+        <p className="text-sm text-muted-foreground">
+          Ledger, transfers and a full financial statement for this contact.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -237,8 +241,12 @@ export default function MemberLedgerDetail() {
         />
       </div>
 
-      <Tabs defaultValue="charges" className="gap-3">
-        <TabsList variant="line" className="border-b w-full justify-start gap-3 rounded-none">
+      <Tabs defaultValue="statement" className="gap-3">
+        <TabsList
+          variant="line"
+          className="border-b w-full justify-start gap-3 rounded-none overflow-x-auto no-print"
+        >
+          <TabsTrigger value="statement">Statement</TabsTrigger>
           <TabsTrigger value="charges">
             Charges
             {openCharges.length > 0 && (
@@ -304,6 +312,14 @@ export default function MemberLedgerDetail() {
             </TabsTrigger>
           )}
         </TabsList>
+
+        <TabsContent value="statement">
+          <ContactStatement
+            contactId={id ?? ""}
+            contactName={data.member.name}
+            onViewTransaction={(txnId) => setDetailTxnId(txnId)}
+          />
+        </TabsContent>
 
         <TabsContent value="charges">
           {(() => {
