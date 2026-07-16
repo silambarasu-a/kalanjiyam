@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { Download, FileSpreadsheet, Printer } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Download, FileSpreadsheet, Printer } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +19,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ReportKpi } from "@/components/reports/report-shell";
 import {
   ReportFilters,
   presetRange,
@@ -88,8 +87,8 @@ type ExportRow = {
 };
 
 const NEUTRAL_TAG: Record<string, string> = {
-  CHARGE_OWED_TO_USER: "owed to you",
-  CHARGE_USER_OWES: "you owe",
+  CHARGE_OWED_TO_USER: "they owe you",
+  CHARGE_USER_OWES: "you owe them",
   SPENT_ON_THEM: "spent on them",
   THEY_PAID: "they paid",
   LOAN: "principal",
@@ -126,7 +125,9 @@ export function ContactStatement({
   const events = data?.events ?? [];
   const monthly = data?.monthly ?? [];
 
-  const netOutstanding = (s?.theyOweYou ?? 0) - (s?.youOweThem ?? 0);
+  const theyOweYou = s?.theyOweYou ?? 0;
+  const youOweThem = s?.youOweThem ?? 0;
+  const net = theyOweYou - youOweThem;
 
   const rangeLabel = useMemo(() => {
     try {
@@ -143,6 +144,22 @@ export function ContactStatement({
     }
   }, [range]);
 
+  // One plain-language line that nets the two directions.
+  const netSentence = (() => {
+    if (theyOweYou === 0 && youOweThem === 0)
+      return `All settled up — nothing outstanding either way with ${contactName}.`;
+    if (theyOweYou > 0 && youOweThem === 0)
+      return `${contactName} owes you ${formatINR(theyOweYou)}.`;
+    if (youOweThem > 0 && theyOweYou === 0)
+      return `You owe ${contactName} ${formatINR(youOweThem)}.`;
+    // Both directions have a balance.
+    if (net > 0)
+      return `Both directions have balances — netted, ${contactName} still owes you ${formatINR(net)}.`;
+    if (net < 0)
+      return `Both directions have balances — netted, you still owe ${contactName} ${formatINR(-net)}.`;
+    return `Both directions balance out exactly — you're even.`;
+  })();
+
   function buildExport() {
     const columns: ExportColumn<ExportRow>[] = [
       { key: "date", label: "Date", type: "date" },
@@ -154,8 +171,8 @@ export function ContactStatement({
       { key: "amount", label: "Amount", type: "currency" },
       { key: "balance", label: "Cash balance", type: "currency" },
     ];
-    // Export in chronological order (oldest first) — the natural reading
-    // order for a statement with a running balance.
+    // Export chronologically (oldest first) — natural reading order for a
+    // statement with a running balance.
     const rows: ExportRow[] = events
       .slice()
       .reverse()
@@ -173,7 +190,7 @@ export function ContactStatement({
       filename: `statement_${contactName.replace(/\s+/g, "_").toLowerCase()}`,
       sheetName: "Statement",
       title: `Statement — ${contactName}`,
-      subtitle: rangeLabel,
+      subtitle: `${rangeLabel} · They owe you ${formatINR(theyOweYou)} · You owe them ${formatINR(youOweThem)}`,
       columns,
       rows,
       totals: {
@@ -186,9 +203,49 @@ export function ContactStatement({
   }
 
   return (
-    <div className="space-y-4 print-container">
-      {/* Filters + export — hidden when printing. */}
-      <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-6 print-container">
+      {/* ── Standing balance — the headline: who owes whom, right now. ── */}
+      <section className="space-y-2.5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold">Balance right now</h3>
+          <span className="text-[11px] text-muted-foreground">
+            as of today · not affected by the period filter below
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <BalanceCard
+            label="They owe you"
+            hint={`money ${contactName} still owes you`}
+            value={theyOweYou}
+            tone="in"
+          />
+          <BalanceCard
+            label="You owe them"
+            hint={`money you still owe ${contactName}`}
+            value={youOweThem}
+            tone="out"
+          />
+        </div>
+        <p
+          className={`text-sm font-medium ${
+            net > 0
+              ? "text-emerald-700 dark:text-emerald-400"
+              : net < 0
+                ? "text-destructive"
+                : "text-muted-foreground"
+          }`}
+        >
+          {netSentence}
+        </p>
+      </section>
+
+      {/* ── Period filter — its own labelled, full-width row. ── */}
+      <section className="no-print space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Filter activity by period
+          </span>
+        </div>
         <ReportFilters
           preset={preset}
           onPresetChange={setPreset}
@@ -204,188 +261,246 @@ export function ContactStatement({
             "custom",
           ]}
         />
-        <DropdownMenu>
-          <DropdownMenuTrigger className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
-            <Download className="h-3.5 w-3.5" /> Export
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => downloadCSV(buildExport())}>
-              <FileSpreadsheet className="h-3.5 w-3.5" /> CSV
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={async () => await downloadExcel(buildExport())}>
-              <FileSpreadsheet className="h-3.5 w-3.5" /> Excel (.xlsx)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setTimeout(printReport, 80)}>
-              <Printer className="h-3.5 w-3.5" /> Print / PDF
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      </section>
 
       {/* Print-only header. */}
       <div className="hidden print:block">
         <h2 className="text-lg font-semibold">Statement — {contactName}</h2>
-        <p className="text-xs text-muted-foreground">{rangeLabel}</p>
+        <p className="text-xs text-muted-foreground">
+          {rangeLabel} · They owe you {formatINR(theyOweYou)} · You owe them{" "}
+          {formatINR(youOweThem)}
+        </p>
       </div>
 
-      {/* KPIs. */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <ReportKpi
-          label="Received"
-          value={formatINR(s?.received ?? 0)}
-          tone="primary"
-          hint={`in ${rangeLabel}`}
-        />
-        <ReportKpi
-          label="Paid / sent"
-          value={formatINR(s?.paid ?? 0)}
-          tone="destructive"
-          hint={`in ${rangeLabel}`}
-        />
-        <ReportKpi
-          label="Net for period"
-          value={`${(s?.netCash ?? 0) >= 0 ? "+" : "−"}${formatINR(Math.abs(s?.netCash ?? 0))}`}
-          tone={(s?.netCash ?? 0) >= 0 ? "primary" : "destructive"}
-          hint={(s?.netCash ?? 0) >= 0 ? "net received" : "net paid out"}
-          highlight
-        />
-        <ReportKpi
-          label={
-            netOutstanding > 0
-              ? "They owe you"
-              : netOutstanding < 0
-                ? "You owe them"
-                : "Settled up"
-          }
-          value={formatINR(Math.abs(netOutstanding))}
-          tone={netOutstanding > 0 ? "default" : netOutstanding < 0 ? "destructive" : "muted"}
-          hint="standing balance (now)"
-          highlight={netOutstanding !== 0}
-        />
-      </div>
-
-      {/* Chart. */}
-      <div className="rounded-xl border bg-card p-4 sm:p-5">
-        <div className="mb-2 flex items-baseline justify-between gap-2">
-          <h3 className="text-sm font-semibold">Monthly cash flow with {contactName}</h3>
-          <span className="text-[11px] text-muted-foreground tabular-nums">
-            Opening {formatINR(s?.openingNetCash ?? 0)} · Closing{" "}
-            {formatINR(s?.closingNetCash ?? 0)}
-          </span>
+      {/* ── Activity in the selected period. ── */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">
+            Activity{" "}
+            <span className="font-normal text-muted-foreground">· {rangeLabel}</span>
+          </h3>
+          <DropdownMenu>
+            <DropdownMenuTrigger className="no-print inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+              <Download className="h-3.5 w-3.5" /> Export
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => downloadCSV(buildExport())}>
+                <FileSpreadsheet className="h-3.5 w-3.5" /> CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={async () => await downloadExcel(buildExport())}>
+                <FileSpreadsheet className="h-3.5 w-3.5" /> Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setTimeout(printReport, 80)}>
+                <Printer className="h-3.5 w-3.5" /> Print / PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        <ContactFlowChart data={monthly} />
-      </div>
 
-      {/* Statement table. */}
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="whitespace-nowrap">Date</TableHead>
-              <TableHead>Activity</TableHead>
-              <TableHead className="text-right whitespace-nowrap">Money in</TableHead>
-              <TableHead className="text-right whitespace-nowrap">Money out</TableHead>
-              <TableHead className="text-right whitespace-nowrap">Cash balance</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {events.map((e) => {
-              const clickable = !!e.transactionId && !!onViewTransaction;
-              return (
-                <TableRow key={e.id}>
-                  <TableCell className="whitespace-nowrap align-top text-xs text-muted-foreground tabular-nums">
-                    {formatDate(e.date)}
-                  </TableCell>
-                  <TableCell className="align-top">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${badgeClass(
-                          e,
-                        )}`}
-                      >
-                        {e.label}
-                      </span>
-                      {clickable ? (
-                        <button
-                          type="button"
-                          onClick={() => onViewTransaction?.(e.transactionId!)}
-                          className="text-left text-sm font-medium hover:underline"
-                          title="View full transaction details"
+        {/* Period money summary. */}
+        <div className="grid grid-cols-3 gap-3">
+          <MiniStat
+            label="Received"
+            value={formatINR(s?.received ?? 0)}
+            tone="in"
+            icon={<ArrowDownLeft className="h-3.5 w-3.5" />}
+          />
+          <MiniStat
+            label="Paid / sent"
+            value={formatINR(s?.paid ?? 0)}
+            tone="out"
+            icon={<ArrowUpRight className="h-3.5 w-3.5" />}
+          />
+          <MiniStat
+            label="Net"
+            value={`${(s?.netCash ?? 0) >= 0 ? "+" : "−"}${formatINR(Math.abs(s?.netCash ?? 0))}`}
+            tone={(s?.netCash ?? 0) >= 0 ? "in" : "out"}
+          />
+        </div>
+
+        {/* Chart. */}
+        <div className="rounded-xl border bg-card p-4 sm:p-5">
+          <h4 className="mb-2 text-sm font-semibold">
+            Money exchanged with {contactName}, by month
+          </h4>
+          <ContactFlowChart data={monthly} />
+        </div>
+
+        {/* Statement table. */}
+        <div className="overflow-x-auto rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">Date</TableHead>
+                <TableHead>Activity</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Money in</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Money out</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {events.map((e) => {
+                const clickable = !!e.transactionId && !!onViewTransaction;
+                return (
+                  <TableRow key={e.id}>
+                    <TableCell className="whitespace-nowrap align-top text-xs text-muted-foreground tabular-nums">
+                      {formatDate(e.date)}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${badgeClass(
+                            e,
+                          )}`}
                         >
-                          {e.description}
-                        </button>
-                      ) : e.loanId ? (
-                        <Link
-                          href={`/loans/${e.loanId}`}
-                          className="text-sm font-medium hover:underline"
-                        >
-                          {e.description}
-                        </Link>
-                      ) : (
-                        <span className="text-sm font-medium">{e.description}</span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {e.account ? <span>{e.account}</span> : null}
-                      {e.direction === "NEUTRAL" && (
-                        <span>
-                          {e.account ? " · " : ""}
-                          {formatINR(e.amount)} {NEUTRAL_TAG[e.type] ?? ""}
+                          {e.label}
                         </span>
+                        {clickable ? (
+                          <button
+                            type="button"
+                            onClick={() => onViewTransaction?.(e.transactionId!)}
+                            className="text-left text-sm font-medium hover:underline"
+                            title="View full transaction details"
+                          >
+                            {e.description}
+                          </button>
+                        ) : e.loanId ? (
+                          <Link
+                            href={`/loans/${e.loanId}`}
+                            className="text-sm font-medium hover:underline"
+                          >
+                            {e.description}
+                          </Link>
+                        ) : (
+                          <span className="text-sm font-medium">{e.description}</span>
+                        )}
+                      </div>
+                      {(e.account || e.direction === "NEUTRAL") && (
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          {e.account ? <span>{e.account}</span> : null}
+                          {e.direction === "NEUTRAL" && (
+                            <span>
+                              {e.account ? " · " : ""}
+                              {formatINR(e.amount)} {NEUTRAL_TAG[e.type] ?? ""}
+                            </span>
+                          )}
+                        </div>
                       )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right align-top tabular-nums text-sm text-emerald-700 dark:text-emerald-400">
-                    {e.direction === "IN" ? formatINR(e.amount) : ""}
-                  </TableCell>
-                  <TableCell className="text-right align-top tabular-nums text-sm text-destructive">
-                    {e.direction === "OUT" ? formatINR(e.amount) : ""}
-                  </TableCell>
-                  <TableCell className="text-right align-top tabular-nums text-sm text-muted-foreground">
-                    {formatINR(e.runningCash)}
+                    </TableCell>
+                    <TableCell className="text-right align-top tabular-nums text-sm text-emerald-700 dark:text-emerald-400">
+                      {e.direction === "IN" ? formatINR(e.amount) : ""}
+                    </TableCell>
+                    <TableCell className="text-right align-top tabular-nums text-sm text-destructive">
+                      {e.direction === "OUT" ? formatINR(e.amount) : ""}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {events.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={4}
+                    className="py-10 text-center text-sm text-muted-foreground"
+                  >
+                    {isLoading
+                      ? "Loading…"
+                      : "No activity with this contact in this period."}
                   </TableCell>
                 </TableRow>
-              );
-            })}
-            {events.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
-                  {isLoading
-                    ? "Loading…"
-                    : "No activity with this contact in this period."}
-                </TableCell>
-              </TableRow>
+              )}
+            </TableBody>
+            {events.length > 0 && (
+              <TableFooter>
+                <TableRow>
+                  <TableCell />
+                  <TableCell className="text-xs font-medium text-muted-foreground">
+                    {s?.eventCount ?? events.length} item
+                    {(s?.eventCount ?? events.length) === 1 ? "" : "s"} in this period
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">
+                    {formatINR(s?.received ?? 0)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums font-semibold text-destructive">
+                    {formatINR(s?.paid ?? 0)}
+                  </TableCell>
+                </TableRow>
+              </TableFooter>
             )}
-          </TableBody>
-          {events.length > 0 && (
-            <TableFooter>
-              <TableRow>
-                <TableCell />
-                <TableCell className="text-xs font-medium text-muted-foreground">
-                  {s?.eventCount ?? events.length} item
-                  {(s?.eventCount ?? events.length) === 1 ? "" : "s"} · Opening{" "}
-                  {formatINR(s?.openingNetCash ?? 0)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">
-                  {formatINR(s?.received ?? 0)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-semibold text-destructive">
-                  {formatINR(s?.paid ?? 0)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-semibold">
-                  {formatINR(s?.closingNetCash ?? 0)}
-                </TableCell>
-              </TableRow>
-            </TableFooter>
-          )}
-        </Table>
-      </div>
+          </Table>
+        </div>
 
-      <p className="text-[11px] text-muted-foreground no-print">
-        &ldquo;Cash balance&rdquo; is the running net of money exchanged with {contactName}
-        {" "}(received − paid) within the selected window. Charges are obligations booked
-        without cash moving; spent-on-them and gifts are informational.
-      </p>
+        <p className="text-[11px] leading-relaxed text-muted-foreground no-print">
+          <span className="font-medium">Money in</span> = cash you received from{" "}
+          {contactName} (transfers &amp; settlements).{" "}
+          <span className="font-medium">Money out</span> = cash you paid or sent them.
+          Amber rows are obligations booked without cash moving; grey rows (spent-on-them,
+          gifts) and loans are informational and don&apos;t change the money in/out totals.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+/** Big, colour-coded owe/owed card. Muted when the balance is zero. */
+function BalanceCard({
+  label,
+  hint,
+  value,
+  tone,
+}: {
+  label: string;
+  hint: string;
+  value: number;
+  tone: "in" | "out";
+}) {
+  const active = value > 0;
+  const activeCls =
+    tone === "in"
+      ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/60 dark:bg-emerald-950/30"
+      : "border-red-200 bg-red-50/60 dark:border-red-900/60 dark:bg-red-950/30";
+  const valueCls = !active
+    ? "text-muted-foreground"
+    : tone === "in"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : "text-destructive";
+  return (
+    <div className={`rounded-xl border p-4 ${active ? activeCls : "bg-card"}`}>
+      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${valueCls}`}>
+        {formatINR(value)}
+      </div>
+      <div className="mt-0.5 text-[11px] text-muted-foreground">
+        {active ? hint : "nothing outstanding"}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  tone,
+  icon,
+}: {
+  label: string;
+  value: string;
+  tone: "in" | "out";
+  icon?: React.ReactNode;
+}) {
+  const valueCls =
+    tone === "in"
+      ? "text-emerald-700 dark:text-emerald-400"
+      : "text-destructive";
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        {icon}
+        {label}
+      </div>
+      <div className={`mt-1 text-base font-semibold tabular-nums ${valueCls}`}>
+        {value}
+      </div>
     </div>
   );
 }
