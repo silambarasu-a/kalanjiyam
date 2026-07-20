@@ -52,6 +52,7 @@ type StatementEvent = {
   runningCash: number;
   transactionId: string | null;
   loanId: string | null;
+  hint: string | null;
 };
 
 type Statement = {
@@ -86,19 +87,14 @@ type ExportRow = {
   balance: number;
 };
 
-const NEUTRAL_TAG: Record<string, string> = {
-  CHARGE_OWED_TO_USER: "they owe you",
-  CHARGE_USER_OWES: "you owe them",
-  SPENT_ON_THEM: "spent on them",
-  THEY_PAID: "they paid",
-  LOAN: "principal",
-};
-
 function badgeClass(e: StatementEvent): string {
-  if (e.group === "CASH")
-    return e.direction === "IN"
-      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400"
-      : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400";
+  // Colour by cash direction first so the badge always agrees with the
+  // Money in / Money out column; obligation & informational rows fall back
+  // to their group colour.
+  if (e.direction === "IN")
+    return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400";
+  if (e.direction === "OUT")
+    return "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400";
   if (e.group === "ACCRUAL")
     return "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400";
   if (e.group === "LOAN")
@@ -321,7 +317,7 @@ export function ContactStatement({
         {/* Chart. */}
         <div className="rounded-xl border bg-card p-4 sm:p-5">
           <h4 className="mb-2 text-sm font-semibold">
-            Money exchanged with {contactName}, by month
+            Money in &amp; out with {contactName}, by month
           </h4>
           <ContactFlowChart data={monthly} />
         </div>
@@ -380,7 +376,8 @@ export function ContactStatement({
                           {e.direction === "NEUTRAL" && (
                             <span>
                               {e.account ? " · " : ""}
-                              {formatINR(e.amount)} {NEUTRAL_TAG[e.type] ?? ""}
+                              {formatINR(e.amount)}
+                              {e.hint ? ` · ${e.hint}` : ""}
                             </span>
                           )}
                         </div>
@@ -430,10 +427,13 @@ export function ContactStatement({
 
         <p className="text-[11px] leading-relaxed text-muted-foreground no-print">
           <span className="font-medium">Money in</span> = cash you received from{" "}
-          {contactName} (transfers &amp; settlements).{" "}
-          <span className="font-medium">Money out</span> = cash you paid or sent them.
-          Amber rows are obligations booked without cash moving; grey rows (spent-on-them,
-          gifts) and loans are informational and don&apos;t change the money in/out totals.
+          {contactName} (transfers received &amp; repayments).{" "}
+          <span className="font-medium">Money out</span> = cash that left your accounts
+          for them (transfers sent, payments, and expenses you paid — even if recoverable).
+          Amber rows are obligations booked without your cash moving (a transfer already
+          counted, or something they paid for you); these show the amount inline and
+          don&apos;t affect the in/out totals. Whether they still owe you is shown up top in{" "}
+          <span className="font-medium">Balance right now</span>.
         </p>
       </section>
     </div>

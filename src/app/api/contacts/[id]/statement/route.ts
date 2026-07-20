@@ -55,6 +55,9 @@ type BuiltEvent = {
   runningCash: number;
   transactionId: string | null;
   loanId: string | null;
+  /** Secondary line shown for rows with no cash column (obligations,
+   *  informational). Null for cash rows. */
+  hint: string | null;
 };
 
 export async function GET(
@@ -97,7 +100,7 @@ export async function GET(
             originSplit: {
               select: {
                 transaction: {
-                  select: { id: true, description: true, date: true },
+                  select: { id: true, description: true, date: true, type: true },
                 },
               },
             },
@@ -190,39 +193,77 @@ export async function GET(
         runningCash: 0,
         transactionId: null,
         loanId: null,
+        hint: null,
       });
     }
 
-    // ── Charges (accrual) + their settlements (cash) ────────────────────
+    // ── Charges + their settlements ─────────────────────────────────────
+    // A MemberCharge that came from an EXPENSE the owner paid (recoverable
+    // split) is real cash the owner laid out → it belongs in Money out. A
+    // charge that came from a Transfer, or is a "you owe them" obligation
+    // where the CONTACT spent the cash, moved no owner cash here (the
+    // Transfer row already carries it, or it was the contact's money) → it
+    // stays informational so nothing is double-counted.
     for (const c of charges) {
       const amount = Number(c.amount);
       const owedToUser = c.direction === "OWED_TO_USER"; // they owe you
       const forgiven = c.status === "WRITTEN_OFF";
       const originTxn = c.originSplit?.transaction ?? null;
+      const fromExpense = owedToUser && originTxn?.type === "EXPENSE";
       const chargeDate = originTxn?.date ?? c.createdAt;
-      events.push({
-        id: `charge:${c.id}`,
-        ts: chargeDate.getTime(),
-        date: chargeDate.toISOString(),
-        type: owedToUser ? "CHARGE_OWED_TO_USER" : "CHARGE_USER_OWES",
-        group: forgiven ? "INFO" : "ACCRUAL",
-        label: forgiven
-          ? "Charge forgiven"
-          : owedToUser
-            ? "They owe you"
-            : "You owe them",
-        description:
-          originTxn?.description ??
-          c.notes ??
-          (owedToUser ? "Amount owed to you" : "Amount you owe"),
-        account: null,
-        amount,
-        direction: "NEUTRAL",
-        cashDelta: 0,
-        runningCash: 0,
-        transactionId: originTxn?.id ?? null,
-        loanId: null,
-      });
+      const description =
+        originTxn?.description ??
+        c.notes ??
+        (owedToUser ? "Amount owed to you" : "Amount you owe");
+
+      if (fromExpense) {
+        // Owner paid for something recoverable from the contact → cash out.
+        events.push({
+          id: `charge:${c.id}`,
+          ts: chargeDate.getTime(),
+          date: chargeDate.toISOString(),
+          type: "PAID_FOR_THEM",
+          group: "CASH",
+          label: forgiven ? "Paid for them · written off" : "Paid for them",
+          description,
+          account: null,
+          amount,
+          direction: "OUT",
+          cashDelta: -amount,
+          runningCash: 0,
+          transactionId: originTxn?.id ?? null,
+          loanId: null,
+          hint: null,
+        });
+      } else {
+        // Obligation only — no owner cash moved on this row.
+        events.push({
+          id: `charge:${c.id}`,
+          ts: chargeDate.getTime(),
+          date: chargeDate.toISOString(),
+          type: owedToUser ? "CHARGE_OWED_TO_USER" : "CHARGE_USER_OWES",
+          group: forgiven ? "INFO" : "ACCRUAL",
+          label: forgiven
+            ? "Charge forgiven"
+            : owedToUser
+              ? "They owe you"
+              : "You owe them",
+          description,
+          account: null,
+          amount,
+          direction: "NEUTRAL",
+          cashDelta: 0,
+          runningCash: 0,
+          transactionId: originTxn?.id ?? null,
+          loanId: null,
+          hint: forgiven
+            ? "written off — no longer owed"
+            : owedToUser
+              ? "added to what they owe you"
+              : "added to what you owe them",
+        });
+      }
+
       for (const s of c.settlements) {
         const samt = Number(s.amount);
         const settleIn = owedToUser; // they paid you back
@@ -236,7 +277,7 @@ export async function GET(
           description:
             s.notes ??
             (settleIn
-              ? `${contact.name} paid you`
+              ? `${contact.name} paid you back`
               : `You paid ${contact.name}`),
           account: null,
           amount: samt,
@@ -245,35 +286,38 @@ export async function GET(
           runningCash: 0,
           transactionId: s.transactionId ?? null,
           loanId: null,
+          hint: null,
         });
       }
     }
 
-    // ── Spent on them (info) ────────────────────────────────────────────
+    // ── Spent on them (owner paid, not recovering) → cash out ───────────
     for (const e of spentSplits) {
       const txn = e.transaction;
+      const amount = Number(e.amount);
       events.push({
         id: `split:${e.id}`,
         ts: txn.date.getTime(),
         date: txn.date.toISOString(),
         type: "SPENT_ON_THEM",
-        group: "INFO",
+        group: "CASH",
         label:
           txn.memberChargeType === "GIFT"
-            ? "Spent on them (gift)"
+            ? "Spent on them · gift"
             : "Spent on them",
         description: txn.description,
         account: (txn.account ?? txn.card)?.name ?? null,
-        amount: Number(e.amount),
-        direction: "NEUTRAL",
-        cashDelta: 0,
+        amount,
+        direction: "OUT",
+        cashDelta: -amount,
         runningCash: 0,
         transactionId: txn.id,
         loanId: null,
+        hint: null,
       });
     }
 
-    // ── They paid for me — gift / none (info) ───────────────────────────
+    // ── They paid for me — gift / none (contact's cash, informational) ──
     for (const p of paidForMe) {
       events.push({
         id: `paidforme:${p.id}`,
@@ -282,7 +326,7 @@ export async function GET(
         type: "THEY_PAID",
         group: "INFO",
         label:
-          p.memberChargeType === "GIFT" ? "They paid (gift)" : "They paid",
+          p.memberChargeType === "GIFT" ? "They paid · gift" : "They paid",
         description: p.description,
         account: null,
         amount: Number(p.amount),
@@ -291,10 +335,11 @@ export async function GET(
         runningCash: 0,
         transactionId: p.id,
         loanId: null,
+        hint: "they paid — no money moved from your accounts",
       });
     }
 
-    // ── Hand loans (info) ───────────────────────────────────────────────
+    // ── Hand loans (informational — tracked under Loans) ────────────────
     for (const l of loans) {
       const outstanding = Number(l.outstanding);
       events.push({
@@ -304,9 +349,7 @@ export async function GET(
         type: "LOAN",
         group: "LOAN",
         label: `Hand loan · ${l.kind}`,
-        description: l.active
-          ? `Borrowed from them — ${formatCompact(outstanding)} outstanding`
-          : "Borrowed from them — cleared",
+        description: "Borrowed from them",
         account: null,
         amount: Number(l.principal),
         direction: "NEUTRAL",
@@ -314,6 +357,9 @@ export async function GET(
         runningCash: 0,
         transactionId: null,
         loanId: l.id,
+        hint: l.active
+          ? `${formatCompact(outstanding)} still outstanding`
+          : "cleared",
       });
     }
 
@@ -405,6 +451,7 @@ export async function GET(
           runningCash: e.runningCash,
           transactionId: e.transactionId,
           loanId: e.loanId,
+          hint: e.hint,
         })),
     });
   } catch (e) {
