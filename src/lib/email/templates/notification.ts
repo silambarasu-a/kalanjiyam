@@ -83,6 +83,7 @@ const KIND_LABELS: Record<string, string> = {
   SUBSCRIPTION_RENEWAL_DUE: "Subscription renewal",
   UTILITY_BILL_DUE_SOON: "Utility bill due",
   UTILITY_BILL_OVERDUE: "Utility bill overdue",
+  UTILITY_RECHARGE_DUE_SOON: "Recharge expiring",
   PAYMENT_FAILED: "Payment failed",
   GENERIC: "Reminder",
 };

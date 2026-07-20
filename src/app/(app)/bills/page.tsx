@@ -39,6 +39,8 @@ type Provider = {
   advanceBalance: number;
   autoPay: boolean;
   recurring: boolean;
+  prepaid: boolean;
+  validUntil: string | null;
   status: "ACTIVE" | "INACTIVE";
   account: { id: string; name: string; kind: string } | null;
   card: { id: string; name: string } | null;
@@ -198,6 +200,11 @@ function ProviderCard({ provider }: { provider: Provider }) {
   today.setHours(0, 0, 0, 0);
   const overdue =
     nextDue && nextDue < today ? Math.round((today.getTime() - nextDue.getTime()) / 86_400_000) : 0;
+  // Prepaid: a validity clock, not an outstanding bill. daysLeft < 0 = expired.
+  const validUntil = provider.validUntil ? new Date(provider.validUntil) : null;
+  const daysLeft = validUntil
+    ? Math.round((validUntil.getTime() - today.getTime()) / 86_400_000)
+    : null;
   return (
     <Link
       href={`/bills/providers/${provider.id}`}
@@ -217,13 +224,23 @@ function ProviderCard({ provider }: { provider: Provider }) {
                 {provider.summary.overdueCount} overdue
               </span>
             )}
+            {provider.prepaid && daysLeft != null && daysLeft <= 3 && (
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                {daysLeft < 0 ? "Expired" : "Expiring"}
+              </span>
+            )}
           </div>
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
             {utilityKindLabel(provider.kind)}
             {provider.connectionNumber ? ` · #${provider.connectionNumber}` : ""}
           </div>
-          {(provider.recurring || provider.autoPay) && (
+          {(provider.recurring || provider.autoPay || provider.prepaid) && (
             <div className="mt-1 flex flex-wrap gap-1">
+              {provider.prepaid && (
+                <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                  Prepaid
+                </span>
+              )}
               {provider.recurring && (
                 <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
                   Recurring
@@ -239,36 +256,83 @@ function ProviderCard({ provider }: { provider: Provider }) {
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-md bg-muted/40 px-2 py-1.5">
-          <div className="text-[10px] uppercase text-muted-foreground">Advance</div>
-          <div className="mt-0.5 font-semibold tabular-nums">
-            {formatINR(provider.advanceBalance)}
+      {provider.prepaid ? (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-md bg-muted/40 px-2 py-1.5">
+              <div className="text-[10px] uppercase text-muted-foreground">
+                Valid until
+              </div>
+              <div className="mt-0.5 font-semibold tabular-nums">
+                {validUntil
+                  ? validUntil.toLocaleDateString("en-IN", {
+                      day: "2-digit",
+                      month: "short",
+                      timeZone: "UTC",
+                    })
+                  : "—"}
+              </div>
+            </div>
+            <div className="rounded-md bg-muted/40 px-2 py-1.5">
+              <div className="text-[10px] uppercase text-muted-foreground">
+                Expires in
+              </div>
+              <div className="mt-0.5 font-semibold tabular-nums">
+                {daysLeft == null
+                  ? "—"
+                  : daysLeft < 0
+                    ? `${Math.abs(daysLeft)}d ago`
+                    : `${daysLeft}d`}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="rounded-md bg-muted/40 px-2 py-1.5">
-          <div className="text-[10px] uppercase text-muted-foreground">Unpaid</div>
-          <div className="mt-0.5 font-semibold tabular-nums">
-            {provider.summary.unpaidCount}
+          <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              {daysLeft == null
+                ? "Not recharged yet"
+                : daysLeft < 0
+                  ? "Expired — recharge"
+                  : "Plan active"}
+            </span>
+            <span className="truncate">
+              {provider.card?.name ?? provider.account?.name ?? "No default source"}
+            </span>
           </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-md bg-muted/40 px-2 py-1.5">
+              <div className="text-[10px] uppercase text-muted-foreground">Advance</div>
+              <div className="mt-0.5 font-semibold tabular-nums">
+                {formatINR(provider.advanceBalance)}
+              </div>
+            </div>
+            <div className="rounded-md bg-muted/40 px-2 py-1.5">
+              <div className="text-[10px] uppercase text-muted-foreground">Unpaid</div>
+              <div className="mt-0.5 font-semibold tabular-nums">
+                {provider.summary.unpaidCount}
+              </div>
+            </div>
+          </div>
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>
-          {nextDue
-            ? overdue > 0
-              ? `Overdue ${overdue}d`
-              : `Next due ${nextDue.toLocaleDateString("en-IN", {
-                  day: "2-digit",
-                  month: "short",
-                })}`
-            : "No active bills"}
-        </span>
-        <span className="truncate">
-          {provider.card?.name ?? provider.account?.name ?? "No default source"}
-        </span>
-      </div>
+          <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              {nextDue
+                ? overdue > 0
+                  ? `Overdue ${overdue}d`
+                  : `Next due ${nextDue.toLocaleDateString("en-IN", {
+                      day: "2-digit",
+                      month: "short",
+                    })}`
+                : "No active bills"}
+            </span>
+            <span className="truncate">
+              {provider.card?.name ?? provider.account?.name ?? "No default source"}
+            </span>
+          </div>
+        </>
+      )}
     </Link>
   );
 }

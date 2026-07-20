@@ -8,6 +8,7 @@ import {
 } from "@/lib/validators-domain";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { initialNextBillDate } from "@/lib/bill-schedule";
+import { resyncPrepaidReminder } from "@/lib/prepaid-reminder";
 import {
   type Prisma,
   UtilityAmountMode,
@@ -127,6 +128,9 @@ export async function GET(request: Request) {
         amountMode: p.amountMode,
         defaultAmount: p.defaultAmount != null ? Number(p.defaultAmount) : null,
         nextBillDate: p.nextBillDate?.toISOString() ?? null,
+        prepaid: p.prepaid,
+        validUntil: p.validUntil?.toISOString() ?? null,
+        rechargeValidityDays: p.rechargeValidityDays,
         advanceBalance: Number(p.advanceBalance),
         status: p.status,
         notes: p.notes,
@@ -183,38 +187,69 @@ export async function POST(request: Request) {
       }
     }
 
+    // Prepaid connections are a distinct billing world: paid up front, no
+    // postpaid bill and no autopay. Force recurrence/autopay off so the
+    // generate-bills and autopay crons never touch them.
+    const prepaid = data.prepaid ?? false;
     // When recurrence is on, seed the generator's cursor: the first bill
     // lands on the next occurrence of the billing day (never back-dated).
-    const recurring = data.recurring ?? false;
+    const recurring = prepaid ? false : (data.recurring ?? false);
     const billingDay = recurring ? (data.billingDay ?? 1) : (data.billingDay ?? null);
     const nextBillDate =
       recurring && billingDay
         ? initialNextBillDate(new Date(), billingDay)
         : null;
 
-    const created = await prisma.utilityProvider.create({
-      data: {
-        workspaceId: ctx.workspaceId,
-        ownerUserId: ctx.userId,
-        kind: data.kind as UtilityKind,
-        providerName: data.providerName,
-        connectionNumber: data.connectionNumber ?? null,
-        addressLine: data.addressLine ?? null,
-        accountId: data.accountId ?? null,
-        cardId: data.cardId ?? null,
-        autoPay: data.autoPay ?? false,
-        autoPayLeadDays: data.autoPayLeadDays ?? 0,
-        defaultDueDay: data.defaultDueDay ?? null,
-        gracePeriodDays: data.gracePeriodDays ?? null,
-        recurring,
-        billingCycle: (data.billingCycle ?? "MONTHLY") as UtilityBillCycle,
-        billingDay,
-        amountMode: (data.amountMode ?? "VARIABLE") as UtilityAmountMode,
-        defaultAmount: data.defaultAmount ?? null,
-        nextBillDate,
-        status: (data.status ?? "ACTIVE") as UtilityProviderStatus,
-        notes: data.notes ?? null,
-      },
+    // Current validity (optional at create — the user may set it now or on
+    // the first recharge). Normalised to UTC midnight to match @db.Date.
+    let validUntil: Date | null = null;
+    if (prepaid && data.validUntil) {
+      const v = new Date(data.validUntil);
+      if (Number.isNaN(v.getTime())) {
+        return NextResponse.json({ error: "Invalid validity date" }, { status: 400 });
+      }
+      v.setUTCHours(0, 0, 0, 0);
+      validUntil = v;
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      const provider = await tx.utilityProvider.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          ownerUserId: ctx.userId,
+          kind: data.kind as UtilityKind,
+          providerName: data.providerName,
+          connectionNumber: data.connectionNumber ?? null,
+          addressLine: data.addressLine ?? null,
+          accountId: data.accountId ?? null,
+          cardId: data.cardId ?? null,
+          autoPay: prepaid ? false : (data.autoPay ?? false),
+          autoPayLeadDays: data.autoPayLeadDays ?? 0,
+          defaultDueDay: data.defaultDueDay ?? null,
+          gracePeriodDays: data.gracePeriodDays ?? null,
+          recurring,
+          billingCycle: (data.billingCycle ?? "MONTHLY") as UtilityBillCycle,
+          billingDay,
+          amountMode: (data.amountMode ?? "VARIABLE") as UtilityAmountMode,
+          defaultAmount: data.defaultAmount ?? null,
+          nextBillDate,
+          prepaid,
+          validUntil,
+          rechargeValidityDays: prepaid ? (data.rechargeValidityDays ?? null) : null,
+          status: (data.status ?? "ACTIVE") as UtilityProviderStatus,
+          notes: data.notes ?? null,
+        },
+      });
+      // Seed the validity reminder when a prepaid provider is created with
+      // an expiry already known.
+      if (prepaid && validUntil) {
+        await resyncPrepaidReminder(tx, {
+          workspaceId: ctx.workspaceId,
+          providerId: provider.id,
+          validUntil,
+        });
+      }
+      return provider;
     });
 
     return NextResponse.json({ id: created.id });

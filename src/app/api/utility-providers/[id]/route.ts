@@ -5,6 +5,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { utilityProviderUpdateSchema } from "@/lib/validators-domain";
 import { canModifyRecord } from "@/lib/permissions";
 import { initialNextBillDate } from "@/lib/bill-schedule";
+import { resyncPrepaidReminder } from "@/lib/prepaid-reminder";
 import {
   UtilityAmountMode,
   UtilityBillCycle,
@@ -60,6 +61,9 @@ export async function GET(
         amountMode: p.amountMode,
         defaultAmount: p.defaultAmount != null ? Number(p.defaultAmount) : null,
         nextBillDate: p.nextBillDate?.toISOString() ?? null,
+        prepaid: p.prepaid,
+        validUntil: p.validUntil?.toISOString() ?? null,
+        rechargeValidityDays: p.rechargeValidityDays,
         advanceBalance: Number(p.advanceBalance),
         status: p.status,
         notes: p.notes,
@@ -95,10 +99,16 @@ export async function PATCH(
     }
     const d = parsed.data;
 
+    // Prepaid forces recurrence/autopay off — the two billing modes are
+    // mutually exclusive (a prepaid connection is paid up front, never
+    // generating a bill). Effective values merge the patch over existing.
+    const effectivePrepaid = d.prepaid ?? existing.prepaid;
+
     // Recompute the generator cursor (`nextBillDate`) when recurrence is
-    // toggled or the billing day moves. Effective values merge the patch
-    // over the existing row.
-    const effectiveRecurring = d.recurring ?? existing.recurring;
+    // toggled or the billing day moves.
+    const effectiveRecurring = effectivePrepaid
+      ? false
+      : (d.recurring ?? existing.recurring);
     const effectiveBillingDay =
       d.billingDay !== undefined ? d.billingDay : existing.billingDay;
     let nextBillDate: Date | null | undefined = undefined; // undefined = leave as-is
@@ -124,32 +134,78 @@ export async function PATCH(
           ? undefined
           : d.billingDay;
 
-    await prisma.utilityProvider.update({
-      where: { id },
-      data: {
-        kind: (d.kind as UtilityKind | undefined) ?? undefined,
-        providerName: d.providerName ?? undefined,
-        connectionNumber: d.connectionNumber === undefined ? undefined : d.connectionNumber,
-        addressLine: d.addressLine === undefined ? undefined : d.addressLine,
-        accountId: d.accountId === undefined ? undefined : d.accountId,
-        cardId: d.cardId === undefined ? undefined : d.cardId,
-        autoPay: d.autoPay ?? undefined,
-        autoPayLeadDays: d.autoPayLeadDays === undefined ? undefined : d.autoPayLeadDays,
-        defaultDueDay:
-          d.defaultDueDay === undefined ? undefined : d.defaultDueDay,
-        gracePeriodDays:
-          d.gracePeriodDays === undefined ? undefined : d.gracePeriodDays,
-        recurring: d.recurring === undefined ? undefined : d.recurring,
-        billingCycle:
-          (d.billingCycle as UtilityBillCycle | undefined) ?? undefined,
-        billingDay: billingDayToStore,
-        amountMode: (d.amountMode as UtilityAmountMode | undefined) ?? undefined,
-        defaultAmount:
-          d.defaultAmount === undefined ? undefined : d.defaultAmount,
-        nextBillDate,
-        status: (d.status as UtilityProviderStatus | undefined) ?? undefined,
-        notes: d.notes === undefined ? undefined : d.notes,
-      },
+    // Resolve the new validity date. `validUntil` is only meaningful for a
+    // prepaid provider — turning prepaid off clears it (and its reminder).
+    let newValidUntil: Date | null = existing.validUntil;
+    if (d.validUntil !== undefined) {
+      if (!d.validUntil || !d.validUntil.trim()) {
+        newValidUntil = null;
+      } else {
+        const v = new Date(d.validUntil);
+        if (Number.isNaN(v.getTime())) {
+          return NextResponse.json(
+            { error: "Invalid validity date" },
+            { status: 400 },
+          );
+        }
+        v.setUTCHours(0, 0, 0, 0);
+        newValidUntil = v;
+      }
+    }
+    if (!effectivePrepaid) newValidUntil = null;
+
+    const sameDate = (a: Date | null, b: Date | null) =>
+      (a?.getTime() ?? null) === (b?.getTime() ?? null);
+    const validityChanged = !sameDate(newValidUntil, existing.validUntil);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.utilityProvider.update({
+        where: { id },
+        data: {
+          kind: (d.kind as UtilityKind | undefined) ?? undefined,
+          providerName: d.providerName ?? undefined,
+          connectionNumber: d.connectionNumber === undefined ? undefined : d.connectionNumber,
+          addressLine: d.addressLine === undefined ? undefined : d.addressLine,
+          accountId: d.accountId === undefined ? undefined : d.accountId,
+          cardId: d.cardId === undefined ? undefined : d.cardId,
+          autoPay: effectivePrepaid
+            ? false
+            : (d.autoPay === undefined ? undefined : d.autoPay),
+          autoPayLeadDays: d.autoPayLeadDays === undefined ? undefined : d.autoPayLeadDays,
+          defaultDueDay:
+            d.defaultDueDay === undefined ? undefined : d.defaultDueDay,
+          gracePeriodDays:
+            d.gracePeriodDays === undefined ? undefined : d.gracePeriodDays,
+          recurring: effectivePrepaid
+            ? false
+            : (d.recurring === undefined ? undefined : d.recurring),
+          billingCycle:
+            (d.billingCycle as UtilityBillCycle | undefined) ?? undefined,
+          billingDay: billingDayToStore,
+          amountMode: (d.amountMode as UtilityAmountMode | undefined) ?? undefined,
+          defaultAmount:
+            d.defaultAmount === undefined ? undefined : d.defaultAmount,
+          nextBillDate,
+          prepaid: d.prepaid === undefined ? undefined : d.prepaid,
+          validUntil: validityChanged ? newValidUntil : undefined,
+          rechargeValidityDays: !effectivePrepaid
+            ? (existing.rechargeValidityDays != null ? null : undefined)
+            : (d.rechargeValidityDays === undefined
+                ? undefined
+                : d.rechargeValidityDays),
+          status: (d.status as UtilityProviderStatus | undefined) ?? undefined,
+          notes: d.notes === undefined ? undefined : d.notes,
+        },
+      });
+      // Re-point the validity reminder whenever the expiry moved (or was
+      // cleared by turning prepaid off). Mirrors the vehicle-doc resync.
+      if (validityChanged) {
+        await resyncPrepaidReminder(tx, {
+          workspaceId: ctx.workspaceId,
+          providerId: id,
+          validUntil: newValidUntil,
+        });
+      }
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
@@ -159,8 +215,9 @@ export async function PATCH(
 
 /**
  * Soft-deactivate by default. Pass `?hard=1` to attempt a hard delete —
- * only allowed when no bills and no advance transactions exist AND
- * advanceBalance == 0. Otherwise falls back to soft.
+ * only allowed when no bills and no linked transactions exist (advances,
+ * bill payments, or prepaid recharges) AND advanceBalance == 0. Otherwise
+ * falls back to soft so ledger history keeps its provider link.
  */
 export async function DELETE(
   request: Request,
@@ -181,15 +238,15 @@ export async function DELETE(
     const url = new URL(request.url);
     const hard = url.searchParams.get("hard") === "1";
     if (hard) {
-      const [billCount, advanceCount] = await Promise.all([
+      const [billCount, txnCount] = await Promise.all([
         prisma.utilityBill.count({ where: { providerId: id } }),
-        prisma.transaction.count({
-          where: { utilityProviderId: id, kind: "UTILITY_ADVANCE" },
-        }),
+        // Any linked transaction — advance, bill payment, or prepaid
+        // recharge — is history worth preserving, so block the hard delete.
+        prisma.transaction.count({ where: { utilityProviderId: id } }),
       ]);
       if (
         billCount === 0 &&
-        advanceCount === 0 &&
+        txnCount === 0 &&
         Number(p.advanceBalance) === 0
       ) {
         await prisma.utilityProvider.delete({ where: { id } });
@@ -198,9 +255,21 @@ export async function DELETE(
       // Fall through to soft on conflict.
     }
 
-    await prisma.utilityProvider.update({
-      where: { id },
-      data: { status: UtilityProviderStatus.INACTIVE },
+    await prisma.$transaction(async (tx) => {
+      await tx.utilityProvider.update({
+        where: { id },
+        data: { status: UtilityProviderStatus.INACTIVE },
+      });
+      // A deactivated prepaid connection shouldn't keep nagging to
+      // recharge — drop its live validity reminder (validUntil: null
+      // deletes the UPCOMING reminder without creating a new one).
+      if (p.prepaid) {
+        await resyncPrepaidReminder(tx, {
+          workspaceId: ctx.workspaceId,
+          providerId: id,
+          validUntil: null,
+        });
+      }
     });
     return NextResponse.json({ ok: true, mode: "soft" });
   } catch (e) {

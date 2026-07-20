@@ -46,6 +46,7 @@ import {
 } from "@/components/bills/utility-kind";
 import { UtilityProviderForm } from "@/components/bills/utility-provider-form";
 import { AddAdvanceDialog } from "@/components/bills/add-advance-dialog";
+import { RechargeDialog } from "@/components/bills/recharge-dialog";
 import { UtilityBillForm } from "@/components/bills/utility-bill-form";
 import { PayBillDialog } from "@/components/bills/pay-bill-dialog";
 import { EnterBillAmountDialog } from "@/components/bills/enter-bill-amount-dialog";
@@ -73,6 +74,9 @@ type Provider = {
   amountMode: "FIXED" | "VARIABLE";
   defaultAmount: number | null;
   nextBillDate: string | null;
+  prepaid: boolean;
+  validUntil: string | null;
+  rechargeValidityDays: number | null;
   advanceBalance: number;
   status: "ACTIVE" | "INACTIVE";
   notes: string | null;
@@ -149,6 +153,7 @@ export default function ProviderDetailPage({
   );
   const [editOpen, setEditOpen] = useState(false);
   const [advanceOpen, setAdvanceOpen] = useState(false);
+  const [rechargeOpen, setRechargeOpen] = useState(false);
   const [newBillOpen, setNewBillOpen] = useState(false);
   const [payBill, setPayBill] = useState<Bill | null>(null);
   const [enterAmountBill, setEnterAmountBill] = useState<Bill | null>(null);
@@ -294,6 +299,15 @@ export default function ProviderDetailPage({
             </div>
           </header>
 
+          {provider.prepaid ? (
+            <div className="pt-2">
+              <h3 className="mb-2 text-sm font-semibold">Recharge history</h3>
+              <RechargeHistoryTable
+                providerId={id}
+                onViewTxn={(txnId) => setFocusTxnId(txnId)}
+              />
+            </div>
+          ) : (
           <Tabs defaultValue="overview">
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -411,21 +425,69 @@ export default function ProviderDetailPage({
               />
             </TabsContent>
           </Tabs>
+          )}
         </div>
 
         <aside className="space-y-4">
-          <div className="rounded-lg border bg-card p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Advance balance
+          {provider.prepaid ? (
+            <div className="rounded-lg border bg-card p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Validity
+              </div>
+              {provider.validUntil ? (
+                (() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const vu = new Date(provider.validUntil);
+                  const daysLeft = Math.round(
+                    (vu.getTime() - today.getTime()) / 86_400_000,
+                  );
+                  const expired = daysLeft < 0;
+                  return (
+                    <>
+                      <div className="mt-1 text-2xl font-semibold tabular-nums">
+                        {fmtDate(provider.validUntil)}
+                      </div>
+                      <div
+                        className={`mt-1 text-[11px] font-medium uppercase tracking-wide ${
+                          daysLeft <= 3
+                            ? "text-rose-700 dark:text-rose-400"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {expired
+                          ? `Expired ${Math.abs(daysLeft)}d ago`
+                          : daysLeft === 0
+                            ? "Expires today"
+                            : `Expires in ${daysLeft}d`}
+                      </div>
+                    </>
+                  );
+                })()
+              ) : (
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Not recharged yet — record your first recharge to start the
+                  validity clock.
+                </div>
+              )}
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                You&rsquo;ll get a reminder + email as the validity runs out.
+              </p>
             </div>
-            <div className="mt-1 text-2xl font-semibold tabular-nums">
-              {formatINR(provider.advanceBalance)}
+          ) : (
+            <div className="rounded-lg border bg-card p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Advance balance
+              </div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums">
+                {formatINR(provider.advanceBalance)}
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Each new bill draws from this balance first; only the
+                shortfall is charged to your account/card.
+              </p>
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Each new bill draws from this balance first; only the
-              shortfall is charged to your account/card.
-            </p>
-          </div>
+          )}
 
           <div className="rounded-lg border bg-card p-4">
             <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -463,20 +525,31 @@ export default function ProviderDetailPage({
           </div>
 
           <div className="space-y-2">
-            <Button
-              onClick={() => setNewBillOpen(true)}
-              className="w-full gap-1.5"
-            >
-              <Plus className="h-4 w-4" /> Record bill
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setAdvanceOpen(true)}
-              className="w-full gap-1.5 text-xs"
-              size="sm"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add advance
-            </Button>
+            {provider.prepaid ? (
+              <Button
+                onClick={() => setRechargeOpen(true)}
+                className="w-full gap-1.5"
+              >
+                <Plus className="h-4 w-4" /> Recharge
+              </Button>
+            ) : (
+              <>
+                <Button
+                  onClick={() => setNewBillOpen(true)}
+                  className="w-full gap-1.5"
+                >
+                  <Plus className="h-4 w-4" /> Record bill
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setAdvanceOpen(true)}
+                  className="w-full gap-1.5 text-xs"
+                  size="sm"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add advance
+                </Button>
+              </>
+            )}
           </div>
         </aside>
       </div>
@@ -505,6 +578,9 @@ export default function ProviderDetailPage({
                 billingDay: provider.billingDay,
                 amountMode: provider.amountMode,
                 defaultAmount: provider.defaultAmount,
+                prepaid: provider.prepaid,
+                validUntil: provider.validUntil,
+                rechargeValidityDays: provider.rechargeValidityDays,
                 notes: provider.notes,
               }}
               onSaved={() => {
@@ -530,6 +606,27 @@ export default function ProviderDetailPage({
           onSaved={() => {
             globalMutate(`/api/utility-providers/${id}`);
             globalMutate("/api/utility-providers");
+          }}
+        />
+      )}
+
+      {rechargeOpen && (
+        <RechargeDialog
+          open={rechargeOpen}
+          onOpenChange={setRechargeOpen}
+          provider={{
+            id: provider.id,
+            providerName: provider.providerName,
+            accountId: provider.accountId,
+            cardId: provider.cardId,
+            validUntil: provider.validUntil,
+            rechargeValidityDays: provider.rechargeValidityDays,
+          }}
+          onSaved={() => {
+            globalMutate(`/api/utility-providers/${id}`);
+            globalMutate("/api/utility-providers");
+            globalMutate(`/api/utility-bills?providerId=${id}`);
+            globalMutate("/api/reminders?status=UPCOMING");
           }}
         />
       )}
@@ -940,6 +1037,82 @@ function BillsTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// Prepaid recharge history. Recharges are recorded as UTILITY_BILL
+// transactions linked to the provider (no UtilityBill row), so we list
+// them straight from the transactions API — mirrors AdvancesTable.
+function RechargeHistoryTable({
+  providerId,
+  onViewTxn,
+}: {
+  providerId: string;
+  onViewTxn: (txnId: string) => void;
+}) {
+  const { data, isLoading } = useSWR<{
+    transactions: {
+      id: string;
+      amount: number;
+      date: string;
+      description: string;
+      account: { id: string; name: string } | null;
+      card: { id: string; name: string } | null;
+    }[];
+  }>(
+    `/api/transactions?utilityProviderId=${providerId}&kind=UTILITY_BILL&limit=100`,
+    fetcher,
+  );
+
+  if (isLoading) return <Skeleton className="h-32" />;
+  const rows = data?.transactions ?? [];
+  if (rows.length === 0) {
+    return (
+      <p className="rounded-lg border border-dashed bg-muted/30 p-6 text-center text-xs text-muted-foreground">
+        No recharges yet. Use the Recharge button to record the first one.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card">
+      <table className="w-full text-sm">
+        <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">Date</th>
+            <th className="px-3 py-2 text-left font-medium">Source</th>
+            <th className="px-3 py-2 text-left font-medium">Plan</th>
+            <th className="px-3 py-2 text-right font-medium">Amount</th>
+            <th className="px-3 py-2 text-right font-medium">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {rows.map((t) => (
+            <tr key={t.id} className="hover:bg-muted/30">
+              <td className="px-3 py-2 text-xs">{fmtDate(t.date)}</td>
+              <td className="px-3 py-2 text-xs">
+                {t.card?.name ?? t.account?.name ?? "—"}
+              </td>
+              <td className="px-3 py-2 text-xs text-muted-foreground">
+                {t.description}
+              </td>
+              <td className="px-3 py-2 text-right font-medium tabular-nums">
+                {formatINR(t.amount)}
+              </td>
+              <td className="px-3 py-2 text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => onViewTxn(t.id)}
+                >
+                  View
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

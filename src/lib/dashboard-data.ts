@@ -623,6 +623,11 @@ export async function getDashboardCashflow(args: {
     // with proper labels and a vehicle-deep-link. Skip them here to
     // avoid showing the same reminder twice on the dashboard.
     if (r.kind === "VEHICLE_DOC_RENEWAL") continue;
+    // Prepaid recharge validity is an expiry tracker, not a payable due —
+    // it surfaces on the Reminders page + notifications with proper copy
+    // and a Recharge link. Skip here so it doesn't show a raw enum label
+    // and dead-end at the generic confirm dialog (which rejects it).
+    if (r.kind === "UTILITY_RECHARGE_DUE") continue;
     const label =
       r.subscription?.name ??
       (r.utilityBill?.provider

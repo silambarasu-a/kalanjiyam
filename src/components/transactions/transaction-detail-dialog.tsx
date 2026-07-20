@@ -250,9 +250,15 @@ export function TransactionDetailDialog({
                 />
               )}
               {tx.utilityProvider && !tx.utilityBill && (
-                // Standalone advance deposit — no bill link, just provider.
+                // Provider-linked spend with no bill: either an advance
+                // deposit (UTILITY_ADVANCE) or a prepaid recharge
+                // (UTILITY_BILL) — label by kind so they don't look alike.
                 <Field
-                  label={`Advance to ${tx.utilityProvider.providerName}`}
+                  label={
+                    tx.kind === "UTILITY_ADVANCE"
+                      ? `Advance to ${tx.utilityProvider.providerName}`
+                      : `${tx.utilityProvider.providerName} recharge`
+                  }
                   value={tx.utilityProvider.kind
                     .replace(/_/g, " ")
                     .toLowerCase()}
