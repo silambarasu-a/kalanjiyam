@@ -45,6 +45,35 @@ function atUtcMidnight(date: Date): Date {
   return d;
 }
 
+/** Add `days` to a date, normalising to UTC midnight. */
+export function addDaysUtc(date: Date, days: number): Date {
+  const d = atUtcMidnight(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+/**
+ * New validity expiry for a prepaid recharge. When `extendFromCurrent`
+ * and the current validity is still live (ends after the recharge date),
+ * the fresh days STACK onto the remaining validity; otherwise they start
+ * from the recharge date. Mirrors how prepaid ISPs/telcos (JioAirFiber,
+ * Jio mobile) add days when you recharge before expiry.
+ */
+export function computeRechargeExpiry(opts: {
+  paidOn: Date;
+  validityDays: number;
+  currentValidUntil?: Date | null;
+  extendFromCurrent?: boolean;
+}): Date {
+  const paid = atUtcMidnight(opts.paidOn);
+  const current = opts.currentValidUntil
+    ? atUtcMidnight(opts.currentValidUntil)
+    : null;
+  const base =
+    opts.extendFromCurrent && current && current > paid ? current : paid;
+  return addDaysUtc(base, opts.validityDays);
+}
+
 /** Clamp a 1–31 day-of-month onto the given year/month (handles Feb, etc.). */
 function dayInMonth(year: number, month: number, day: number): Date {
   const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();

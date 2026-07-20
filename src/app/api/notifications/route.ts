@@ -65,6 +65,7 @@ export async function GET(request: Request) {
               lenderContact: { select: { name: true } },
             },
           },
+          utilityProvider: { select: { id: true, providerName: true } },
         },
         take: 50,
       }),
@@ -162,7 +163,16 @@ export async function GET(request: Request) {
         r.investment?.name ??
         r.loan?.lenderContact?.name ??
         r.loan?.lender ??
+        (r.utilityProvider
+          ? `${r.utilityProvider.providerName} recharge`
+          : null) ??
         r.kind.replace(/_/g, " ");
+      // Prepaid recharge validity is an expiry tracker, not a payable due:
+      // deep-link straight to the provider's Recharge page instead of the
+      // generic confirm dialog (which rejects it).
+      const rechargeHref = r.utilityProvider
+        ? `/bills/providers/${r.utilityProvider.id}`
+        : null;
       items.push({
         id: `reminder:${r.id}`,
         source: "REMINDER",
@@ -170,8 +180,8 @@ export async function GET(request: Request) {
         label,
         dueDate: r.dueDate.toISOString(),
         amount: r.amount == null ? null : Number(r.amount),
-        href: "/reminders",
-        payHref: `/reminders?confirm=${r.id}`,
+        href: rechargeHref ?? "/reminders",
+        payHref: rechargeHref ?? `/reminders?confirm=${r.id}`,
         overdue: r.dueDate < today,
       });
     }

@@ -30,6 +30,7 @@ const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   VEHICLE_DOC_RENEWAL: NotificationKind.GENERIC,
   SUBSCRIPTION_RENEWAL: NotificationKind.SUBSCRIPTION_RENEWAL_DUE,
   UTILITY_BILL_DUE: NotificationKind.UTILITY_BILL_DUE_SOON,
+  UTILITY_RECHARGE_DUE: NotificationKind.UTILITY_RECHARGE_DUE_SOON,
   VACCINATION_DUE: NotificationKind.VACCINATION_DUE,
   LIVESTOCK_CYCLE_ENDING: NotificationKind.LIVESTOCK_CYCLE_ENDING,
 };
@@ -104,6 +105,9 @@ async function run() {
           provider: { select: { id: true, providerName: true, kind: true } },
         },
       },
+      utilityProvider: {
+        select: { id: true, providerName: true, kind: true },
+      },
       vaccinationLog: {
         select: {
           id: true,
@@ -167,6 +171,8 @@ async function run() {
       label = r.subscription.name;
     } else if (r.kind === ReminderKind.UTILITY_BILL_DUE && r.utilityBill) {
       label = `${r.utilityBill.provider.providerName} bill`;
+    } else if (r.kind === ReminderKind.UTILITY_RECHARGE_DUE && r.utilityProvider) {
+      label = `${r.utilityProvider.providerName} recharge`;
     } else if (r.kind === ReminderKind.VACCINATION_DUE && r.vaccinationLog) {
       const batch = r.vaccinationLog.batch;
       label = `${r.vaccinationLog.vaccine}${batch ? ` (${batch.livestock.name} · ${batch.name})` : ""}`;
@@ -179,7 +185,9 @@ async function run() {
         r.kind.replace(/_/g, " ").toLowerCase();
     }
 
-    const isExpiry = r.kind === ReminderKind.VEHICLE_DOC_RENEWAL;
+    const isExpiry =
+      r.kind === ReminderKind.VEHICLE_DOC_RENEWAL ||
+      r.kind === ReminderKind.UTILITY_RECHARGE_DUE;
     // Auto-generated VARIABLE bills land with a placeholder amount — the
     // reminder's job is to prompt the user to enter the real figure.
     const isEstimatedBill =
@@ -211,7 +219,9 @@ async function run() {
         ? `/subscriptions/${r.subscription.id}`
         : r.utilityBill?.provider?.id
           ? `/bills/providers/${r.utilityBill.provider.id}`
-          : livestockBatchLink
+          : r.utilityProvider?.id
+            ? `/bills/providers/${r.utilityProvider.id}`
+            : livestockBatchLink
             ? livestockBatchLink
             : r.investment?.id
               ? r.investment.kind === "INSURANCE"

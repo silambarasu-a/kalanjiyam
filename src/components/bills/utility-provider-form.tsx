@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { AmountInput } from "@/components/ui/amount-input";
+import { DateInput } from "@/components/ui/date-input";
 import { DescriptionField } from "@/components/ui/description-field";
 import { UTILITY_KINDS, type UtilityKindValue } from "@/components/bills/utility-kind";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -47,6 +48,9 @@ type Props = {
     billingDay?: number | null;
     amountMode?: "FIXED" | "VARIABLE" | null;
     defaultAmount?: number | null;
+    prepaid?: boolean;
+    validUntil?: string | null;
+    rechargeValidityDays?: number | null;
     notes: string | null;
   };
   onSaved: (id: string) => void;
@@ -104,6 +108,16 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const [defaultAmount, setDefaultAmount] = useState(
     initial?.defaultAmount != null ? String(initial.defaultAmount) : "",
   );
+  // Prepaid mode — validity clock instead of a postpaid bill cycle.
+  const [prepaid, setPrepaid] = useState(initial?.prepaid ?? false);
+  const [validUntil, setValidUntil] = useState(
+    initial?.validUntil ? initial.validUntil.slice(0, 10) : "",
+  );
+  const [rechargeValidityDays, setRechargeValidityDays] = useState(
+    initial?.rechargeValidityDays != null
+      ? String(initial.rechargeValidityDays)
+      : "",
+  );
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +144,7 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   async function submit() {
     setError(null);
     if (!providerName.trim()) return setError("Provider name is required");
-    if (recurring && amountMode === "FIXED") {
+    if (!prepaid && recurring && amountMode === "FIXED") {
       const amt = Number(defaultAmount);
       if (!amt || amt <= 0)
         return setError("Set a monthly amount for a fixed recurring bill");
@@ -144,20 +158,28 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         addressLine: addressLine.trim() || null,
         accountId: sourceMode === "account" ? effectiveAccountId || null : null,
         cardId: sourceMode === "card" ? effectiveCardId || null : null,
-        autoPay,
-        autoPayLeadDays: autoPay ? Number(autoPayLeadDays) || 0 : 0,
+        // Prepaid connections never autopay a bill (they're paid up front).
+        autoPay: prepaid ? false : autoPay,
+        autoPayLeadDays: !prepaid && autoPay ? Number(autoPayLeadDays) || 0 : 0,
         // Exactly one due-date basis is stored; the other is nulled.
         defaultDueDay:
-          dueMode === "fixed" && defaultDueDay ? Number(defaultDueDay) : null,
+          !prepaid && dueMode === "fixed" && defaultDueDay
+            ? Number(defaultDueDay)
+            : null,
         gracePeriodDays:
-          dueMode === "grace" && gracePeriodDays !== ""
+          !prepaid && dueMode === "grace" && gracePeriodDays !== ""
             ? Number(gracePeriodDays)
             : null,
-        recurring,
+        // Prepaid and recurring-postpaid are mutually exclusive.
+        recurring: prepaid ? false : recurring,
         billingCycle,
-        billingDay: recurring && billingDay ? Number(billingDay) : null,
+        billingDay: !prepaid && recurring && billingDay ? Number(billingDay) : null,
         amountMode,
         defaultAmount: defaultAmount ? Number(defaultAmount) : null,
+        prepaid,
+        validUntil: prepaid && validUntil ? validUntil : null,
+        rechargeValidityDays:
+          prepaid && rechargeValidityDays ? Number(rechargeValidityDays) : null,
         notes: notes.trim() || null,
       };
       const res = await fetch(
@@ -210,7 +232,7 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
             placeholder="Optional"
           />
         </div>
-        <div>
+        <div className={prepaid ? "hidden" : undefined}>
           <Label>Due date</Label>
           <div className="mt-1 flex gap-1.5 text-xs">
             {(
@@ -305,15 +327,17 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
             placeholder="Select card"
           />
         )}
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={autoPay}
-            onChange={(e) => setAutoPay(e.target.checked)}
-          />
-          Auto-pay bills from this source when they&apos;re due
-        </label>
-        {autoPay && (
+        {!prepaid && (
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={autoPay}
+              onChange={(e) => setAutoPay(e.target.checked)}
+            />
+            Auto-pay bills from this source when they&apos;re due
+          </label>
+        )}
+        {!prepaid && autoPay && (
           <div className="flex items-center gap-2 pl-6 text-xs">
             <span className="text-muted-foreground">Pay</span>
             <Input
@@ -331,7 +355,54 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         )}
       </div>
 
+      {/* Prepaid — a validity clock instead of a postpaid bill. */}
+      <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+        <label className="flex items-center gap-2 text-xs font-medium">
+          <input
+            type="checkbox"
+            checked={prepaid}
+            onChange={(e) => setPrepaid(e.target.checked)}
+          />
+          Prepaid connection (recharge-based)
+        </label>
+        <p className="pl-6 text-[11px] text-muted-foreground">
+          For JioAirFiber, mobile prepaid, prepaid DTH — paid up front, no
+          monthly bill. Each recharge extends the validity and you&rsquo;re
+          reminded before it expires.
+        </p>
+        {prepaid && (
+          <div className="grid grid-cols-1 gap-3 pl-6 sm:grid-cols-2">
+            <div>
+              <Label>Currently valid until (optional)</Label>
+              <DateInput
+                value={validUntil}
+                onChange={(e) => setValidUntil(e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Leave blank and set it on the first recharge.
+              </p>
+            </div>
+            <div>
+              <Label>Typical plan validity (days)</Label>
+              <Input
+                value={rechargeValidityDays}
+                onChange={(e) =>
+                  setRechargeValidityDays(
+                    e.target.value.replace(/\D/g, "").slice(0, 4),
+                  )
+                }
+                placeholder="e.g. 30"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Prefills the recharge dialog. Optional.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Recurrence — auto-create a fresh bill each cycle. */}
+      {!prepaid && (
       <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
         <label className="flex items-center gap-2 text-xs font-medium">
           <input
@@ -417,6 +488,7 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
           </div>
         )}
       </div>
+      )}
 
       <DescriptionField
         value={notes}

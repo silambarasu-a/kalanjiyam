@@ -89,6 +89,21 @@ export async function POST(
         { status: 400 },
       );
     }
+    if (reminder.kind === ReminderKind.UTILITY_RECHARGE_DUE) {
+      // Prepaid recharges have their own flow (records the payment AND
+      // extends validity). The generic confirm would mark it done without
+      // either — reject with a pointer to the provider's Recharge action.
+      return NextResponse.json(
+        {
+          error:
+            "Recharge this connection from its page so the payment is recorded and validity extended.",
+          link: reminder.utilityProviderId
+            ? `/bills/providers/${reminder.utilityProviderId}`
+            : "/bills",
+        },
+        { status: 400 },
+      );
+    }
     const body = await request.json();
     const parsed = reminderConfirmSchema.safeParse(body);
     if (!parsed.success) {

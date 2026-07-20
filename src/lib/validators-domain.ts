@@ -1526,6 +1526,14 @@ const utilityBillCycleEnum = z.enum([
 ]);
 const utilityAmountModeEnum = z.enum(["FIXED", "VARIABLE"]);
 
+// NOTE: fields here are `.optional()` WITHOUT `.default()` on purpose.
+// `utilityProviderUpdateSchema` is `.partial()` and relies on an omitted
+// field parsing to `undefined` so the PATCH route can merge over the
+// existing row. In Zod 4 a `.default()` survives `.partial()` and would
+// turn every omitted field into its default — silently forcing prepaid/
+// recurring/autoPay off and resetting status on a partial update. The
+// create route supplies its own `?? fallback` for every field, so no
+// default is needed here.
 const utilityProviderBase = z.object({
   kind: utilityKindEnum,
   providerName: z.string().trim().min(1).max(120),
@@ -1533,20 +1541,27 @@ const utilityProviderBase = z.object({
   addressLine: z.string().trim().max(240).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
-  autoPay: z.boolean().optional().default(false),
-  autoPayLeadDays: z.number().int().min(0).max(31).optional().default(0),
+  autoPay: z.boolean().optional(),
+  autoPayLeadDays: z.number().int().min(0).max(31).optional(),
   defaultDueDay: z.number().int().min(1).max(31).optional().nullable(),
   // Days after the statement date until the bill is due (grace period).
   // When set it takes precedence over defaultDueDay.
   gracePeriodDays: z.number().int().min(0).max(90).optional().nullable(),
   // Recurrence config.
-  recurring: z.boolean().optional().default(false),
-  billingCycle: utilityBillCycleEnum.optional().default("MONTHLY"),
+  recurring: z.boolean().optional(),
+  billingCycle: utilityBillCycleEnum.optional(),
   billingDay: z.number().int().min(1).max(31).optional().nullable(),
-  amountMode: utilityAmountModeEnum.optional().default("VARIABLE"),
+  amountMode: utilityAmountModeEnum.optional(),
   defaultAmount: z.number().positive().max(10_000_000).optional().nullable(),
-  status: utilityProviderStatusEnum.optional().default("ACTIVE"),
+  status: utilityProviderStatusEnum.optional(),
   notes: z.string().trim().max(1000).optional().nullable(),
+  // Prepaid mode — validity-clock connections (JioAirFiber, mobile
+  // prepaid). Paid up front; no postpaid bill or autopay. `validUntil`
+  // is the current expiry; `rechargeValidityDays` prefills the recharge
+  // dialog. Mutually exclusive with `recurring` (see prepaidNotRecurring).
+  prepaid: z.boolean().optional(),
+  validUntil: z.string().optional().nullable(),
+  rechargeValidityDays: z.number().int().min(1).max(3650).optional().nullable(),
 });
 
 // A FIXED recurring provider must carry a default amount so both the
@@ -1560,6 +1575,16 @@ function fixedNeedsAmount(d: {
   return d.defaultAmount != null && d.defaultAmount > 0;
 }
 
+// Prepaid and recurring-postpaid are two different billing worlds — a
+// prepaid connection is paid up front and never generates a bill, so it
+// can't also be `recurring`.
+function prepaidNotRecurring(d: {
+  prepaid?: boolean;
+  recurring?: boolean;
+}): boolean {
+  return !(d.prepaid && d.recurring);
+}
+
 export const utilityProviderCreateSchema = utilityProviderBase
   .refine(
     (d) => {
@@ -1571,6 +1596,10 @@ export const utilityProviderCreateSchema = utilityProviderBase
   .refine(fixedNeedsAmount, {
     message: "Set a monthly amount for a fixed recurring bill",
     path: ["defaultAmount"],
+  })
+  .refine(prepaidNotRecurring, {
+    message: "A prepaid connection can't also auto-generate bills",
+    path: ["prepaid"],
   });
 
 export const utilityProviderUpdateSchema = utilityProviderBase
@@ -1578,6 +1607,10 @@ export const utilityProviderUpdateSchema = utilityProviderBase
   .refine(fixedNeedsAmount, {
     message: "Set a monthly amount for a fixed recurring bill",
     path: ["defaultAmount"],
+  })
+  .refine(prepaidNotRecurring, {
+    message: "A prepaid connection can't also auto-generate bills",
+    path: ["prepaid"],
   });
 
 export const utilityAdvanceCreateSchema = z
@@ -1590,6 +1623,34 @@ export const utilityAdvanceCreateSchema = z
   })
   .refine((d) => !!d.accountId !== !!d.cardId, {
     message: "Pick exactly one source — account or card",
+    path: ["accountId"],
+  });
+
+// Recharge a prepaid connection. Records the up-front payment and extends
+// the provider's validity. The new expiry is derived from EITHER an
+// explicit `validUntil` date OR `validityDays` added to a base date; when
+// `extendFromCurrent` (default) and the plan is still live, days stack
+// onto the remaining validity instead of restarting from the pay date.
+export const utilityRechargeSchema = z
+  .object({
+    amount: z.number().positive().max(10_000_000),
+    validityDays: z.number().int().min(1).max(3650).optional().nullable(),
+    validUntil: z.string().optional().nullable(),
+    extendFromCurrent: z.boolean().optional().default(true),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    paidOn: z.string().optional().nullable(),
+    notes: z.string().trim().max(200).optional().nullable(),
+  })
+  .refine(
+    (d) => d.validityDays != null || !!(d.validUntil && d.validUntil.trim()),
+    {
+      message: "Set the plan validity in days, or pick an expiry date",
+      path: ["validityDays"],
+    },
+  )
+  .refine((d) => !d.accountId || !d.cardId, {
+    message: "Pick at most one source",
     path: ["accountId"],
   });
 

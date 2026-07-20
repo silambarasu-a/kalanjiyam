@@ -34,7 +34,8 @@ type Reminder = {
     | "CARD_STATEMENT"
     | "VEHICLE_DOC_RENEWAL"
     | "SUBSCRIPTION_RENEWAL"
-    | "UTILITY_BILL_DUE";
+    | "UTILITY_BILL_DUE"
+    | "UTILITY_RECHARGE_DUE";
   dueDate: string;
   amount: number | null;
   status: "UPCOMING" | "CONFIRMED" | "SKIPPED" | "MISSED";
@@ -51,6 +52,11 @@ type Reminder = {
   utilityBill: {
     id: string;
     providerId: string;
+    providerName: string;
+    providerKind: string;
+  } | null;
+  utilityProvider: {
+    id: string;
     providerName: string;
     providerKind: string;
   } | null;
@@ -235,6 +241,44 @@ function ReminderRow({
             Open provider
           </Button>
         </Link>
+      </div>
+    );
+  }
+  // Prepaid recharge validity is an expiry tracker, not a payable bill —
+  // no Confirm dialog (recharging happens on the provider page and sets
+  // the next validity). Link to the provider so the user can recharge.
+  if (reminder.kind === "UTILITY_RECHARGE_DUE" && reminder.utilityProvider) {
+    const overdue = new Date(reminder.dueDate) < new Date();
+    return (
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Clock
+          className={`h-4 w-4 shrink-0 ${overdue ? "text-destructive" : "text-primary"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">
+            {reminder.utilityProvider.providerName} recharge
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {overdue ? "Expired" : "Expires"} {formatDate(reminder.dueDate)}
+          </div>
+        </div>
+        <Link href={`/bills/providers/${reminder.utilityProvider.id}`}>
+          <Button size="sm" variant="outline">
+            Recharge
+          </Button>
+        </Link>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={async () => {
+            if (!confirm("Skip this reminder?")) return;
+            await fetch(`/api/reminders/${reminder.id}/skip`, { method: "POST" });
+            globalMutate("/api/reminders?status=UPCOMING");
+          }}
+          aria-label="Skip"
+        >
+          <X className="h-3 w-3" />
+        </Button>
       </div>
     );
   }

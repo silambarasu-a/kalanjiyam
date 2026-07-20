@@ -278,7 +278,9 @@ async function runBills(today: Date) {
       paidAt: null,
       estimated: false,
       dueDate: { lte: leadHorizon },
-      provider: { autoPay: true, status: "ACTIVE" },
+      // Prepaid connections are paid up front and never autopay (they also
+      // have no bills), but exclude them explicitly for safety.
+      provider: { autoPay: true, status: "ACTIVE", prepaid: false },
     },
     include: {
       provider: {

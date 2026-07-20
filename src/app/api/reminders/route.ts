@@ -50,6 +50,9 @@ export async function GET(request: Request) {
             },
           },
         },
+        utilityProvider: {
+          select: { id: true, providerName: true, kind: true },
+        },
       },
     });
 
@@ -92,6 +95,13 @@ export async function GET(request: Request) {
               providerId: r.utilityBill.provider.id,
               providerName: r.utilityBill.provider.providerName,
               providerKind: r.utilityBill.provider.kind,
+            }
+          : null,
+        utilityProvider: r.utilityProvider
+          ? {
+              id: r.utilityProvider.id,
+              providerName: r.utilityProvider.providerName,
+              providerKind: r.utilityProvider.kind,
             }
           : null,
       })),

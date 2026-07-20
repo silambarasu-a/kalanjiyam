@@ -55,6 +55,9 @@ async function run() {
       recurring: true,
       status: "ACTIVE",
       nextBillDate: { lte: today },
+      // Prepaid connections run on a validity clock, not a bill cycle —
+      // they force `recurring` off, but exclude them explicitly for safety.
+      prepaid: false,
     },
     take: 500,
   });
