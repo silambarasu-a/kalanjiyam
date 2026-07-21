@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AttachmentOwnerKind" ADD VALUE 'MEDICAL_RECORD_DOCUMENT';

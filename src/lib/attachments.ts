@@ -25,7 +25,8 @@ export type AttachmentOwnerKind =
   | "UTILITY_BILL"
   | "SUBSCRIPTION_DOCUMENT"
   | "LIVESTOCK_BATCH_DOCUMENT"
-  | "LIVESTOCK_CONTRACT_DOCUMENT";
+  | "LIVESTOCK_CONTRACT_DOCUMENT"
+  | "MEDICAL_RECORD_DOCUMENT";
 
 export type AttachmentPolicy = {
   /** S3 path segment for this owner kind. Stable; never rename. */
@@ -131,6 +132,14 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     mime: ["application/pdf", "image/*"],
     maxMB: 25,
     sensitive: false,
+  },
+  MEDICAL_RECORD_DOCUMENT: {
+    entityPath: "medical-records",
+    feature: "medical",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    // Health data — discharge summaries, lab reports, prescriptions.
+    sensitive: true,
   },
 };
 

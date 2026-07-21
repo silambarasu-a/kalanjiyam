@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { use, useMemo } from "react";
+import { use, useMemo, useState } from "react";
 import useSWR from "swr";
 import { ArrowLeft } from "lucide-react";
 import { KIND_LABEL } from "@/components/medical/record-dialog";
 import type { MedicalRecordKind } from "@/components/medical/record-dialog";
+import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
+import { AttachmentList } from "@/components/attachments/attachment-list";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -65,6 +67,8 @@ export default function MedicalRecordDetailPage({
   );
   const record = data?.record;
   const isHospitalization = record?.kind === "HOSPITALIZATION";
+  // Bill opened in the read-only detail dialog (full data + receipts).
+  const [detailTxnId, setDetailTxnId] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
     const buckets: Record<"PRE" | "DURING" | "POST", Txn[]> = {
@@ -191,7 +195,11 @@ export default function MedicalRecordDetailPage({
                   ({items.length}) · {formatINR(sum(items))}
                 </span>
               </h2>
-              <TxnList items={items} emptyLabel="No bills in this stage." />
+              <TxnList
+                items={items}
+                emptyLabel="No bills in this stage."
+                onOpen={setDetailTxnId}
+              />
             </div>
           );
         })
@@ -206,9 +214,21 @@ export default function MedicalRecordDetailPage({
           <TxnList
             items={record.transactions}
             emptyLabel="No bills tagged to this visit yet."
+            onOpen={setDetailTxnId}
           />
         </div>
       )}
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-medium">Documents</h2>
+        <div className="rounded-lg border bg-card p-4">
+          <AttachmentList
+            ownerKind="MEDICAL_RECORD_DOCUMENT"
+            ownerId={record.id}
+            emptyMessage="No documents yet. Upload discharge summaries, lab reports, prescriptions, scans."
+          />
+        </div>
+      </div>
 
       {record.notes && (
         <div className="rounded-lg border bg-card p-4 text-sm">
@@ -216,18 +236,37 @@ export default function MedicalRecordDetailPage({
           <div className="mt-1">{record.notes}</div>
         </div>
       )}
+
+      <TransactionDetailDialog
+        transactionId={detailTxnId}
+        open={detailTxnId !== null}
+        onOpenChange={(o) => !o && setDetailTxnId(null)}
+      />
     </div>
   );
 }
 
-function TxnList({ items, emptyLabel }: { items: Txn[]; emptyLabel: string }) {
+function TxnList({
+  items,
+  emptyLabel,
+  onOpen,
+}: {
+  items: Txn[];
+  emptyLabel: string;
+  onOpen: (id: string) => void;
+}) {
   return (
     <div className="rounded-lg border bg-card divide-y">
       {items.length === 0 && (
         <p className="p-3 text-xs text-muted-foreground">{emptyLabel}</p>
       )}
       {items.map((t) => (
-        <div key={t.id} className="flex items-start justify-between gap-3 p-3 text-sm">
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => onOpen(t.id)}
+          className="flex w-full items-start justify-between gap-3 p-3 text-left text-sm hover:bg-muted/40"
+        >
           <div>
             <div>{t.description}</div>
             <div className="text-xs text-muted-foreground">
@@ -240,7 +279,7 @@ function TxnList({ items, emptyLabel }: { items: Txn[]; emptyLabel: string }) {
             </div>
           </div>
           <div className="font-medium">{formatINR(t.amount)}</div>
-        </div>
+        </button>
       ))}
     </div>
   );

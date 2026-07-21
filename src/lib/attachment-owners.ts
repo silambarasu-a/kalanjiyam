@@ -115,6 +115,13 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "MEDICAL_RECORD_DOCUMENT": {
+      const row = await prisma.medicalRecord.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     default: {
       const exhaustive: never = ownerKind;
       void exhaustive;

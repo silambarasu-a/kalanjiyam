@@ -1319,6 +1319,8 @@ export const vehicleDocumentUpdateSchema = vehicleDocumentCreateSchema.partial()
 
 /* ---- Generic Attachment schemas (polymorphic per AttachmentOwnerKind) ---- */
 
+// Must stay in sync with AttachmentOwnerKind / ATTACHMENT_POLICY in
+// src/lib/attachments.ts — a kind missing here 400s on every request.
 const attachmentOwnerKindEnum = z.enum([
   "VEHICLE_DOCUMENT",
   "INSURANCE_POLICY",
@@ -1331,6 +1333,9 @@ const attachmentOwnerKindEnum = z.enum([
   "EVENT_DOCUMENT",
   "UTILITY_BILL",
   "SUBSCRIPTION_DOCUMENT",
+  "LIVESTOCK_BATCH_DOCUMENT",
+  "LIVESTOCK_CONTRACT_DOCUMENT",
+  "MEDICAL_RECORD_DOCUMENT",
 ]);
 
 export const attachmentUploadUrlSchema = z.object({
