@@ -19,7 +19,7 @@ import { fetcher } from "@/lib/swr-fetcher";
  * Read-only detail view for a single transaction. Opened by the View
  * (eye) icon on the transactions list. Renders every linked context
  * (category, account / card, beneficiary, vehicle, event, fuel,
- * hospitalization, transfer legs) plus inline previews of attached
+ * medical record, transfer legs) plus inline previews of attached
  * receipts.
  *
  *   - Images render as `<img>` (lazy-loaded, click to enlarge).
@@ -76,9 +76,10 @@ type DetailResponse = {
     }>;
     vehicle: { id: string; name: string; registrationNo: string | null } | null;
     event: { id: string; name: string; kind: string } | null;
-    hospitalization: {
+    medicalRecord: {
       id: string;
-      hospitalName: string;
+      kind: "CHECKUP" | "HOSPITALIZATION";
+      facilityName: string;
       patientContact: { id: string; name: string };
     } | null;
     hospitalizationStage: "PRE" | "DURING" | "POST" | null;
@@ -277,10 +278,14 @@ export function TransactionDetailDialog({
                   value={`${tx.event.name} (${tx.event.kind.toLowerCase()})`}
                 />
               )}
-              {tx.hospitalization && (
+              {tx.medicalRecord && (
                 <Field
-                  label={`Medical${tx.hospitalizationStage ? ` · ${tx.hospitalizationStage.toLowerCase()}` : ""}`}
-                  value={`${tx.hospitalization.patientContact.name} @ ${tx.hospitalization.hospitalName}`}
+                  label={`Medical · ${
+                    tx.medicalRecord.kind === "CHECKUP"
+                      ? "checkup"
+                      : (tx.hospitalizationStage ?? "DURING").toLowerCase()
+                  }`}
+                  value={`${tx.medicalRecord.patientContact.name} @ ${tx.medicalRecord.facilityName}`}
                 />
               )}
               {tx.fuelQuantity != null && (

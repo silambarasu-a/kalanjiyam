@@ -124,17 +124,18 @@ export default function MemberLedgerDetail() {
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
   const { data: medicalData } = useSWR<{
-    hospitalizations: {
+    records: {
       id: string;
-      hospitalName: string;
+      kind: "CHECKUP" | "HOSPITALIZATION";
+      facilityName: string;
       diagnosis: string | null;
-      admittedAt: string;
+      occurredAt: string;
       dischargedAt: string | null;
       claim: { status: string } | null;
       transactionCount: number;
     }[];
-  }>(id ? `/api/hospitalizations?patientContactId=${id}` : null, fetcher);
-  const episodes = medicalData?.hospitalizations ?? [];
+  }>(id ? `/api/medical-records?patientContactId=${id}` : null, fetcher);
+  const medicalRecords = medicalData?.records ?? [];
   const [settleCharge, setSettleCharge] = useState<Charge | null>(null);
   const [forgivingChargeId, setForgivingChargeId] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState<"SEND" | "RECEIVE" | null>(null);
@@ -295,11 +296,11 @@ export default function MemberLedgerDetail() {
               </span>
             </TabsTrigger>
           )}
-          {episodes.length > 0 && (
+          {medicalRecords.length > 0 && (
             <TabsTrigger value="medical">
               Medical
               <span className="ml-1 text-[10px] text-muted-foreground">
-                ({episodes.length})
+                ({medicalRecords.length})
               </span>
             </TabsTrigger>
           )}
@@ -744,39 +745,57 @@ export default function MemberLedgerDetail() {
           </TabsContent>
         )}
 
-        {episodes.length > 0 && (
+        {medicalRecords.length > 0 && (
           <TabsContent value="medical">
-            <div className="rounded-lg border bg-card divide-y">
-              {episodes.map((h) => (
+            <div className="space-y-2">
+              <div className="text-right">
                 <Link
-                  key={h.id}
-                  href={`/medical/${h.id}`}
-                  className="flex items-start justify-between gap-3 px-5 py-3 hover:bg-muted/40"
+                  href={`/medical/${id}`}
+                  className="text-xs text-muted-foreground underline hover:text-foreground"
                 >
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{h.hospitalName}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Admitted {formatDate(h.admittedAt)}
-                      {h.dischargedAt
-                        ? ` · Discharged ${formatDate(h.dischargedAt)}`
-                        : " · Ongoing"}
-                      {h.diagnosis ? ` · ${h.diagnosis}` : ""}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    {h.claim && (
-                      <span className="rounded-full border px-2 py-0.5 uppercase tracking-wide">
-                        claim · {h.claim.status.replace("_", " ").toLowerCase()}
-                      </span>
-                    )}
-                    {h.transactionCount > 0 && (
-                      <span>
-                        {h.transactionCount} bill{h.transactionCount === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  </div>
+                  Full medical history
                 </Link>
-              ))}
+              </div>
+              <div className="rounded-lg border bg-card divide-y">
+                {medicalRecords.map((r) => (
+                  <Link
+                    key={r.id}
+                    href={`/medical/records/${r.id}`}
+                    className="flex items-start justify-between gap-3 px-5 py-3 hover:bg-muted/40"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium truncate">{r.facilityName}</span>
+                        <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {r.kind === "CHECKUP" ? "Checkup" : "Hospitalization"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {r.kind === "HOSPITALIZATION"
+                          ? `Admitted ${formatDate(r.occurredAt)}${
+                              r.dischargedAt
+                                ? ` · Discharged ${formatDate(r.dischargedAt)}`
+                                : " · Ongoing"
+                            }`
+                          : `Visited ${formatDate(r.occurredAt)}`}
+                        {r.diagnosis ? ` · ${r.diagnosis}` : ""}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {r.claim && (
+                        <span className="rounded-full border px-2 py-0.5 uppercase tracking-wide">
+                          claim · {r.claim.status.replace("_", " ").toLowerCase()}
+                        </span>
+                      )}
+                      {r.transactionCount > 0 && (
+                        <span>
+                          {r.transactionCount} bill{r.transactionCount === 1 ? "" : "s"}
+                        </span>
+                      )}
+                    </div>
+                  </Link>
+                ))}
+              </div>
             </div>
           </TabsContent>
         )}

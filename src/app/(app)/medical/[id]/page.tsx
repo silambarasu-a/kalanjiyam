@@ -1,237 +1,193 @@
 "use client";
 
 import Link from "next/link";
-import { use, useMemo } from "react";
+import { use, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { ArrowLeft } from "lucide-react";
-import { formatINR, formatDate } from "@/lib/utils";
+import { ArrowLeft, Plus, Stethoscope, BedDouble } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { NavigatingCard } from "@/components/ui/navigating-card";
+import { MedicalRecordDialog, KIND_LABEL } from "@/components/medical/record-dialog";
+import type { MedicalRecordKind } from "@/components/medical/record-dialog";
+import { formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
-type Txn = {
+type MedicalRecordRow = {
   id: string;
-  amount: number;
-  date: string;
-  description: string;
-  hospitalizationStage: "PRE" | "DURING" | "POST" | null;
-  category: {
-    id: string;
-    name: string;
-    parent: { id: string; name: string } | null;
-  } | null;
-  account: { id: string; name: string } | null;
-  card: { id: string; name: string } | null;
-};
-
-type Claim = {
-  id: string;
-  claimNumber: string | null;
-  status: string;
-  claimedAmount: number | null;
-  approvedAmount: number | null;
-  receivedAmount: number | null;
-  investmentId: string;
-};
-
-type Hospitalization = {
-  id: string;
-  hospitalName: string;
+  kind: MedicalRecordKind;
+  facilityName: string;
   diagnosis: string | null;
-  admittedAt: string;
+  occurredAt: string;
   dischargedAt: string | null;
-  notes: string | null;
   patientContact: { id: string; name: string; relationship: string | null };
-  claim: Claim | null;
-  transactions: Txn[];
+  claim: { id: string; claimNumber: string | null; status: string } | null;
+  transactionCount: number;
 };
 
-
-const STAGE_LABEL: Record<"PRE" | "DURING" | "POST", string> = {
-  PRE: "Pre-hospitalization",
-  DURING: "Hospitalization",
-  POST: "Post-hospitalization",
-};
-
-export default function MedicalDetailPage({
+export default function MedicalPersonPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const { data, isLoading } = useSWR<{ hospitalization: Hospitalization }>(
-    `/api/hospitalizations/${id}`,
+  const router = useRouter();
+  const { data, isLoading } = useSWR<{ records: MedicalRecordRow[] }>(
+    `/api/medical-records?patientContactId=${id}`,
     fetcher,
   );
-  const h = data?.hospitalization;
+  const { data: contactsData, error: contactsError } = useSWR<{
+    members: { id: string; name: string; relationship: string | null }[];
+  }>("/api/contacts", fetcher);
+  const [open, setOpen] = useState(false);
 
-  const grouped = useMemo(() => {
-    const buckets: Record<"PRE" | "DURING" | "POST", Txn[]> = {
-      PRE: [],
-      DURING: [],
-      POST: [],
-    };
-    let total = 0;
-    if (h) {
-      for (const t of h.transactions) {
-        const stage = t.hospitalizationStage ?? "DURING";
-        buckets[stage].push(t);
-        total += t.amount;
-      }
-    }
-    return { buckets, total };
-  }, [h]);
+  const records = data?.records ?? [];
+  const contact =
+    contactsData?.members.find((m) => m.id === id) ??
+    records[0]?.patientContact ??
+    null;
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (!h)
+  // Legacy deep links: /medical/<id> used to be a hospitalization id. When
+  // the id has no records and doesn't resolve to a contact (including when
+  // this member cannot read contacts at all), probe the record endpoint and
+  // forward old bookmarks to /medical/records/<id>. Goes through the shared
+  // fetcher so the idle-lock (423) contract and SWR revalidation apply.
+  const idIsUnknown =
+    !isLoading &&
+    records.length === 0 &&
+    (contactsData
+      ? !contactsData.members.some((m) => m.id === id)
+      : !!contactsError);
+  const { data: probe, error: probeError } = useSWR<{ record: { id: string } }>(
+    idIsUnknown ? `/api/medical-records/${id}` : null,
+    fetcher,
+  );
+  useEffect(() => {
+    if (probe) router.replace(`/medical/records/${id}`);
+  }, [probe, id, router]);
+
+  const checkups = records.filter((r) => r.kind === "CHECKUP").length;
+  const hospitalizations = records.length - checkups;
+
+  // Covers initial load, waiting on contact resolution, probing a legacy
+  // id, and the redirect itself — avoids flashing a phantom person page.
+  const resolving =
+    isLoading ||
+    (records.length === 0 && !contactsData && !contactsError) ||
+    (idIsUnknown && !probeError);
+  if (resolving) {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+  if (idIsUnknown) {
     return (
       <p className="text-sm text-muted-foreground">
-        Episode not found.{" "}
+        Person not found.{" "}
         <Link href="/medical" className="underline">
           Back to medical records
         </Link>
       </p>
     );
-
-  const reimbursement = h.claim?.receivedAmount ?? 0;
-  const outOfPocket = Math.max(0, grouped.total - reimbursement);
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          href="/medical"
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3 w-3" /> All records
-        </Link>
-        <div className="mt-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {h.patientContact.name}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Link
+            href="/medical"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-3 w-3" /> All people
+          </Link>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            {contact?.name ?? "…"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {h.hospitalName}
-            {h.diagnosis ? ` · ${h.diagnosis}` : ""}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Admitted {formatDate(h.admittedAt)}
-            {h.dischargedAt ? ` · Discharged ${formatDate(h.dischargedAt)}` : " · Ongoing"}
+            {contact?.relationship ? `${contact.relationship} · ` : ""}
+            {records.length === 0
+              ? "No medical records yet"
+              : [
+                  checkups > 0 ? `${checkups} checkup${checkups === 1 ? "" : "s"}` : null,
+                  hospitalizations > 0
+                    ? `${hospitalizations} hospitalization${
+                        hospitalizations === 1 ? "" : "s"
+                      }`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
           </p>
         </div>
+        <Button onClick={() => setOpen(true)} className="gap-2">
+          <Plus className="h-4 w-4" /> New record
+        </Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Cell label="Pre" value={formatINR(sum(grouped.buckets.PRE))} />
-        <Cell label="During" value={formatINR(sum(grouped.buckets.DURING))} />
-        <Cell label="Post" value={formatINR(sum(grouped.buckets.POST))} />
-        <Cell label="Total spend" value={formatINR(grouped.total)} highlight />
-      </div>
+      {records.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          Record a checkup (fever, cold, consultation) or a hospitalization for{" "}
+          {contact?.name ?? "this person"}.
+        </p>
+      )}
 
-      {h.claim && (
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-start justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                Linked claim
-              </div>
-              <div className="mt-1 text-sm">
-                <Link
-                  href={`/insurance/${h.claim.investmentId}?claim=${h.claim.id}`}
-                  className="underline"
-                >
-                  {h.claim.claimNumber ?? "Claim"}
-                </Link>{" "}
-                · {h.claim.status.replace("_", " ").toLowerCase()}
-              </div>
-            </div>
-            <div className="text-right text-sm">
-              {h.claim.claimedAmount != null && (
-                <div className="text-xs text-muted-foreground">
-                  Claimed {formatINR(h.claim.claimedAmount)}
-                </div>
-              )}
-              {h.claim.receivedAmount != null && (
-                <div className="font-medium">
-                  Received {formatINR(h.claim.receivedAmount)}
-                </div>
-              )}
-              <div className="mt-1 text-xs text-muted-foreground">
-                Out of pocket {formatINR(outOfPocket)}
-              </div>
-            </div>
-          </div>
+      {records.length > 0 && (
+        <div className="rounded-lg border bg-card divide-y">
+          {records.map((r) => (
+            <RecordRow key={r.id} r={r} />
+          ))}
         </div>
       )}
 
-      {(["PRE", "DURING", "POST"] as const).map((stage) => {
-        const items = grouped.buckets[stage];
-        return (
-          <div key={stage} className="space-y-2">
-            <h2 className="text-sm font-medium">
-              {STAGE_LABEL[stage]}{" "}
-              <span className="text-xs text-muted-foreground">
-                ({items.length}) · {formatINR(sum(items))}
-              </span>
-            </h2>
-            <div className="rounded-lg border bg-card divide-y">
-              {items.length === 0 && (
-                <p className="p-3 text-xs text-muted-foreground">No bills in this stage.</p>
-              )}
-              {items.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-start justify-between gap-3 p-3 text-sm"
-                >
-                  <div>
-                    <div>{t.description}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatDate(t.date)}
-                      {t.category
-                        ? ` · ${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`
-                        : ""}
-                      {t.account ? ` · ${t.account.name}` : ""}
-                      {t.card ? ` · ${t.card.name}` : ""}
-                    </div>
-                  </div>
-                  <div className="font-medium">{formatINR(t.amount)}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-
-      {h.notes && (
-        <div className="rounded-lg border bg-card p-4 text-sm">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Notes</div>
-          <div className="mt-1">{h.notes}</div>
-        </div>
-      )}
+      <MedicalRecordDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        patientContactId={id}
+      />
     </div>
   );
 }
 
-function Cell({
-  label,
-  value,
-  highlight,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
-}) {
+function RecordRow({ r }: { r: MedicalRecordRow }) {
+  const isHospitalization = r.kind === "HOSPITALIZATION";
+  const Icon = isHospitalization ? BedDouble : Stethoscope;
   return (
-    <div
-      className={`rounded-lg border bg-card p-3 ${
-        highlight ? "border-foreground/60" : ""
-      }`}
+    <NavigatingCard
+      href={`/medical/records/${r.id}`}
+      className="flex items-start justify-between gap-3 p-4 hover:bg-muted/40"
+      ariaLabel={`Open ${KIND_LABEL[r.kind].toLowerCase()} at ${r.facilityName}`}
     >
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
+      <div className="flex items-start gap-3">
+        <Icon className="mt-0.5 h-4 w-4 text-muted-foreground" />
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{r.facilityName}</span>
+            <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              {KIND_LABEL[r.kind]}
+            </span>
+            {r.claim && (
+              <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                claim · {r.claim.status.replace("_", " ").toLowerCase()}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {isHospitalization
+              ? `Admitted ${formatDate(r.occurredAt)}${
+                  r.dischargedAt
+                    ? ` · Discharged ${formatDate(r.dischargedAt)}`
+                    : " · Ongoing"
+                }`
+              : `Visited ${formatDate(r.occurredAt)}`}
+            {r.diagnosis ? ` · ${r.diagnosis}` : ""}
+          </div>
+        </div>
       </div>
-      <div className="mt-1 text-base font-semibold tabular-nums">{value}</div>
-    </div>
+      <div className="text-right text-xs text-muted-foreground">
+        {r.transactionCount > 0 && (
+          <div>
+            {r.transactionCount} bill{r.transactionCount === 1 ? "" : "s"}
+          </div>
+        )}
+      </div>
+    </NavigatingCard>
   );
-}
-
-function sum(arr: { amount: number }[]): number {
-  return arr.reduce((a, t) => a + t.amount, 0);
 }

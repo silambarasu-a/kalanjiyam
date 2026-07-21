@@ -169,7 +169,7 @@ export const transactionCreateSchema = z
     paidByContactId: z.string().uuid().optional().nullable(),
     vehicleId: z.string().uuid().optional().nullable(),
     claimId: z.string().uuid().optional().nullable(),
-    hospitalizationId: z.string().uuid().optional().nullable(),
+    medicalRecordId: z.string().uuid().optional().nullable(),
     hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
     eventId: z.string().uuid().optional().nullable(),
     // Fuel-fill metadata: optional. Unit is a short symbol ("L" /
@@ -271,7 +271,7 @@ export const transactionUpdateSchema = z.object({
   splits: z.array(transactionSplitInputSchema).max(50).optional(),
   vehicleId: z.string().uuid().optional().nullable(),
   claimId: z.string().uuid().optional().nullable(),
-  hospitalizationId: z.string().uuid().optional().nullable(),
+  medicalRecordId: z.string().uuid().optional().nullable(),
   hospitalizationStage: z.enum(["PRE", "DURING", "POST"]).optional().nullable(),
   eventId: z.string().uuid().optional().nullable(),
   fuelQuantity: z.number().positive().max(10_000).optional().nullable(),
@@ -1238,7 +1238,7 @@ const claimStatusEnum = z.enum([
 
 export const insuranceClaimCreateSchema = z.object({
   insuredMemberId: z.string().uuid().optional().nullable(),
-  hospitalizationId: z.string().uuid().optional().nullable(),
+  medicalRecordId: z.string().uuid().optional().nullable(),
   vehicleId: z.string().uuid().optional().nullable(),
   claimNumber: z.string().trim().max(80).optional(),
   incidentDate: z.string(),
@@ -1283,16 +1283,19 @@ export const vehicleUpdateSchema = vehicleCreateSchema
   .partial()
   .extend({ active: z.boolean().optional() });
 
-export const hospitalizationCreateSchema = z.object({
+export const medicalRecordCreateSchema = z.object({
   patientContactId: z.string().uuid(),
-  hospitalName: z.string().trim().min(1).max(120),
+  kind: z.enum(["CHECKUP", "HOSPITALIZATION"]),
+  facilityName: z.string().trim().min(1).max(120),
   diagnosis: z.string().trim().max(200).optional(),
-  admittedAt: z.string(),
+  // Visit date for a CHECKUP, admission date for a HOSPITALIZATION.
+  occurredAt: z.string(),
+  // HOSPITALIZATION only — null/omitted while the stay is ongoing.
   dischargedAt: z.string().optional().nullable(),
   notes: z.string().trim().max(1000).optional(),
 });
 
-export const hospitalizationUpdateSchema = hospitalizationCreateSchema.partial();
+export const medicalRecordUpdateSchema = medicalRecordCreateSchema.partial();
 
 const vehicleDocumentKindEnum = z.enum([
   "RC",

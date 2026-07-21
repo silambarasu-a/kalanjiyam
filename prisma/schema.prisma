@@ -223,6 +223,11 @@ enum HospitalizationStage {
   POST
 }
 
+enum MedicalRecordKind {
+  CHECKUP
+  HOSPITALIZATION
+}
+
 enum GoldForm {
   ORNAMENT
   COIN
@@ -524,7 +529,7 @@ model Workspace {
   insuranceClaims     InsuranceClaim[]
   vehicles            Vehicle[]
   vehicleDocuments    VehicleDocument[]
-  hospitalizations    Hospitalization[]
+  medicalRecords      MedicalRecord[]
   events              Event[]
   notifications       Notification[]
   attachments         Attachment[]
@@ -638,7 +643,7 @@ model Contact {
   insuredMemberships InsuredMember[]    @relation("InsuredMemberContact")
   ownedVehicles      Vehicle[]          @relation("VehicleOwner")
   vehiclesBought     Vehicle[]          @relation("VehicleDisposalBuyer")
-  hospitalizations   Hospitalization[]  @relation("HospitalizationPatient")
+  medicalRecords     MedicalRecord[]    @relation("MedicalRecordPatient")
   livestockContracts LivestockContract[] @relation("LivestockContractContact")
 
   @@index([workspaceId, active])
@@ -913,8 +918,10 @@ model Transaction {
   fuelUnit     String?
   fuelOdometer Int?
 
-  hospitalizationId    String?
-  hospitalization      Hospitalization?      @relation("TransactionHospitalization", fields: [hospitalizationId], references: [id], onDelete: SetNull)
+  // Medical tagging. Bills roll up under a patient's medical record;
+  // hospitalizationStage only applies when the record kind is HOSPITALIZATION.
+  medicalRecordId      String?
+  medicalRecord        MedicalRecord?        @relation("TransactionMedicalRecord", fields: [medicalRecordId], references: [id], onDelete: SetNull)
   hospitalizationStage HospitalizationStage?
 
   // Event/Trip tagging. Multiple transactions roll up under one event
@@ -969,7 +976,7 @@ model Transaction {
   @@index([refundForTransactionId])
   @@index([claimId])
   @@index([vehicleId])
-  @@index([hospitalizationId])
+  @@index([medicalRecordId])
   @@index([eventId])
   @@index([subscriptionId])
   @@index([utilityProviderId])
@@ -1962,8 +1969,8 @@ model InsuranceClaim {
   insuredMember     InsuredMember?   @relation("ClaimInsuredMember", fields: [insuredMemberId], references: [id], onDelete: SetNull)
   vehicleId         String?
   vehicle           Vehicle?         @relation("VehicleClaims", fields: [vehicleId], references: [id], onDelete: SetNull)
-  hospitalizationId String?          @unique
-  hospitalization   Hospitalization? @relation("HospitalizationClaim", fields: [hospitalizationId], references: [id], onDelete: SetNull)
+  medicalRecordId   String?          @unique
+  medicalRecord     MedicalRecord?   @relation("MedicalRecordClaim", fields: [medicalRecordId], references: [id], onDelete: SetNull)
   claimNumber       String?
   incidentDate      DateTime
   filedAt           DateTime?
@@ -1982,24 +1989,31 @@ model InsuranceClaim {
   @@index([vehicleId])
 }
 
-model Hospitalization {
-  id               String    @id @default(uuid())
+/**
+ * One medical event for a person (patientContact): either an outpatient
+ * CHECKUP (fever, cold, consultation — occurredAt is the visit date,
+ * dischargedAt stays null) or a HOSPITALIZATION episode (occurredAt is
+ * the admission date, dischargedAt the discharge; null while ongoing).
+ */
+model MedicalRecord {
+  id               String            @id @default(uuid())
   workspaceId      String
-  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   patientContactId String
-  patientContact   Contact   @relation("HospitalizationPatient", fields: [patientContactId], references: [id], onDelete: Restrict)
-  hospitalName     String
+  patientContact   Contact           @relation("MedicalRecordPatient", fields: [patientContactId], references: [id], onDelete: Restrict)
+  kind             MedicalRecordKind @default(HOSPITALIZATION)
+  facilityName     String
   diagnosis        String?
-  admittedAt       DateTime
+  occurredAt       DateTime
   dischargedAt     DateTime?
   notes            String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
-  transactions Transaction[]   @relation("TransactionHospitalization")
-  claim        InsuranceClaim? @relation("HospitalizationClaim")
+  transactions Transaction[]   @relation("TransactionMedicalRecord")
+  claim        InsuranceClaim? @relation("MedicalRecordClaim")
 
-  @@index([workspaceId, admittedAt])
+  @@index([workspaceId, occurredAt])
   @@index([workspaceId, patientContactId])
 }
 

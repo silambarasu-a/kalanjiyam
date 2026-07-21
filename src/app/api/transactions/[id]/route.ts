@@ -62,7 +62,7 @@ async function loadOwnership(transactionId: string) {
  *
  * Returns the transaction's core fields plus all linked context
  * (category w/ parent, account, card, beneficiary, vehicle, event,
- * hospitalization, fuel data, transfer legs, member-charge state) and
+ * medical record, fuel data, transfer legs, member-charge state) and
  * a list of active receipt attachments with short-lived presigned GET
  * URLs so the UI can render inline image / PDF previews without a
  * second round trip.
@@ -118,10 +118,11 @@ export async function GET(
         },
         vehicle: { select: { id: true, name: true, registrationNo: true } },
         event: { select: { id: true, name: true, kind: true } },
-        hospitalization: {
+        medicalRecord: {
           select: {
             id: true,
-            hospitalName: true,
+            kind: true,
+            facilityName: true,
             patientContact: { select: { id: true, name: true } },
           },
         },
@@ -169,9 +170,10 @@ export async function GET(
       }>;
       vehicle: { id: string; name: string | null; registrationNo: string | null } | null;
       event: { id: string; name: string; kind: string } | null;
-      hospitalization: {
+      medicalRecord: {
         id: string;
-        hospitalName: string;
+        kind: string;
+        facilityName: string;
         patientContact: { id: string; name: string };
       } | null;
       transfer: {
@@ -271,7 +273,7 @@ export async function GET(
         })),
         vehicle: t.vehicle,
         event: t.event,
-        hospitalization: t.hospitalization,
+        medicalRecord: t.medicalRecord,
         hospitalizationStage: t.hospitalizationStage,
         transferId: t.transferId,
         transfer: t.transfer,
@@ -310,6 +312,19 @@ const body = await request.json();
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const t = loaded.transaction;
+
+    if (parsed.data.medicalRecordId) {
+      const record = await prisma.medicalRecord.findUnique({
+        where: { id: parsed.data.medicalRecordId },
+        select: { workspaceId: true },
+      });
+      if (!record || record.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json(
+          { error: "Medical record not found" },
+          { status: 400 },
+        );
+      }
+    }
 
     // Edit-window check (closed-loan, statement-closed, then N-day window).
     // OWNER/ADMIN can pass `force: true` to bypass.
@@ -803,10 +818,10 @@ const body = await request.json();
             parsed.data.vehicleId === undefined ? t.vehicleId : parsed.data.vehicleId,
           claimId:
             parsed.data.claimId === undefined ? t.claimId : parsed.data.claimId,
-          hospitalizationId:
-            parsed.data.hospitalizationId === undefined
-              ? t.hospitalizationId
-              : parsed.data.hospitalizationId,
+          medicalRecordId:
+            parsed.data.medicalRecordId === undefined
+              ? t.medicalRecordId
+              : parsed.data.medicalRecordId,
           hospitalizationStage:
             parsed.data.hospitalizationStage === undefined
               ? t.hospitalizationStage

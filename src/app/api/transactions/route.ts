@@ -410,6 +410,19 @@ export async function POST(request: Request) {
       }
     }
 
+    if (data.medicalRecordId) {
+      const record = await prisma.medicalRecord.findUnique({
+        where: { id: data.medicalRecordId },
+        select: { workspaceId: true },
+      });
+      if (!record || record.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json(
+          { error: "Medical record not found" },
+          { status: 400 },
+        );
+      }
+    }
+
     let investmentForUpdate: {
       id: string;
       kind: string;
@@ -544,7 +557,7 @@ export async function POST(request: Request) {
           paidByContactId: data.paidByContactId ?? null,
           vehicleId: data.vehicleId ?? null,
           claimId: data.claimId ?? null,
-          hospitalizationId: data.hospitalizationId ?? null,
+          medicalRecordId: data.medicalRecordId ?? null,
           hospitalizationStage: data.hospitalizationStage ?? null,
           eventId: data.eventId ?? null,
           fuelQuantity: data.fuelQuantity ?? null,

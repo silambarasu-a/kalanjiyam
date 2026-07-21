@@ -5,13 +5,13 @@ import {
   WorkspaceAccessError,
   assertWorkspaceContact,
 } from "@/lib/workspace";
-import { hospitalizationUpdateSchema } from "@/lib/validators-domain";
+import { medicalRecordUpdateSchema } from "@/lib/validators-domain";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
-  console.error("[hospitalizations/:id]", e);
+  console.error("[medical-records/:id]", e);
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
@@ -22,7 +22,7 @@ export async function GET(
   try {
     const ctx = await requireWorkspace("medical", "read");
     const { id } = await context.params;
-    const h = await prisma.hospitalization.findUnique({
+    const r = await prisma.medicalRecord.findUnique({
       where: { id },
       include: {
         patientContact: { select: { id: true, name: true, relationship: true } },
@@ -38,6 +38,9 @@ export async function GET(
           },
         },
         transactions: {
+          // Belt-and-braces: never surface another workspace's bills even
+          // if a stray cross-workspace link exists.
+          where: { workspaceId: ctx.workspaceId },
           orderBy: { date: "asc" },
           select: {
             id: true,
@@ -59,30 +62,31 @@ export async function GET(
         },
       },
     });
-    if (!h || h.workspaceId !== ctx.workspaceId) {
+    if (!r || r.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     return NextResponse.json({
-      hospitalization: {
-        id: h.id,
-        hospitalName: h.hospitalName,
-        diagnosis: h.diagnosis,
-        admittedAt: h.admittedAt.toISOString(),
-        dischargedAt: h.dischargedAt?.toISOString() ?? null,
-        notes: h.notes,
-        patientContact: h.patientContact,
-        claim: h.claim
+      record: {
+        id: r.id,
+        kind: r.kind,
+        facilityName: r.facilityName,
+        diagnosis: r.diagnosis,
+        occurredAt: r.occurredAt.toISOString(),
+        dischargedAt: r.dischargedAt?.toISOString() ?? null,
+        notes: r.notes,
+        patientContact: r.patientContact,
+        claim: r.claim
           ? {
-              ...h.claim,
+              ...r.claim,
               claimedAmount:
-                h.claim.claimedAmount == null ? null : Number(h.claim.claimedAmount),
+                r.claim.claimedAmount == null ? null : Number(r.claim.claimedAmount),
               approvedAmount:
-                h.claim.approvedAmount == null ? null : Number(h.claim.approvedAmount),
+                r.claim.approvedAmount == null ? null : Number(r.claim.approvedAmount),
               receivedAmount:
-                h.claim.receivedAmount == null ? null : Number(h.claim.receivedAmount),
+                r.claim.receivedAmount == null ? null : Number(r.claim.receivedAmount),
             }
           : null,
-        transactions: h.transactions.map((t) => ({
+        transactions: r.transactions.map((t) => ({
           id: t.id,
           amount: Number(t.amount),
           date: t.date.toISOString(),
@@ -106,12 +110,12 @@ export async function PATCH(
   try {
     const ctx = await requireWorkspace("medical", "write");
     const { id } = await context.params;
-    const existing = await prisma.hospitalization.findUnique({ where: { id } });
+    const existing = await prisma.medicalRecord.findUnique({ where: { id } });
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const body = await request.json();
-    const parsed = hospitalizationUpdateSchema.safeParse(body);
+    const parsed = medicalRecordUpdateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { error: parsed.error.issues[0].message },
@@ -122,19 +126,22 @@ export async function PATCH(
     if (data.patientContactId) {
       await assertWorkspaceContact(ctx.workspaceId, data.patientContactId);
     }
-    const updated = await prisma.hospitalization.update({
+    const kind = data.kind ?? existing.kind;
+    const dischargedAt =
+      data.dischargedAt !== undefined
+        ? data.dischargedAt
+          ? new Date(data.dischargedAt)
+          : null
+        : existing.dischargedAt;
+    const updated = await prisma.medicalRecord.update({
       where: { id },
       data: {
         patientContactId: data.patientContactId ?? existing.patientContactId,
-        hospitalName: data.hospitalName ?? existing.hospitalName,
+        kind,
+        facilityName: data.facilityName ?? existing.facilityName,
         diagnosis: data.diagnosis ?? existing.diagnosis,
-        admittedAt: data.admittedAt ? new Date(data.admittedAt) : existing.admittedAt,
-        dischargedAt:
-          data.dischargedAt !== undefined
-            ? data.dischargedAt
-              ? new Date(data.dischargedAt)
-              : null
-            : existing.dischargedAt,
+        occurredAt: data.occurredAt ? new Date(data.occurredAt) : existing.occurredAt,
+        dischargedAt: kind === "CHECKUP" ? null : dischargedAt,
         notes: data.notes ?? existing.notes,
       },
     });
@@ -151,20 +158,29 @@ export async function DELETE(
   try {
     const ctx = await requireWorkspace("medical", "write");
     const { id } = await context.params;
-    const existing = await prisma.hospitalization.findUnique({
+    const existing = await prisma.medicalRecord.findUnique({
       where: { id },
-      include: { _count: { select: { transactions: true } } },
+      include: {
+        claim: { select: { id: true } },
+        _count: { select: { transactions: true } },
+      },
     });
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     if (existing._count.transactions > 0) {
       return NextResponse.json(
-        { error: "This episode has linked transactions. Unlink them first." },
+        { error: "This record has linked transactions. Unlink them first." },
         { status: 409 },
       );
     }
-    await prisma.hospitalization.delete({ where: { id } });
+    if (existing.claim) {
+      return NextResponse.json(
+        { error: "This record has a linked insurance claim. Unlink it first." },
+        { status: 409 },
+      );
+    }
+    await prisma.medicalRecord.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

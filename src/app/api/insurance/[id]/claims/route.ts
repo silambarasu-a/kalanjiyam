@@ -112,15 +112,15 @@ export async function POST(
       }
     }
 
-    // If a hospitalization is supplied it must belong to this workspace.
-    if (data.hospitalizationId) {
-      const h = await prisma.hospitalization.findUnique({
-        where: { id: data.hospitalizationId },
+    // If a medical record is supplied it must belong to this workspace.
+    if (data.medicalRecordId) {
+      const record = await prisma.medicalRecord.findUnique({
+        where: { id: data.medicalRecordId },
         select: { workspaceId: true },
       });
-      if (!h || h.workspaceId !== ctx.workspaceId) {
+      if (!record || record.workspaceId !== ctx.workspaceId) {
         return NextResponse.json(
-          { error: "Hospitalization not found" },
+          { error: "Medical record not found" },
           { status: 400 },
         );
       }
@@ -131,7 +131,7 @@ export async function POST(
         workspaceId: ctx.workspaceId,
         investmentId: id,
         insuredMemberId: data.insuredMemberId ?? null,
-        hospitalizationId: data.hospitalizationId ?? null,
+        medicalRecordId: data.medicalRecordId ?? null,
         vehicleId: data.vehicleId ?? null,
         claimNumber: data.claimNumber,
         incidentDate: new Date(data.incidentDate),

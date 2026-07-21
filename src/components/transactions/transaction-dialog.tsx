@@ -534,32 +534,48 @@ function IncomeExpenseForm({
     return { unit: "L", label: "Litres" };
   })();
 
-  const isHospitalMode =
-    type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "hospital";
-  const [hospitalizationId, setHospitalizationId] = useState<string | null>(null);
+  // Medical tagging — surfaced for any category inside the Medical tree
+  // (Hospital, Doctor consultation, Medicines / Pharmacy, …). The bill is
+  // tagged to a patient + medical record (checkup or hospitalization); the
+  // pre/during/post stage only applies to hospitalization records.
+  const isMedicalMode =
+    type === "EXPENSE" &&
+    (() => {
+      const byId = new Map(categories.map((c) => [c.id, c]));
+      let c = selectedCategory;
+      for (let hops = 0; c && hops < 5; hops++) {
+        const n = c.name.toLowerCase();
+        if (n === "medical" || n === "hospital") return true;
+        c = c.parentCategoryId ? byId.get(c.parentCategoryId) : undefined;
+      }
+      return false;
+    })();
+  const [medicalRecordId, setMedicalRecordId] = useState<string | null>(null);
   const [hospitalizationStage, setHospitalizationStage] = useState<
     "PRE" | "DURING" | "POST"
   >("DURING");
-  const [hospitalPatientFilter, setHospitalPatientFilter] = useState<string>("");
-  const { data: contactsForHospital } = useSWR<{
+  const [medicalPatientFilter, setMedicalPatientFilter] = useState<string>("");
+  const { data: contactsForMedical } = useSWR<{
     members: { id: string; name: string }[];
-  }>(isHospitalMode ? "/api/contacts" : null, fetcher);
-  const hospitalContacts = contactsForHospital?.members ?? [];
-  const { data: hospitalizationsData } = useSWR<{
-    hospitalizations: {
+  }>(isMedicalMode ? "/api/contacts" : null, fetcher);
+  const medicalContacts = contactsForMedical?.members ?? [];
+  const { data: medicalRecordsData } = useSWR<{
+    records: {
       id: string;
-      hospitalName: string;
-      admittedAt: string;
+      kind: "CHECKUP" | "HOSPITALIZATION";
+      facilityName: string;
+      occurredAt: string;
       dischargedAt: string | null;
       patientContact: { id: string; name: string };
     }[];
   }>(
-    isHospitalMode && hospitalPatientFilter
-      ? `/api/hospitalizations?patientContactId=${hospitalPatientFilter}`
+    isMedicalMode && medicalPatientFilter
+      ? `/api/medical-records?patientContactId=${medicalPatientFilter}`
       : null,
     fetcher,
   );
-  const episodes = hospitalizationsData?.hospitalizations ?? [];
+  const medicalRecords = medicalRecordsData?.records ?? [];
+  const selectedMedicalRecord = medicalRecords.find((r) => r.id === medicalRecordId);
 
   // ── Pay a bill / subscription (EXPENSE only) ──────────────────────
   // Lets the user settle an unpaid utility bill or a due subscription
@@ -868,9 +884,13 @@ function IncomeExpenseForm({
         }
         if (fuelOdometer) payload.fuelOdometer = Number(fuelOdometer);
       }
-      if (isHospitalMode && hospitalizationId) {
-        payload.hospitalizationId = hospitalizationId;
-        payload.hospitalizationStage = hospitalizationStage;
+      if (isMedicalMode && medicalRecordId) {
+        payload.medicalRecordId = medicalRecordId;
+        // Stage is a hospitalization concept — never stamp it on checkups.
+        payload.hospitalizationStage =
+          selectedMedicalRecord?.kind === "HOSPITALIZATION"
+            ? hospitalizationStage
+            : null;
       }
       // Gold/Jewellery expense → stamp ORNAMENT so reports can split
       // ornament purchases from investment-grade gold.
@@ -1300,31 +1320,48 @@ function IncomeExpenseForm({
         </div>
       )}
 
-      {isHospitalMode && (
+      {isMedicalMode && (
         <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-          <div className="text-xs font-medium">Hospitalization</div>
+          <div className="text-xs font-medium">Medical</div>
           <div className="text-[10px] text-muted-foreground">
-            Tag this medical bill to a patient + episode + stage so it groups under
-            Medical Records.
+            Tag this bill to a patient + record (checkup or hospitalization) so
+            it rolls up under Medical Records.
           </div>
           <div className="grid grid-cols-2 gap-2">
             <select
               className="rounded-md border bg-background px-3 py-2 text-sm"
-              value={hospitalPatientFilter}
+              value={medicalPatientFilter}
               onChange={(e) => {
-                setHospitalPatientFilter(e.target.value);
-                setHospitalizationId(null);
+                setMedicalPatientFilter(e.target.value);
+                setMedicalRecordId(null);
               }}
             >
               <option value="">— patient —</option>
-              {hospitalContacts.map((c) => (
+              {medicalContacts.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
             </select>
+            {medicalPatientFilter && (
+              <select
+                className="rounded-md border bg-background px-3 py-2 text-sm"
+                value={medicalRecordId ?? ""}
+                onChange={(e) => setMedicalRecordId(e.target.value || null)}
+              >
+                <option value="">— pick record —</option>
+                {medicalRecords.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.kind === "CHECKUP" ? "Checkup" : "Hospitalization"} ·{" "}
+                    {r.facilityName} · {new Date(r.occurredAt).toLocaleDateString()}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          {selectedMedicalRecord?.kind === "HOSPITALIZATION" && (
             <select
-              className="rounded-md border bg-background px-3 py-2 text-sm"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
               value={hospitalizationStage}
               onChange={(e) =>
                 setHospitalizationStage(e.target.value as "PRE" | "DURING" | "POST")
@@ -1334,22 +1371,8 @@ function IncomeExpenseForm({
               <option value="DURING">Hospitalization</option>
               <option value="POST">Post-hospitalization</option>
             </select>
-          </div>
-          {hospitalPatientFilter && (
-            <select
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-              value={hospitalizationId ?? ""}
-              onChange={(e) => setHospitalizationId(e.target.value || null)}
-            >
-              <option value="">— pick episode —</option>
-              {episodes.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.hospitalName} · admitted {new Date(h.admittedAt).toLocaleDateString()}
-                </option>
-              ))}
-            </select>
           )}
-          {hospitalContacts.length === 0 ? (
+          {medicalContacts.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">
               No contacts yet.{" "}
               <Link href="/contacts" className="underline">
@@ -1357,9 +1380,9 @@ function IncomeExpenseForm({
               </Link>
               .
             </p>
-          ) : hospitalPatientFilter && episodes.length === 0 ? (
+          ) : medicalPatientFilter && medicalRecords.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">
-              No hospitalizations for this patient yet.{" "}
+              No medical records for this patient yet.{" "}
               <Link href="/medical" className="underline">
                 Add one on Medical Records
               </Link>
