@@ -5,7 +5,7 @@ export const familyCreateSchema = z.object({
   relationship: z.string().trim().max(40).optional(),
   dob: z.string().optional(),
   userId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const familyUpdateSchema = familyCreateSchema.partial().extend({
@@ -292,7 +292,7 @@ export const transferCreateSchema = z
     toContactId: z.string().uuid().optional().nullable(),
     amount: z.number().positive(),
     date: z.string(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
     /** Marks the transfer as a recoverable outflow: creates a MemberCharge
      *  against the destination contact so the amount lands in their
      *  Outstanding stat. Only valid when sending FROM a workspace account
@@ -349,7 +349,7 @@ export const transferCreateSchema = z
 export const memberChargeSettleSchema = z.object({
   amount: z.number().positive(),
   paidAt: z.string(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
 });
 
@@ -358,7 +358,7 @@ export const landCreateSchema = z.object({
   area: z.number().positive().optional().nullable(),
   areaUnit: z.enum(["ACRES", "HECTARES", "CENTS", "SQFT", "SQM"]).optional().nullable(),
   location: z.string().trim().max(120).optional(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const landUpdateSchema = landCreateSchema.partial().extend({
@@ -383,7 +383,7 @@ export const cropBatchCreateSchema = z.object({
   startDate: z.string().optional().nullable(),
   endDate: z.string().optional().nullable(),
   expectedCycleDays: z.number().int().positive().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const cropBatchUpdateSchema = cropBatchCreateSchema
@@ -427,7 +427,7 @@ export const livestockBatchCreateSchema = z.object({
   initialAvgWeight: z.number().positive().optional().nullable(),
   targetWeight: z.number().positive().optional().nullable(),
   targetFCR: z.number().positive().max(99).optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const livestockBatchUpdateSchema = livestockBatchCreateSchema
@@ -443,7 +443,7 @@ export const livestockEventCreateSchema = z
     unitValue: z.number().nonnegative().optional().nullable(),
     avgWeightKg: z.number().positive().optional().nullable(),
     totalWeightKg: z.number().positive().optional().nullable(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
   })
@@ -474,7 +474,7 @@ export const weighingLogCreateSchema = z.object({
   date: z.string(),
   sampleSize: z.number().int().positive().default(1),
   totalKg: z.number().positive(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 export const weighingLogUpdateSchema = weighingLogCreateSchema.partial();
 
@@ -495,7 +495,7 @@ export const mortalityLogCreateSchema = z.object({
     ])
     .default("UNKNOWN"),
   culled: z.boolean().default(false),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 export const mortalityLogUpdateSchema = mortalityLogCreateSchema.partial();
 
@@ -506,7 +506,7 @@ export const livestockAnimalCreateSchema = z.object({
   dob: z.string().optional().nullable(),
   breed: z.string().trim().max(60).optional().nullable(),
   color: z.string().trim().max(40).optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 export const livestockAnimalUpdateSchema = livestockAnimalCreateSchema
   .partial()
@@ -532,7 +532,7 @@ export const livestockContractCreateSchema = z.object({
   mortalityCap: z.number().min(0).max(100).optional().nullable(),
   mortalityPenalty: z.array(mortalityPenaltyBandSchema).optional().nullable(),
   suppliesProvided: z.array(z.string().trim().max(40)).optional().default([]),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   startedOn: z.string(),
   endedOn: z.string().optional().nullable(),
 });
@@ -559,7 +559,7 @@ export const milkLogCreateSchema = z
     ratePerLitre: z.number().nonnegative().optional().nullable(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
   })
   .refine(
     (d) => (d.soldLitres ?? 0) <= d.totalLitres,
@@ -593,7 +593,7 @@ export const milkLogUpdateSchema = z
     snfPct: z.number().min(0).max(20).optional().nullable(),
     soldLitres: z.number().nonnegative().optional().nullable(),
     ratePerLitre: z.number().nonnegative().optional().nullable(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
   });
 
 // `grades` is a free-form Json bag (e.g. { SMALL: 12, MEDIUM: 80, ... })
@@ -612,7 +612,7 @@ export const eggLogCreateSchema = z
     salePricePerEgg: z.number().nonnegative().optional().nullable(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
   })
   .refine(
     (d) => (d.sold ?? 0) + (d.broken ?? 0) <= d.collected,
@@ -640,7 +640,7 @@ export const eggLogUpdateSchema = z.object({
   broken: z.number().int().nonnegative().optional().nullable(),
   sold: z.number().int().nonnegative().optional().nullable(),
   salePricePerEgg: z.number().nonnegative().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 // Lift event for broiler-contract batches. The integrator picks up
@@ -652,7 +652,7 @@ export const liftEventSchema = z.object({
   // Where the integrator deposited the growing-charge cheque.
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   // When true, the endpoint flips the batch to active=false and stamps
   // endDate. Default true (lifting normally closes the cycle).
   closeBatch: z.boolean().default(true),
@@ -668,7 +668,7 @@ export const healthLogCreateSchema = z.object({
   resolvedAt: z.string().optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 // Bulk-import historical batches. Each row creates one LivestockBatch
 // under a Livestock parent (matched by name; auto-created if missing
@@ -686,7 +686,7 @@ const importBatchRowSchema = z.object({
   initialAvgWeight: z.number().positive().optional().nullable(),
   targetWeight: z.number().positive().optional().nullable(),
   targetFCR: z.number().positive().max(99).optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   active: z.boolean().optional(),
 });
 export const livestockBatchImportSchema = z.object({
@@ -755,7 +755,7 @@ export const healthLogUpdateSchema = z.object({
   cost: z.number().nonnegative().optional().nullable(),
   resolved: z.boolean().optional(),
   resolvedAt: z.string().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const feedLogCreateSchema = z.object({
@@ -763,7 +763,7 @@ export const feedLogCreateSchema = z.object({
   amount: z.number().positive(),
   quantity: z.number().positive().optional().nullable(),
   unit: z.string().trim().max(20).optional(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
 });
@@ -782,7 +782,7 @@ export const vaccinationLogCreateSchema = z.object({
   date: z.string(),
   nextDueDate: z.string().optional().nullable(),
   cost: z.number().nonnegative().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
 });
@@ -790,7 +790,7 @@ export const vaccinationLogUpdateSchema = z.object({
   vaccine: z.string().trim().min(1).max(80).optional(),
   date: z.string().optional(),
   nextDueDate: z.string().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const workerCreateSchema = z.object({
@@ -818,7 +818,7 @@ export const attendanceUpsertSchema = z.object({
   rate: z.number().nonnegative().optional().nullable(),
   cropBatchId: z.string().uuid().optional().nullable(),
   livestockBatchId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 // Bulk: many workers, one date. The bulk-attendance modal sends one of
@@ -827,7 +827,7 @@ export const attendanceBatchSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   cropBatchId: z.string().uuid().optional().nullable(),
   livestockBatchId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   entries: z
     .array(
       z.object({
@@ -845,7 +845,7 @@ export const wagePaymentCreateSchema = z.object({
   paidAt: z.string(),
   isBonus: z.boolean().optional().default(false),
   isAdvance: z.boolean().optional().default(false),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
 });
@@ -857,7 +857,7 @@ export const advanceRepaymentCreateSchema = z
     receivedAt: z.string(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
-    notes: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(500).optional().nullable(),
     idempotencyKey: z.string().trim().min(8).max(128).optional(),
   })
   .refine((d) => !!d.accountId || !!d.cardId, {
@@ -876,7 +876,7 @@ export const advanceRepaymentReverseSchema = z.object({
 export const wageSettlementSettleSchema = z.object({
   paymentAccountId: z.string().uuid().optional().nullable(),
   paymentCardId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
 });
 
 const loanSourceEnum = z.enum(["BANK", "HAND_FORMAL", "CARD_EMI"]);
@@ -938,7 +938,7 @@ const loanFieldsSchema = z.object({
   startedAt: z.string(),
   maturityAt: z.string().optional().nullable(),
   nextDueDate: z.string().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   goldItems: z.array(goldLoanItemSchema).optional(),
 });
 
@@ -980,7 +980,7 @@ export const loanPaymentSchema = z.object({
   principalPortion: z.number().nonnegative().optional().nullable(),
   interestPortion: z.number().nonnegative().optional().nullable(),
   gstPortion: z.number().nonnegative().optional().nullable(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
 });
 
 export const handLoanMemberCreateSchema = z.object({
@@ -988,7 +988,7 @@ export const handLoanMemberCreateSchema = z.object({
   email: z.string().trim().email().optional().or(z.literal("")),
   phone: z.string().trim().max(20).optional(),
   familyMemberId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const handLoanMemberUpdateSchema = handLoanMemberCreateSchema.partial().extend({
@@ -1000,7 +1000,7 @@ export const handLoanEntryCreateSchema = z.object({
   direction: z.enum(["GIVEN", "RECEIVED"]),
   amount: z.number().positive(),
   date: z.string(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
 });
@@ -1019,7 +1019,7 @@ const leaseFieldsSchema = z.object({
   customMonths: z.number().int().positive().optional().nullable(),
   startDate: z.string(),
   endDate: z.string(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const leaseCreateSchema = leaseFieldsSchema
@@ -1047,7 +1047,7 @@ export const leasePaymentConfirmSchema = z.object({
   cardId: z.string().uuid().optional().nullable(),
   date: z.string().optional(),
   amount: z.number().positive().optional(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
 });
 
 const investmentKindEnum = z.enum([
@@ -1131,7 +1131,7 @@ const investmentCreateBase = z.object({
         z.object({
           name: z.string().trim().min(1).max(80),
           sumAssured: z.number().nonnegative().optional().nullable(),
-          notes: z.string().trim().max(200).optional(),
+          notes: z.string().trim().max(200).optional().nullable(),
         }),
       ),
     })
@@ -1185,7 +1185,7 @@ export const investmentTradeSchema = z.object({
   pricePerUnit: z.number().positive().optional().nullable(),
   date: z.string(),
   accountId: z.string().uuid(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
 });
 
 export const reminderConfirmSchema = z.object({
@@ -1193,7 +1193,7 @@ export const reminderConfirmSchema = z.object({
   cardId: z.string().uuid().optional().nullable(),
   amount: z.number().positive().optional(),
   date: z.string().optional(),
-  notes: z.string().trim().max(200).optional(),
+  notes: z.string().trim().max(200).optional().nullable(),
 });
 
 /**
@@ -1211,7 +1211,7 @@ const insuredMemberBase = z.object({
   sumAssured: z.number().positive().optional().nullable(),
   coverageStart: z.string().optional().nullable(),
   coverageEnd: z.string().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
   role: z.enum(["INSURED", "BENEFICIARY"]).optional(),
   sharePercent: z.number().min(0).max(100).optional().nullable(),
 });
@@ -1247,7 +1247,7 @@ export const insuranceClaimCreateSchema = z.object({
   claimedAmount: z.number().nonnegative().optional().nullable(),
   approvedAmount: z.number().nonnegative().optional().nullable(),
   receivedAmount: z.number().nonnegative().optional().nullable(),
-  notes: z.string().trim().max(1000).optional(),
+  notes: z.string().trim().max(1000).optional().nullable(),
 });
 
 export const insuranceClaimUpdateSchema = insuranceClaimCreateSchema.partial();
@@ -1276,7 +1276,7 @@ export const vehicleCreateSchema = z.object({
   purchaseDate: z.string().optional().nullable(),
   purchasePrice: z.number().positive().optional().nullable(),
   odometerStart: z.number().int().nonnegative().optional().nullable(),
-  notes: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
 });
 
 export const vehicleUpdateSchema = vehicleCreateSchema
@@ -1292,7 +1292,7 @@ export const medicalRecordCreateSchema = z.object({
   occurredAt: z.string(),
   // HOSPITALIZATION only — null/omitted while the stay is ongoing.
   dischargedAt: z.string().optional().nullable(),
-  notes: z.string().trim().max(1000).optional(),
+  notes: z.string().trim().max(1000).optional().nullable(),
 });
 
 export const medicalRecordUpdateSchema = medicalRecordCreateSchema.partial();
