@@ -227,8 +227,13 @@ export default function DashboardPage() {
     fetcher,
   );
   const maturingPolicies = maturingPoliciesData?.policies ?? [];
+  // Farm off — the livestock-overview route 403s for every role. The
+  // section below already self-suppresses on a missing payload, but nulling
+  // the key skips the wasted round-trip on every dashboard load. Absent
+  // flag (pre-flag JWT) means the farm is on.
+  const farmEnabled = session?.user.farmEnabled !== false;
   const { data: livestockOverview } = useSWR<LivestockOverview>(
-    "/api/reports/livestock-overview",
+    farmEnabled ? "/api/reports/livestock-overview" : null,
     fetcher,
   );
   const { data: recentTxnsData } = useSWR<{ transactions: RecentTxn[] }>(

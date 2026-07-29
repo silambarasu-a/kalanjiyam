@@ -11,7 +11,12 @@ function err(e: unknown) {
 
 export async function GET() {
   try {
-    const ctx = await requireWorkspace("reports", "read");
+    // Gate on "crops", not "reports": this report is nothing but crop data,
+    // so it has to disappear with the farm module. The catalogue card at
+    // /reports gates on the same feature. Nothing here reads ctx.ownOnly
+    // (the report is workspace-wide by design), so dropping the "reports"
+    // ownership semantics changes no behaviour.
+    const ctx = await requireWorkspace("crops", "read");
 
     const batches = await prisma.cropBatch.findMany({
       where: { crop: { workspaceId: ctx.workspaceId } },

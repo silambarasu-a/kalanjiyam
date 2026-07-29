@@ -8,12 +8,14 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type WorkspaceRow = {
   id: string;
   name: string;
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
+  farmEnabled: boolean;
 };
 
 
@@ -25,6 +27,7 @@ export default function WorkspacesPage() {
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newFarmEnabled, setNewFarmEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -42,7 +45,7 @@ export default function WorkspacesPage() {
       const res = await fetch("/api/workspaces", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: newName }),
+        body: JSON.stringify({ name: newName, farmEnabled: newFarmEnabled }),
       });
       const body = await res.json();
       if (!res.ok) setError(body.error ?? "Failed");
@@ -50,6 +53,7 @@ export default function WorkspacesPage() {
         await globalMutate("/api/workspaces");
         setCreateOpen(false);
         setNewName("");
+        setNewFarmEnabled(false);
       }
     } finally {
       setBusy(false);
@@ -129,8 +133,14 @@ export default function WorkspacesPage() {
                   </span>
                 )}
               </div>
-              <div className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
-                {w.role}
+              <div className="mt-1 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                <span>{w.role}</span>
+                {/* Farm is opt-in, so the badge marks the exception. */}
+                {w.farmEnabled && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tracking-wide">
+                    farm
+                  </span>
+                )}
               </div>
             </Link>
             <div className="flex gap-1 shrink-0">
@@ -178,6 +188,24 @@ export default function WorkspacesPage() {
                 placeholder="e.g. Home Farm"
               />
             </label>
+
+            <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+              <div className="min-w-0">
+                <div className="text-xs font-medium">Farm module</div>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  Turn this on if the workspace manages a farm — it adds crops,
+                  livestock, leases, workers and wages, plus farm categories and
+                  the farm fields on the transaction form. You can switch it on
+                  later from the workspace&rsquo;s settings.
+                </p>
+              </div>
+              <Switch
+                checked={newFarmEnabled}
+                onCheckedChange={setNewFarmEnabled}
+                aria-label="Enable farm module"
+              />
+            </div>
+
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
           <DialogFooter>

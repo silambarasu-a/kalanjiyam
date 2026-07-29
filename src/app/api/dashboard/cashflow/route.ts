@@ -52,6 +52,10 @@ export async function GET() {
       monthStart,
       nextMonthBegin,
       isNearMonthEnd,
+      // "dashboard" isn't a farm feature, so this route stays reachable with
+      // the farm off — pass the flag down so lease dues/payments drop out of
+      // the response instead of surfacing a module the workspace disabled.
+      farmEnabled: ctx.farmEnabled,
     });
     return NextResponse.json(cashflow);
   } catch (e) {

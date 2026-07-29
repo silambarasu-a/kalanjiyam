@@ -79,6 +79,7 @@ export async function sendPaymentConfirmationEmail(
     },
     include: {
       user: { select: { id: true, name: true, email: true } },
+      workspace: { select: { farmEnabled: true } },
     },
   });
 
@@ -98,6 +99,10 @@ export async function sendPaymentConfirmationEmail(
           id: m.userId,
           role: m.role,
           permissions: mergeWithDefaults(m.permissions),
+          // No farm kinds in KIND_FEATURE today, so this changes nothing
+          // yet — set it so adding one later can't silently become a hole,
+          // since `getPermission` reads an absent flag as farm-on.
+          farmEnabled: m.workspace.farmEnabled,
         },
       } as Parameters<typeof hasPermission>[0];
       if (!hasPermission(fakeSession, KIND_FEATURE[input.kind], "view")) {

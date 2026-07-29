@@ -65,7 +65,7 @@ const KIND_FEATURES: Record<NotificationKind, Feature[] | null> = {
 };
 
 function memberHasFeatureAccess(
-  m: { role: WorkspaceRole; permissions: unknown },
+  m: { role: WorkspaceRole; permissions: unknown; farmEnabled: boolean },
   kind: NotificationKind,
 ): boolean {
   const features = KIND_FEATURES[kind];
@@ -75,6 +75,11 @@ function memberHasFeatureAccess(
       id: "notification-dispatch",
       role: m.role,
       permissions: mergeWithDefaults(m.permissions),
+      // Must be set explicitly. `getPermission` treats an ABSENT flag as
+      // farm-on, so leaving it off this hand-built session would keep
+      // mailing VACCINATION_DUE / LIVESTOCK_CYCLE_ENDING to workspaces that
+      // turned the farm off.
+      farmEnabled: m.farmEnabled,
     },
   } as Parameters<typeof hasPermission>[0];
   return features.some((f) => hasPermission(fakeSession, f, "view"));
@@ -154,6 +159,7 @@ async function dispatchEmail(
       permissions: true,
       emailPrefs: true,
       user: { select: { email: true, name: true } },
+      workspace: { select: { farmEnabled: true } },
     },
   });
   const recipients = members.filter(
@@ -161,7 +167,11 @@ async function dispatchEmail(
       shouldEmail(
         m as { emailPrefs: WorkspaceMember["emailPrefs"] },
         input.kind,
-      ) && memberHasFeatureAccess(m, input.kind),
+      ) &&
+      memberHasFeatureAccess(
+        { ...m, farmEnabled: m.workspace.farmEnabled },
+        input.kind,
+      ),
   );
   if (recipients.length === 0) return;
 

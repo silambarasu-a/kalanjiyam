@@ -20,7 +20,12 @@ function err(e: unknown) {
  */
 export async function GET(request: Request) {
   try {
-    const ctx = await requireWorkspace("reports", "read");
+    // Gate on "wages", not "reports": every row here is worker/wage data,
+    // so it has to disappear with the farm module. The catalogue card at
+    // /reports gates on the same feature. Nothing here reads ctx.ownOnly
+    // (the report is workspace-wide by design), so dropping the "reports"
+    // ownership semantics changes no behaviour.
+    const ctx = await requireWorkspace("wages", "read");
     const url = new URL(request.url);
     const startStr = url.searchParams.get("start");
     const endStr = url.searchParams.get("end");

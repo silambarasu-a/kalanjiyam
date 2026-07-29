@@ -507,6 +507,18 @@ model Workspace {
   // Card-account transactions follow a different rule (locked once their
   // billing period closes into a CardStatement). 0 disables the window.
   transactionEditWindowDays Int      @default(30)
+  // Whether this workspace runs a farm. Off hides the entire farm domain
+  // (crops, livestock, leases, workers, wages) — nav, pages, APIs, farm
+  // categories, and the farm branches of the transaction dialog. It MASKS,
+  // it never deletes: flipping it back on restores every row and every
+  // member's stored farm permission levels untouched.
+  //
+  // Opt-in: the farm is OFF unless someone asks for it, since most
+  // workspaces are household-only. The default covers the paths that don't
+  // ask (signup, seed); the create dialog and workspace settings set it
+  // explicitly. Workspaces that predate this column were backfilled to
+  // `true` by its migration and are unaffected by this default.
+  farmEnabled               Boolean  @default(false)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 

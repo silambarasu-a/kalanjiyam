@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createNotification } from "@/lib/notifications";
+import { FARM_REMINDER_KINDS } from "@/lib/farm-reminders";
 import {
   NotificationKind,
   ReminderKind,
@@ -83,6 +84,16 @@ async function run() {
     where: {
       status: ReminderStatus.UPCOMING,
       dueDate: { gte: today, lt: windowEnd },
+      // This sweep runs on a Bearer secret with no session and spans EVERY
+      // workspace, so `getPermission` can never gate it — the farm filter has
+      // to live on the query. It also emails, so a miss here doesn't just
+      // show a stale row, it mails livestock reminders to a household.
+      NOT: {
+        AND: [
+          { kind: { in: FARM_REMINDER_KINDS } },
+          { workspace: { farmEnabled: false } },
+        ],
+      },
     },
     include: {
       investment: { select: { name: true, id: true, kind: true, policyType: true } },

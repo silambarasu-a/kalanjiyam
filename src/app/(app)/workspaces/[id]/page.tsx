@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { ChevronLeft, Pencil, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { formatDate } from "@/lib/utils";
 
 type WorkspaceDetail = {
@@ -16,6 +18,7 @@ type WorkspaceDetail = {
   owner: { id: string; name: string; email: string };
   memberCount: number;
   transactionEditWindowDays: number;
+  farmEnabled: boolean;
   editWindowDefaultDays: number;
   createdAt: string;
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
@@ -94,8 +97,86 @@ export default function WorkspaceDetailPage() {
         </dl>
       </section>
 
+      <FarmModuleSection workspace={ws} canEdit={canEdit} />
+
       <EditWindowSection workspace={ws} canEdit={canEdit} />
     </div>
+  );
+}
+
+function FarmModuleSection({
+  workspace: ws,
+  canEdit,
+}: {
+  workspace: WorkspaceDetail;
+  canEdit: boolean;
+}) {
+  const { update } = useSession();
+  const [busy, setBusy] = useState(false);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/workspaces/${ws.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ farmEnabled: next }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        toast.error(body.error ?? "Failed");
+        return;
+      }
+      await globalMutate(`/api/workspaces/${ws.id}`);
+      await globalMutate("/api/workspaces");
+      // The farm gate reads `session.user.farmEnabled`, so the actor's own
+      // JWT has to be refreshed before nav / dialogs / API calls agree with
+      // what was just saved. Reload so every mounted client tree re-reads it.
+      await update();
+      window.location.reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border bg-card p-5 space-y-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Farm module</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Off by default. Turn it on to add crops, livestock, leases, workers
+            and wages — plus farm categories and the farm fields on the
+            transaction form.
+          </p>
+        </div>
+        {canEdit && (
+          <Switch
+            checked={ws.farmEnabled}
+            onCheckedChange={toggle}
+            disabled={busy}
+            aria-label="Enable farm module"
+          />
+        )}
+      </div>
+
+      <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+        <div className="font-medium">
+          {ws.farmEnabled ? "Enabled" : "Disabled"}
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {ws.farmEnabled
+            ? "Farm pages, categories and transaction fields are available to everyone in this workspace. Switching off hides them and any farm records — it never deletes anything."
+            : "This workspace has no farm pages, farm categories or farm fields on the transaction form. Switching on reveals them, along with any farm records entered earlier and each member's saved farm permissions — nothing was deleted."}
+        </p>
+      </div>
+
+      {!canEdit && (
+        <p className="text-[11px] text-muted-foreground">
+          Only the workspace Owner or an Admin can change this.
+        </p>
+      )}
+    </section>
   );
 }
 

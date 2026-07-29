@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FEATURES, type PermissionLevel } from "@/lib/permissions";
+import { FEATURES, isFarmFeature, type PermissionLevel } from "@/lib/permissions";
 import { formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -169,6 +169,7 @@ export default function MembersPage() {
       <PermissionsDialog
         member={permEditor}
         workspaceId={wsId}
+        farmEnabled={session?.user.farmEnabled !== false}
         onClose={() => setPermEditor(null)}
         onSaved={() => globalMutate(key)}
       />
@@ -289,11 +290,13 @@ function InviteDialog({
 function PermissionsDialog({
   member,
   workspaceId,
+  farmEnabled,
   onClose,
   onSaved,
 }: {
   member: Member | null;
   workspaceId: string;
+  farmEnabled: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -330,7 +333,11 @@ function PermissionsDialog({
           <DialogTitle>Permissions — {member?.name}</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto divide-y">
-          {FEATURES.map((f) => (
+          {/* Farm rows disappear with the farm module. `perms` is seeded from
+              the member's stored blob and PATCHed wholesale, so their existing
+              farm levels ride along untouched and come back intact if the
+              workspace turns the farm on again. */}
+          {FEATURES.filter((f) => farmEnabled || !isFarmFeature(f)).map((f) => (
             <div key={f} className="flex items-center justify-between py-2 text-sm">
               <span className="capitalize">{f.replace(/_/g, " ")}</span>
               <div className="w-32">

@@ -10,7 +10,7 @@ export async function GET() {
 
   const memberships = await prisma.workspaceMember.findMany({
     where: { userId: session.user.id, acceptedAt: { not: null } },
-    include: { workspace: { select: { id: true, name: true } } },
+    include: { workspace: { select: { id: true, name: true, farmEnabled: true } } },
     orderBy: { createdAt: "asc" },
   });
 
@@ -19,6 +19,7 @@ export async function GET() {
       id: m.workspace.id,
       name: m.workspace.name,
       role: m.role,
+      farmEnabled: m.workspace.farmEnabled,
     })),
     cap: 3,
   });
@@ -46,7 +47,11 @@ export async function POST(request: Request) {
 
   const workspace = await prisma.$transaction(async (tx) => {
     const ws = await tx.workspace.create({
-      data: { name: parsed.data.name, ownerUserId: session.user.id },
+      data: {
+        name: parsed.data.name,
+        farmEnabled: parsed.data.farmEnabled,
+        ownerUserId: session.user.id,
+      },
     });
     await tx.workspaceMember.create({
       data: {
@@ -59,5 +64,10 @@ export async function POST(request: Request) {
     return ws;
   });
 
-  return NextResponse.json({ id: workspace.id, name: workspace.name, role: "OWNER" });
+  return NextResponse.json({
+    id: workspace.id,
+    name: workspace.name,
+    role: "OWNER",
+    farmEnabled: workspace.farmEnabled,
+  });
 }

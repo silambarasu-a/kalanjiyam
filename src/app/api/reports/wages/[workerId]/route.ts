@@ -29,7 +29,10 @@ export async function GET(
   context: { params: Promise<{ workerId: string }> },
 ) {
   try {
-    const ctx = await requireWorkspace("reports", "read");
+    // Gate on "wages", not "reports" — see the parent /reports/wages route.
+    // ctx.ownOnly is unused here too; the worker is scoped by workspace
+    // below instead.
+    const ctx = await requireWorkspace("wages", "read");
     const { workerId } = await context.params;
     const url = new URL(request.url);
     const startStr = url.searchParams.get("start");

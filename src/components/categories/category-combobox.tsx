@@ -31,6 +31,9 @@ import {
  *   - Inline create: when canCreate=true, a "+ New category" item appears
  *     at the bottom of the list and calls the supplied onRequestCreate
  *     callback with the current search text
+ *   - fallbackLabel: what the trigger shows when `value` points at a row
+ *     that isn't in `categories` (a filtered list still has to render an
+ *     already-tagged legacy row honestly)
  *
  * Drop-in replacement for a single-select category dropdown:
  *
@@ -55,6 +58,7 @@ export function CategoryCombobox({
   onChange,
   categories,
   placeholder = "Pick a category…",
+  fallbackLabel,
   emptyHint,
   disabled,
   canCreate = false,
@@ -66,6 +70,11 @@ export function CategoryCombobox({
   onChange: (id: string) => void;
   categories: CategoryRow[];
   placeholder?: string;
+  /**
+   * Label to show when `value` is set but the row isn't in `categories`.
+   * Purely cosmetic — the id is untouched, so it still round-trips on save.
+   */
+  fallbackLabel?: string | null;
   emptyHint?: string;
   disabled?: boolean;
   /** When true, shows a "+ New category" affordance at the bottom. */
@@ -102,12 +111,19 @@ export function CategoryCombobox({
   }, [categories]);
 
   // Selected category — render the breadcrumb in the trigger button.
+  // A set `value` that isn't in `categories` falls back to the label the
+  // caller supplied: the list can legitimately exclude a row the record
+  // still points at (e.g. farm categories hidden while the transaction
+  // was tagged with one). Showing the placeholder there would read as
+  // "uncategorised" and invite the user to overwrite a valid tag.
   const selected = value ? tree.byId.get(value) : null;
   const selectedLabel = selected
     ? selected.parentCategoryId
       ? `${tree.byId.get(selected.parentCategoryId)?.name ?? "?"} › ${selected.name}`
       : selected.name
-    : null;
+    : value
+      ? (fallbackLabel ?? null)
+      : null;
 
   // Reset search when popover closes so re-opening starts fresh. The
   // effect is the right place — we're syncing the input's internal

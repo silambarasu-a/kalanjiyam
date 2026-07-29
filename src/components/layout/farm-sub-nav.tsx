@@ -15,10 +15,15 @@ import { FARM_SUBSECTIONS } from "./nav-config";
  */
 export function FarmSubNav() {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
 
-  const visible = FARM_SUBSECTIONS.filter((s) =>
-    session ? getPermission(session, s.feature) !== "hidden" : true,
+  // Every subsection here is a farm feature, so while `useSession()` is still
+  // resolving (data is null) we show none of them — the old "show everything"
+  // fallback made the whole strip flash on hard loads of a farm-off workspace,
+  // before the flag arrived and wiped it away.
+  const loading = status === "loading";
+  const visible = FARM_SUBSECTIONS.filter(
+    (s) => !loading && getPermission(session, s.feature) !== "hidden",
   );
 
   // Longest-match — /farm/anything beats /farm Overview.

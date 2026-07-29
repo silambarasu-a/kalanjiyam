@@ -7,6 +7,8 @@ const permissionsRecord = z.record(featureEnum, levelEnum);
 
 export const workspaceCreateSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(80),
+  // Opt-in, matching the schema default that signup inherits.
+  farmEnabled: z.boolean().optional().default(false),
 });
 
 export const workspaceRenameSchema = z.object({
@@ -18,6 +20,8 @@ export const workspaceRenameSchema = z.object({
  * update, omitted fields stay. `transactionEditWindowDays` controls how
  * long non-card transactions / attendance entries stay editable from
  * their date; 0 disables the window for this workspace.
+ * `farmEnabled` toggles the whole farm module; turning it off hides farm
+ * data rather than deleting it.
  */
 export const workspaceUpdateSchema = z
   .object({
@@ -28,6 +32,7 @@ export const workspaceUpdateSchema = z
       .min(0)
       .max(365)
       .optional(),
+    farmEnabled: z.boolean().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, {
     message: "Provide at least one field to update",

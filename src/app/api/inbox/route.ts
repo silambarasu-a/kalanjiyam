@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { FARM_NOTIFICATION_KINDS } from "@/lib/farm-reminders";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -25,6 +26,10 @@ export async function GET(request: Request) {
         workspaceId: ctx.workspaceId,
         OR: [{ userId: ctx.userId }, { userId: null }],
         ...(filter === "unread" ? { readAt: null } : {}),
+        // Keep this clause identical to the one in
+        // /api/inbox/unread-count — filter one and not the other and the
+        // bell keeps a permanent unread badge for a row the list never shows.
+        ...(ctx.farmEnabled ? {} : { kind: { notIn: FARM_NOTIFICATION_KINDS } }),
       },
       orderBy: { createdAt: "desc" },
       take,

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import {
@@ -257,6 +258,11 @@ function DialogBody({
   onClose: () => void;
 }) {
   const [type, setType] = useState<TransactionDefault>(defaultType);
+  // This dialog is mounted globally for every page, so hiding the Farm nav
+  // does nothing for it — the farm branches have to gate themselves.
+  // `!== false` so an absent flag (pre-flag JWT) still means farm on.
+  const { data: session } = useSession();
+  const farmOn = session?.user.farmEnabled !== false;
   const { data: accountsData, isLoading: accountsLoading } = useSWR<{
     accounts: Account[];
   }>("/api/accounts", fetcher);
@@ -273,12 +279,15 @@ function DialogBody({
   const { data: contactsData, isLoading: contactsLoading } = useSWR<{
     members: Contact[];
   }>("/api/contacts", fetcher);
+  // Farm keys go null with the module off. Left live they'd 403 on every
+  // dialog open across all six tabs, and SWR's default error-retry would
+  // back off against a wall.
   const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
-    "/api/crop-batches?active=true",
+    farmOn ? "/api/crop-batches?active=true" : null,
     fetcher
   );
   const { data: livestockBatchesData } = useSWR<{ batches: LivestockBatch[] }>(
-    "/api/livestock-batches?active=true",
+    farmOn ? "/api/livestock-batches?active=true" : null,
     fetcher
   );
   const { data: eventsData } = useSWR<{
@@ -292,7 +301,7 @@ function DialogBody({
     }[];
   }>("/api/events?status=active", fetcher);
   const { data: workersData } = useSWR<{ workers: Worker[] }>(
-    type === "EXPENSE" ? "/api/workers" : null,
+    type === "EXPENSE" && farmOn ? "/api/workers" : null,
     fetcher,
   );
   const { data: investmentCategoriesData } = useSWR<{ categories: Category[] }>(
@@ -305,10 +314,13 @@ function DialogBody({
   const categories = categoriesData?.categories ?? [];
   const investmentCategories = investmentCategoriesData?.categories ?? [];
   const contacts = contactsData?.members ?? [];
-  const cropBatches = cropBatchesData?.batches ?? [];
-  const livestockBatches = livestockBatchesData?.batches ?? [];
+  // `farmOn &&` as well as the null SWR keys above: in a tab that had the farm
+  // on, SWR still holds the fetched batches in cache when the ~60s session
+  // refresh flips the flag, and stale cache would keep the pickers rendering.
+  const cropBatches = farmOn ? (cropBatchesData?.batches ?? []) : [];
+  const livestockBatches = farmOn ? (livestockBatchesData?.batches ?? []) : [];
   const events = eventsData?.events ?? [];
-  const workers = (workersData?.workers ?? []).filter((w) => w);
+  const workers = farmOn ? (workersData?.workers ?? []).filter((w) => w) : [];
 
   return (
     <div>
@@ -404,6 +416,10 @@ function IncomeExpenseForm({
   sourcesLoading?: boolean;
   onClose: () => void;
 }) {
+  // Same read as DialogBody's — `useSession` is a context read, not a fetch,
+  // and the farm branches below are local to this form.
+  const { data: session } = useSession();
+  const farmOn = session?.user.farmEnabled !== false;
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
@@ -444,8 +460,13 @@ function IncomeExpenseForm({
     expenseSplitMode === "equal" ? recalcEqual(splits, totalForSplits) : splits;
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
+  // Farm gate first: this matches on the category NAME, so hiding the farm
+  // categories isn't enough on its own — a household that makes its own
+  // "Wage" expense category (a maid, a driver) would otherwise re-arm the
+  // whole worker-pay branch, which posts to /api/wage-payments and dead-ends
+  // on a bare "Forbidden" with no way to save.
   const isWageMode =
-    type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
+    farmOn && type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
   const VEHICLE_CATEGORIES = new Set(["vehicle purchase", "vehicle service", "fuel"]);
   const isVehicleMode =
     type === "EXPENSE" &&
@@ -1398,7 +1419,7 @@ function IncomeExpenseForm({
         events.length > 0) && (
         <label className="block">
           <span className="text-xs font-medium">
-            Tag to batch / event{" "}
+            {farmOn ? "Tag to batch / event" : "Tag to event"}{" "}
             <span className="font-normal text-muted-foreground">(optional)</span>
           </span>
           <div className="mt-1">
@@ -1439,8 +1460,9 @@ function IncomeExpenseForm({
             />
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Tag this transaction to a crop / livestock batch (per-batch P&amp;L) or
-            to an event / trip (roll-up across categories).
+            {farmOn
+              ? "Tag this transaction to a crop / livestock batch (per-batch P&L) or to an event / trip (roll-up across categories)."
+              : "Tag this transaction to an event / trip (roll-up across categories)."}
           </p>
         </label>
       )}

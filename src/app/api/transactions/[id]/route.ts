@@ -424,8 +424,11 @@ const body = await request.json();
       if (t.kind === "HEALTH_CARE" && t.livestockBatchId) {
         return NextResponse.json(
           {
-            error:
-              "Can't change the amount of a health-care expense. Edit it from the batch's Health tab.",
+            // The batch's Health tab is unreachable with the farm module off,
+            // so don't send a household-only workspace looking for it.
+            error: ctx.farmEnabled
+              ? "Can't change the amount of a health-care expense. Edit it from the batch's Health tab."
+              : "Can't change the amount of a health-care expense recorded against a livestock batch. Delete it instead, or turn the farm module back on to edit it from the batch's Health tab.",
           },
           { status: 400 },
         );

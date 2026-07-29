@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
+import { useSession } from "next-auth/react";
 import {
   BarChart3,
   Sprout,
@@ -15,16 +17,24 @@ import {
   ArrowUpRight,
   Receipt,
 } from "lucide-react";
+import { getPermission, isFarmFeature, type Feature } from "@/lib/permissions";
 
 type ReportCard = {
   href: string;
   title: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Feature this report reads. Cards without one are ungated — they draw
+   * on data every workspace has (money, contacts). */
+  feature?: Feature;
 };
 
 type ReportGroup = {
   label: string;
+  /** Label to fall back to once every farm card in the group is hidden, so
+   * a farm-off workspace doesn't read "Farm & People" over a lone contact
+   * report. */
+  labelWithoutFarm?: string;
   reports: ReportCard[];
 };
 
@@ -90,6 +100,7 @@ const GROUPS: ReportGroup[] = [
   },
   {
     label: "Farm & People",
+    labelWithoutFarm: "People",
     reports: [
       {
         href: "/reports/crops",
@@ -97,12 +108,14 @@ const GROUPS: ReportGroup[] = [
         description:
           "Per-crop and per-batch revenue, cost, and net contribution.",
         icon: Sprout,
+        feature: "crops",
       },
       {
         href: "/reports/livestock",
         title: "Livestock P&L",
         description: "Per-batch margin, current head, and lifetime cost.",
         icon: PawPrint,
+        feature: "livestock",
       },
       {
         href: "/reports/wages",
@@ -110,8 +123,10 @@ const GROUPS: ReportGroup[] = [
         description:
           "Per-worker days worked, earned, paid, advances outstanding, and bonuses.",
         icon: HardHat,
+        feature: "wages",
       },
       {
+        // Contact ledger, not a farm report — stays put with the farm off.
         href: "/reports/members",
         title: "Member ledger",
         description: "Outstanding balances per contact across charges and transfers.",
@@ -122,6 +137,32 @@ const GROUPS: ReportGroup[] = [
 ];
 
 export default function ReportsCatalogPage() {
+  const { data: session } = useSession();
+
+  // Drop cards the session can't see (farm module off, or a Member without
+  // the feature) and collapse any group left empty. Relabel a group once
+  // its farm cards are gone rather than dropping it — "Farm & People" also
+  // carries the contact ledger, which survives with the farm off.
+  const groups = useMemo(
+    () =>
+      GROUPS.map((g) => {
+        const reports = g.reports.filter((r) =>
+          r.feature && session
+            ? getPermission(session, r.feature) !== "hidden"
+            : true,
+        );
+        const stillFarm = reports.some(
+          (r) => r.feature && isFarmFeature(r.feature),
+        );
+        return {
+          ...g,
+          label: stillFarm ? g.label : (g.labelWithoutFarm ?? g.label),
+          reports,
+        };
+      }).filter((g) => g.reports.length > 0),
+    [session],
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -134,7 +175,7 @@ export default function ReportsCatalogPage() {
         </p>
       </div>
 
-      {GROUPS.map((g) => (
+      {groups.map((g) => (
         <section key={g.label}>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
             {g.label}

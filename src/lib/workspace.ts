@@ -17,6 +17,13 @@ export type WorkspaceContext = {
   workspaceId: string;
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
   ownOnly: boolean;
+  /**
+   * Whether this workspace runs a farm. Farm-feature routes are already
+   * 403'd by the permission check above, so this is for the routes that
+   * legitimately carry a NON-farm feature but still surface farm content —
+   * categories, transactions, dashboard cashflow, notifications.
+   */
+  farmEnabled: boolean;
 };
 
 export async function requireWorkspace(
@@ -36,6 +43,7 @@ export async function requireWorkspace(
     workspaceId,
     role: (session.user.role ?? "MEMBER") as WorkspaceContext["role"],
     ownOnly,
+    farmEnabled: session.user.farmEnabled !== false,
   };
 }
 

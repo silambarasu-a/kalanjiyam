@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,14 @@ export type EditableTransaction = {
   date: string; // ISO
   description: string;
   categoryId?: string | null;
+  /**
+   * The row's own category name, straight off the transaction. Used as the
+   * picker's label when `categoryId` points at a category the picker's list
+   * no longer contains — a farm-off workspace editing a transaction that was
+   * filed under a farm category. Without it the trigger would read
+   * "— uncategorised —" over a perfectly good tag.
+   */
+  categoryName?: string | null;
   vehicleId?: string | null;
   eventId?: string | null;
   // Fuel-fill fields — only surfaced when the row has any of them set.
@@ -89,6 +98,8 @@ export function EditTransactionDialog({
   /** Called after a successful PATCH so the caller can refetch / refresh. */
   onSaved?: () => void | Promise<void>;
 }) {
+  const { data: session } = useSession();
+  const farmOn = session?.user.farmEnabled !== false;
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
@@ -377,6 +388,7 @@ export function EditTransactionDialog({
                       group: c.group,
                     }))}
                     placeholder="— uncategorised —"
+                    fallbackLabel={transaction.categoryName ?? null}
                   />
                 </div>
               </div>
@@ -583,8 +595,9 @@ export function EditTransactionDialog({
               />
             </label>
             <p className="text-[11px] text-muted-foreground">
-              Linked records — loan outstanding, investment holdings, wage and
-              feed logs — are kept in sync automatically.
+              Linked records — loan outstanding, investment holdings
+              {farmOn ? ", wage and feed logs" : ""} — are kept in sync
+              automatically.
             </p>
             <div className="rounded-md border bg-muted/30 p-3 space-y-2">
               <div className="text-xs font-medium">Receipts / supporting files</div>

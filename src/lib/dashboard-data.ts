@@ -343,6 +343,10 @@ export async function getLiquidByMember(args: {
  * Heavier: pulls payment history from every source (cards, loans,
  * leases, reminders) and assembles the chronological dues list across
  * all card paths (materialised statement / manual override / computed).
+ *
+ * `farmEnabled` masks the lease side only. The caller's feature is
+ * "dashboard", which isn't farm-gated, so lease money would otherwise keep
+ * flowing into the response for a workspace that runs no farm.
  */
 export async function getDashboardCashflow(args: {
   workspaceId: string;
@@ -351,6 +355,7 @@ export async function getDashboardCashflow(args: {
   monthStart: Date;
   nextMonthBegin: Date;
   isNearMonthEnd: boolean;
+  farmEnabled: boolean;
 }): Promise<DashboardCashflow> {
   const {
     workspaceId,
@@ -359,6 +364,7 @@ export async function getDashboardCashflow(args: {
     monthStart,
     nextMonthBegin,
     isNearMonthEnd,
+    farmEnabled,
   } = args;
   const wsId = workspaceId;
 
@@ -427,27 +433,33 @@ export async function getDashboardCashflow(args: {
         lenderContact: { select: { name: true } },
       },
     }),
-    prisma.leasePaymentSchedule.findMany({
-      where: {
-        status: "UPCOMING",
-        dueDate: { gte: today, lte: windowEnd },
-        lease: { workspaceId: wsId },
-      },
-      orderBy: { dueDate: "asc" },
-      take: 20,
-      include: {
-        lease: {
-          select: {
-            id: true,
-            direction: true,
-            lessorName: true,
-            lesseeName: true,
-            lessorContact: { select: { name: true } },
-            lesseeContact: { select: { name: true } },
+    // A lease only ever sits on a crop or livestock batch, so with the farm
+    // module off there is nothing here to bill. Skipping the query (rather
+    // than filtering the rows later) keeps every lease loop below a no-op
+    // without touching a single stored row.
+    farmEnabled
+      ? prisma.leasePaymentSchedule.findMany({
+          where: {
+            status: "UPCOMING",
+            dueDate: { gte: today, lte: windowEnd },
+            lease: { workspaceId: wsId },
           },
-        },
-      },
-    }),
+          orderBy: { dueDate: "asc" },
+          take: 20,
+          include: {
+            lease: {
+              select: {
+                id: true,
+                direction: true,
+                lessorName: true,
+                lesseeName: true,
+                lessorContact: { select: { name: true } },
+                lesseeContact: { select: { name: true } },
+              },
+            },
+          },
+        })
+      : [],
     prisma.cardStatement.findMany({
       where: { workspaceId: wsId, paidAt: null, dueDate: { lte: windowEnd } },
       orderBy: { dueDate: "asc" },
@@ -531,35 +543,40 @@ export async function getDashboardCashflow(args: {
         },
       },
     }),
-    prisma.transaction.findMany({
-      where: {
-        workspaceId: wsId,
-        leaseScheduleId: { not: null },
-        date: { gte: monthStart, lt: nextMonthBegin },
-      },
-      orderBy: { date: "desc" },
-      take: 50,
-      select: {
-        id: true,
-        amount: true,
-        date: true,
-        leaseSchedule: {
+    // Farm off — see the lease-schedule note above. Historical lease
+    // transactions stay on record and keep rendering everywhere else; they
+    // just stop feeding the dashboard's paid/settled figures.
+    farmEnabled
+      ? prisma.transaction.findMany({
+          where: {
+            workspaceId: wsId,
+            leaseScheduleId: { not: null },
+            date: { gte: monthStart, lt: nextMonthBegin },
+          },
+          orderBy: { date: "desc" },
+          take: 50,
           select: {
             id: true,
-            lease: {
+            amount: true,
+            date: true,
+            leaseSchedule: {
               select: {
                 id: true,
-                direction: true,
-                lessorName: true,
-                lesseeName: true,
-                lessorContact: { select: { name: true } },
-                lesseeContact: { select: { name: true } },
+                lease: {
+                  select: {
+                    id: true,
+                    direction: true,
+                    lessorName: true,
+                    lesseeName: true,
+                    lessorContact: { select: { name: true } },
+                    lesseeContact: { select: { name: true } },
+                  },
+                },
               },
             },
           },
-        },
-      },
-    }),
+        })
+      : [],
     prisma.investmentReminder.findMany({
       where: {
         workspaceId: wsId,

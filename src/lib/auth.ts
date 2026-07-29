@@ -14,12 +14,20 @@ class TooManyAttemptsError extends CredentialsSignin {
 async function loadWorkspaceContext(userId: string, workspaceIdHint?: string | null) {
   const memberships = await prisma.workspaceMember.findMany({
     where: { userId, acceptedAt: { not: null } },
-    select: { workspaceId: true, role: true, permissions: true },
+    select: {
+      workspaceId: true,
+      role: true,
+      permissions: true,
+      workspace: { select: { farmEnabled: true } },
+    },
     orderBy: { createdAt: "asc" },
   });
 
   if (memberships.length === 0) {
-    return { activeWorkspaceId: null, role: null, permissions: null };
+    // No workspace, so nothing farm-related is reachable anyway (every route
+    // 403s on the missing activeWorkspaceId first). Match the opt-in default
+    // rather than the pre-flag one, so the nav doesn't offer Farm either.
+    return { activeWorkspaceId: null, role: null, permissions: null, farmEnabled: false };
   }
 
   const preferred =
@@ -32,6 +40,7 @@ async function loadWorkspaceContext(userId: string, workspaceIdHint?: string | n
     activeWorkspaceId: preferred.workspaceId,
     role: preferred.role as WorkspaceRole,
     permissions,
+    farmEnabled: preferred.workspace.farmEnabled,
   };
 }
 
@@ -100,6 +109,7 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
           activeWorkspaceId: ctx.activeWorkspaceId,
           role: ctx.role,
           permissions: ctx.permissions,
+          farmEnabled: ctx.farmEnabled,
           lastLoginAt: previousLogin?.toISOString() ?? null,
         } as unknown as import("next-auth").User;
       },
@@ -112,12 +122,14 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
           activeWorkspaceId?: string | null;
           role?: WorkspaceRole | null;
           permissions?: MemberPermissions | null;
+          farmEnabled?: boolean;
           lastLoginAt?: string | null;
         };
         token.id = u.id;
         token.activeWorkspaceId = u.activeWorkspaceId ?? null;
         token.role = u.role ?? null;
         token.permissions = u.permissions ?? null;
+        token.farmEnabled = u.farmEnabled ?? true;
         token.lastLoginAt = u.lastLoginAt ?? null;
         token.sessionStartedAt = Date.now();
       }
@@ -150,6 +162,7 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
             token.activeWorkspaceId = ctx.activeWorkspaceId;
             token.role = ctx.role;
             token.permissions = ctx.permissions;
+            token.farmEnabled = ctx.farmEnabled;
           }
         } else {
           const ctx = await loadWorkspaceContext(
@@ -159,6 +172,7 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
           token.activeWorkspaceId = ctx.activeWorkspaceId;
           token.role = ctx.role;
           token.permissions = ctx.permissions;
+          token.farmEnabled = ctx.farmEnabled;
         }
 
         if (s?.extend) {
@@ -181,12 +195,18 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         }
       }
 
-      if (!user && !trigger && token.role === "MEMBER" && token.activeWorkspaceId) {
+      // Silent refresh on every untriggered decode (SessionProvider polls
+      // ~60s). This is the only path that repairs a stale token without an
+      // explicit client `update()`, so it must cover every role — an Owner
+      // or Admin who turns the farm module off in one tab has to lose the
+      // farm in their other tabs too, not just Members.
+      if (!user && !trigger && token.activeWorkspaceId) {
         const ctx = await loadWorkspaceContext(
           token.id as string,
           token.activeWorkspaceId as string
         );
         token.permissions = ctx.permissions;
+        token.farmEnabled = ctx.farmEnabled;
       }
 
       return token;
@@ -197,6 +217,10 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         session.user.activeWorkspaceId = (token.activeWorkspaceId as string | null) ?? null;
         session.user.role = (token.role as import("next-auth").Session["user"]["role"]) ?? null;
         session.user.permissions = (token.permissions as MemberPermissions | null) ?? null;
+        // `?? true` keeps farm alive for tokens minted before the flag
+        // existed — without it, deploying would blank the farm for every
+        // signed-in user until they re-login.
+        session.user.farmEnabled = (token.farmEnabled as boolean | undefined) ?? true;
         session.user.lastLoginAt = (token.lastLoginAt as string | null) ?? null;
       }
       const startedAt = (token.sessionStartedAt as number) || Date.now();

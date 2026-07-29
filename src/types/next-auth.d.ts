@@ -10,6 +10,12 @@ declare module "next-auth" {
       activeWorkspaceId: string | null;
       role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN" | null;
       permissions: MemberPermissions | null;
+      /**
+       * Whether the active workspace runs a farm. The session callback
+       * always fills this, defaulting to `true` for tokens minted before
+       * the flag existed.
+       */
+      farmEnabled: boolean;
       lastLoginAt: string | null;
     } & DefaultSession["user"];
     expiresAt: number;
@@ -23,6 +29,8 @@ declare module "next-auth/jwt" {
     activeWorkspaceId?: string | null;
     role?: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN" | null;
     permissions?: MemberPermissions | null;
+    // Optional — tokens minted before this flag existed legitimately lack it.
+    farmEnabled?: boolean;
     lastLoginAt?: string | null;
     sessionStartedAt?: number;
     reverifyRequiredAt?: number | null;

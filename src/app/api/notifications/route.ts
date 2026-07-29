@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
+import { FARM_REMINDER_KINDS } from "@/lib/farm-reminders";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -54,6 +55,11 @@ export async function GET(request: Request) {
           workspaceId: wsId,
           status: "UPCOMING",
           dueDate: { lte: horizon },
+          // "reminders" isn't a farm feature, so this route stays open with
+          // the farm module off — the farm kinds have to be excluded here.
+          // Rows written while the farm was on are already in the table, so
+          // filtering the producer alone would leave them showing forever.
+          ...(ctx.farmEnabled ? {} : { kind: { notIn: FARM_REMINDER_KINDS } }),
         },
         orderBy: { dueDate: "asc" },
         include: {
@@ -86,18 +92,23 @@ export async function GET(request: Request) {
         },
         take: 50,
       }),
-      prisma.leasePaymentSchedule.findMany({
-        where: {
-          lease: { workspaceId: wsId, active: true },
-          status: "UPCOMING",
-          dueDate: { lte: horizon },
-        },
-        orderBy: { dueDate: "asc" },
-        include: {
-          lease: { select: { id: true, lessorName: true, lesseeName: true, direction: true } },
-        },
-        take: 50,
-      }),
+      // Leases are farm-only (a Lease is always against a crop or livestock
+      // batch), and their deep links point at /leases/[id], which 404s with
+      // the module off. Skip the query outright rather than filter later.
+      ctx.farmEnabled
+        ? prisma.leasePaymentSchedule.findMany({
+            where: {
+              lease: { workspaceId: wsId, active: true },
+              status: "UPCOMING",
+              dueDate: { lte: horizon },
+            },
+            orderBy: { dueDate: "asc" },
+            include: {
+              lease: { select: { id: true, lessorName: true, lesseeName: true, direction: true } },
+            },
+            take: 50,
+          })
+        : Promise.resolve([]),
       // Materialised credit-card statements that are unpaid and due within
       // the horizon. We include payments to compute outstanding (statement
       // can be partially paid).

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import type { AnimalSex, ProductionType } from "@/generated/prisma/client";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -22,7 +23,31 @@ export async function GET(
   try {
     const ctx = await requireWorkspace("livestock", "read");
     const { id } = await context.params;
-    const animal = await prisma.livestockAnimal.findUnique({
+    // Cast to dodge a Prisma 7 deep-instantiation quirk on large schemas —
+    // the nested batch → livestock include tips TS past its instantiation
+    // depth limit, so the result type is spelled out by hand instead. Same
+    // workaround as in /api/categories.
+    const animal = (await (
+      prisma.livestockAnimal.findUnique as unknown as (a: unknown) => Promise<{
+        id: string;
+        tagNumber: string;
+        name: string | null;
+        sex: AnimalSex;
+        dob: Date | null;
+        breed: string | null;
+        color: string | null;
+        notes: string | null;
+        active: boolean;
+        batchId: string;
+        batch: {
+          id: string;
+          name: string;
+          productionType: ProductionType;
+          livestockId: string;
+          livestock: { workspaceId: string; name: string };
+        };
+      } | null>
+    )({
       where: { id },
       include: {
         batch: {
@@ -35,7 +60,7 @@ export async function GET(
           },
         },
       },
-    });
+    }));
     if (!animal || animal.batch.livestock.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }

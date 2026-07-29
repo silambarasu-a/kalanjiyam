@@ -55,6 +55,24 @@ const OWNERSHIP_FEATURES: readonly Feature[] = [
   "reports",
 ] as const;
 
+/**
+ * The farm module. A workspace with `farmEnabled = false` hides every one
+ * of these features outright, for every role — see `getPermission`.
+ * Leases belong here because a Lease can only be against a crop batch or a
+ * livestock batch (`LeaseAssetType`), so it has no meaning off-farm.
+ */
+export const FARM_FEATURES: readonly Feature[] = [
+  "crops",
+  "livestock",
+  "leases",
+  "workers",
+  "wages",
+] as const;
+
+export function isFarmFeature(feature: Feature): boolean {
+  return FARM_FEATURES.includes(feature);
+}
+
 const DEFAULT_MEMBER_PERMISSIONS: Record<Feature, PermissionLevel> = {
   workspace: "hidden",
   dashboard: "view",
@@ -106,11 +124,17 @@ type SessionLike = Session & {
     activeWorkspaceId?: string | null;
     role?: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN" | null;
     permissions?: MemberPermissions | null;
+    farmEnabled?: boolean | null;
   };
 };
 
 export function getPermission(session: SessionLike | null, feature: Feature): PermissionLevel {
   if (!session?.user) return "hidden";
+  // Must sit ABOVE the role short-circuits below: turning the farm module
+  // off has to hide it from Owners and Admins too, not just Members.
+  // Compare against `false` explicitly — an absent flag (pre-flag JWTs,
+  // hand-built sessions in the notification senders) means farm stays on.
+  if (session.user.farmEnabled === false && isFarmFeature(feature)) return "hidden";
   const role = session.user.role;
   if (role === "OWNER" || role === "SUPER_ADMIN") return "full";
   if (role === "ADMIN") {

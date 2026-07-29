@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { categoryUpdateSchema } from "@/lib/validators-domain";
+import { isFarmParentCategory } from "@/lib/farm-categories";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -21,6 +22,7 @@ async function validateParentReference(args: {
   workspaceId: string;
   childTypes: string[];
   childId: string;
+  farmEnabled: boolean;
 }): Promise<string | null> {
   if (args.parentCategoryId === args.childId) {
     return "A category cannot be its own parent";
@@ -32,6 +34,12 @@ async function validateParentReference(args: {
   const visible =
     parent.workspaceId === null || parent.workspaceId === args.workspaceId;
   if (!visible) return "Parent category not found";
+  // Masking leaves the farm rows in the table, so their ids stay valid FKs and
+  // a client can still patch one in raw. Same message as the visibility check
+  // above: to this workspace the parent simply isn't there.
+  if (!args.farmEnabled && isFarmParentCategory(parent)) {
+    return "Parent category not found";
+  }
   if (parent.parentCategoryId != null) {
     return "Cannot nest more than two levels — pick a top-level parent";
   }
@@ -81,6 +89,7 @@ export async function PATCH(
           workspaceId: ctx.workspaceId,
           childTypes: nextTypes,
           childId: id,
+          farmEnabled: ctx.farmEnabled,
         });
         if (err) {
           return NextResponse.json({ error: err }, { status: 400 });

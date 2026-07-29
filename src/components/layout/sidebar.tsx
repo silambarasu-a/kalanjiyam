@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { cn } from "@/lib/utils";
-import { getPermission } from "@/lib/permissions";
+import { getPermission, isFarmFeature } from "@/lib/permissions";
 import { NAV_GROUPS } from "./nav-config";
 import { NavIcon } from "./nav-icon";
 import { WorkspaceSwitcher } from "./workspace-switcher";
@@ -12,7 +12,13 @@ import { UserMenu } from "./user-menu";
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  // `useSession()` hands back data:null while it resolves, so treating "no
+  // session" as "show everything" flashed the Farm group on every hard load of
+  // a farm-off workspace. Non-farm groups stay optimistic during that window
+  // (the server is the real gate) so the sidebar doesn't blank out; farm
+  // groups wait until we actually know whether the module is on.
+  const loading = status === "loading";
 
   // Pick the single most-specific nav href that matches the current path.
   // Without this, items whose href is a prefix of a deeper item (e.g.
@@ -50,7 +56,9 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 pb-3">
         {NAV_GROUPS.map((group) => {
           const visibleItems = group.items.filter((item) =>
-            session ? getPermission(session, item.feature) !== "hidden" : true
+            loading
+              ? !isFarmFeature(item.feature)
+              : getPermission(session, item.feature) !== "hidden"
           );
           if (visibleItems.length === 0) return null;
           return (

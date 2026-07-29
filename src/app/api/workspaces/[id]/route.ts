@@ -34,6 +34,7 @@ export async function GET(
         owner: ws.owner,
         memberCount: ws._count.members,
         transactionEditWindowDays: ws.transactionEditWindowDays,
+        farmEnabled: ws.farmEnabled,
         // Surface the env default so the UI can show "(default: N days)"
         // alongside the per-workspace override.
         editWindowDefaultDays: TIMING.defaultEditWindowDays,
@@ -65,12 +66,16 @@ export async function PATCH(
         ...(parsed.data.transactionEditWindowDays !== undefined
           ? { transactionEditWindowDays: parsed.data.transactionEditWindowDays }
           : {}),
+        ...(parsed.data.farmEnabled !== undefined
+          ? { farmEnabled: parsed.data.farmEnabled }
+          : {}),
       },
     });
     return NextResponse.json({
       id: ws.id,
       name: ws.name,
       transactionEditWindowDays: ws.transactionEditWindowDays,
+      farmEnabled: ws.farmEnabled,
     });
   } catch (err) {
     return handleError(err);

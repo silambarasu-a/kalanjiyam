@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { ReminderKind, ReminderStatus } from "@/generated/prisma/client";
+import { FARM_REMINDER_KINDS } from "@/lib/farm-reminders";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -21,11 +22,26 @@ export async function GET(request: Request) {
     const until = new Date();
     until.setDate(until.getDate() + days);
 
+    // "reminders" isn't a farm feature, so the choke-point leaves this route
+    // open with the farm off — exclude the farm kinds explicitly. Asking for
+    // one by ?kind= collapses to an empty result rather than 403'ing, which
+    // keeps a stale bookmark harmless.
+    if (!ctx.farmEnabled && kind && FARM_REMINDER_KINDS.includes(kind)) {
+      return NextResponse.json({ reminders: [] });
+    }
+
     const reminders = await prisma.investmentReminder.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         status,
-        ...(kind ? { kind } : {}),
+        // One `kind` clause only — an explicit ?kind= wins (already known
+        // not to be a farm kind by the guard above), otherwise the farm
+        // kinds are excluded wholesale when the module is off.
+        ...(kind
+          ? { kind }
+          : ctx.farmEnabled
+            ? {}
+            : { kind: { notIn: FARM_REMINDER_KINDS } }),
         dueDate: { lte: until },
       },
       orderBy: { dueDate: "asc" },

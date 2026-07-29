@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import useSWR from "swr";
 import {
   AlertTriangle,
@@ -48,6 +49,10 @@ const fetcher = (url: string) =>
   );
 
 export default function NotificationsPage() {
+  const { data: session } = useSession();
+  // Leases are farm-only, so with the module off the API never returns a
+  // LEASE item — the hardcoded blurb and filter option would just lie.
+  const farmOn = session?.user.farmEnabled !== false;
   const [windowDays, setWindowDays] = useState<30 | 90 | 365>(90);
   const { data, isLoading } = useSWR<Payload>(
     `/api/notifications?days=${windowDays}`,
@@ -95,7 +100,8 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Loan EMIs, lease payments, and investment reminders due in the next{" "}
+            Loan EMIs, {farmOn ? "lease payments, " : ""}and investment
+            reminders due in the next{" "}
             {windowDays} days. Mark items as read when you&rsquo;ve handled them or
             don&rsquo;t need a nudge.
           </p>
@@ -157,7 +163,11 @@ export default function NotificationsPage() {
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2 pb-1">
-          <SourceSelect value={sourceFilter} onChange={setSourceFilter} />
+          <SourceSelect
+            value={sourceFilter}
+            onChange={setSourceFilter}
+            farmOn={farmOn}
+          />
           {tab !== "read" && counts.unread > 0 && (
             <Button
               size="sm"
@@ -348,9 +358,11 @@ function Stat({
 function SourceSelect({
   value,
   onChange,
+  farmOn,
 }: {
   value: SourceFilter;
   onChange: (v: SourceFilter) => void;
+  farmOn: boolean;
 }) {
   return (
     <select
@@ -362,7 +374,7 @@ function SourceSelect({
       <option value="all">All sources</option>
       <option value="LOAN">Loan EMIs</option>
       <option value="CARD_STATEMENT">Card bills</option>
-      <option value="LEASE">Lease payments</option>
+      {farmOn && <option value="LEASE">Lease payments</option>}
       <option value="REMINDER">Investment reminders</option>
     </select>
   );

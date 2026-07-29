@@ -5,14 +5,29 @@ import { usePathname } from "next/navigation";
 import { LogOut, Plus } from "lucide-react";
 import { NotificationsPopover } from "./notifications-popover";
 import { useSession, signOut } from "next-auth/react";
+import type { Session } from "next-auth";
+import { getPermission, isFarmFeature } from "@/lib/permissions";
 import { NAV_GROUPS } from "./nav-config";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { SessionTimer } from "@/components/session-timer";
 
-function findTitle(pathname: string): string {
+/**
+ * Title of the nav entry that owns this path — skipping entries the user
+ * can't see, so a deep link to a hidden route (a farm page in a workspace
+ * that runs no farm) doesn't announce "Crops" in the header.
+ *
+ * `loading` is the `useSession()` window where the session is still null:
+ * non-farm titles render optimistically then, farm titles don't, because we
+ * don't yet know whether the farm module is off.
+ */
+function findTitle(pathname: string, session: Session | null, loading: boolean): string {
   for (const g of NAV_GROUPS) {
     for (const i of g.items) {
-      if (pathname === i.href || pathname.startsWith(i.href + "/")) return i.label;
+      if (pathname !== i.href && !pathname.startsWith(i.href + "/")) continue;
+      const visible = loading
+        ? !isFarmFeature(i.feature)
+        : getPermission(session, i.feature) !== "hidden";
+      if (visible) return i.label;
     }
   }
   return "";
@@ -52,9 +67,9 @@ function lastLoginExact(iso: string | null): string | undefined {
 
 export function Header() {
   const pathname = usePathname();
-  const title = findTitle(pathname);
   const { openDialog } = useTransactionDialog();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const title = findTitle(pathname, session, status === "loading");
 
   const firstName = session?.user.name?.split(" ")[0] ?? null;
   const relLogin = formatLastLogin(session?.user.lastLoginAt ?? null);
@@ -104,8 +119,8 @@ export function Header() {
 
 export function MobileHeader() {
   const pathname = usePathname();
-  const title = findTitle(pathname);
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const title = findTitle(pathname, session, status === "loading");
   const relLogin = formatLastLogin(session?.user.lastLoginAt ?? null);
 
   return (

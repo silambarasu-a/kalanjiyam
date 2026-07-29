@@ -26,6 +26,27 @@ function err(e: unknown) {
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
+/**
+ * The kinds that only mean something on a farm. Superset of what
+ * transactionCreateSchema accepts (AGRI_INCOME, LEASE_INCOME, FARM_DEV,
+ * WAGE, FEED, VACCINATION) — the rest are minted by the farm routes
+ * themselves, but they're listed so the check doesn't quietly go stale if
+ * the create schema ever widens. Spelled out here because the Zod enum is
+ * module-private in validators-domain.
+ */
+const FARM_TRANSACTION_KINDS = new Set<string>([
+  "AGRI_INCOME",
+  "LEASE_INCOME",
+  "FARM_DEV",
+  "WAGE",
+  "FEED",
+  "VACCINATION",
+  "MILK_SALE",
+  "EGG_SALE",
+  "CONTRACT_PAYOUT",
+  "HEALTH_CARE",
+]);
+
 export async function GET(request: Request) {
   try {
     const ctx = await requireWorkspace("transactions", "read");
@@ -262,6 +283,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const data = parsed.data;
+
+    // "transactions" isn't a farm feature, so requireWorkspace lets this
+    // route through with the farm module off — but a stale tab or a
+    // hand-rolled POST can still arrive carrying farm linkage. Refuse it
+    // outright rather than dropping the tag silently, which would file the
+    // money against nothing and leave the user with no way to find it.
+    // (Existing farm rows are untouched: this only blocks NEW tags.)
+    if (!ctx.farmEnabled) {
+      const tagsFarm =
+        !!data.workerId ||
+        !!data.cropBatchId ||
+        !!data.livestockBatchId ||
+        // leaseId / leaseScheduleId aren't on transactionCreateSchema today
+        // (lease instalments are confirmed from the lease routes), so Zod
+        // strips them — read the raw body so a future widening of the
+        // schema can't slip past this gate.
+        !!body?.leaseId ||
+        !!body?.leaseScheduleId ||
+        (!!data.kind && FARM_TRANSACTION_KINDS.has(data.kind));
+      if (tagsFarm) {
+        return NextResponse.json(
+          { error: "Farm module is off for this workspace" },
+          { status: 400 },
+        );
+      }
+    }
 
     // Resolve account vs card. If a card is selected for payment, route the
     // transaction through the card's companion account so balance math works.
