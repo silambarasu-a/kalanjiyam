@@ -7,6 +7,8 @@ import { canModifyRecord } from "@/lib/permissions";
 import { initialNextBillDate } from "@/lib/bill-schedule";
 import { resyncPrepaidReminder } from "@/lib/prepaid-reminder";
 import {
+  ReminderKind,
+  ReminderStatus,
   UtilityAmountMode,
   UtilityBillCycle,
   UtilityKind,
@@ -58,6 +60,7 @@ export async function GET(
         recurring: p.recurring,
         billingCycle: p.billingCycle,
         billingDay: p.billingDay,
+        cycleVaries: p.cycleVaries,
         amountMode: p.amountMode,
         defaultAmount: p.defaultAmount != null ? Number(p.defaultAmount) : null,
         nextBillDate: p.nextBillDate?.toISOString() ?? null,
@@ -182,6 +185,11 @@ export async function PATCH(
           billingCycle:
             (d.billingCycle as UtilityBillCycle | undefined) ?? undefined,
           billingDay: billingDayToStore,
+          // Variable cadence only means anything for a provider that
+          // generates — turning recurrence off clears it too.
+          cycleVaries: effectiveRecurring
+            ? (d.cycleVaries === undefined ? undefined : d.cycleVaries)
+            : (existing.cycleVaries ? false : undefined),
           amountMode: (d.amountMode as UtilityAmountMode | undefined) ?? undefined,
           defaultAmount:
             d.defaultAmount === undefined ? undefined : d.defaultAmount,
@@ -204,6 +212,22 @@ export async function PATCH(
           workspaceId: ctx.workspaceId,
           providerId: id,
           validUntil: newValidUntil,
+        });
+      }
+      // A "check for the bill" prompt only makes sense while the provider
+      // is on a variable cadence. Once it isn't (cadence fixed, recurrence
+      // off, prepaid), any open prompt is orphaned — clear it rather than
+      // leave a reminder nothing will ever satisfy.
+      const stillVaries =
+        effectiveRecurring &&
+        (d.cycleVaries === undefined ? existing.cycleVaries : d.cycleVaries);
+      if (existing.cycleVaries && !stillVaries) {
+        await tx.investmentReminder.deleteMany({
+          where: {
+            utilityProviderId: id,
+            kind: ReminderKind.UTILITY_BILL_EXPECTED,
+            status: ReminderStatus.UPCOMING,
+          },
         });
       }
     });

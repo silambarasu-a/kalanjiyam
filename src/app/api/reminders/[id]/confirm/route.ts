@@ -89,6 +89,21 @@ export async function POST(
         { status: 400 },
       );
     }
+    if (reminder.kind === ReminderKind.UTILITY_BILL_EXPECTED) {
+      // Nothing to confirm — no bill exists yet. Confirming would record
+      // a payment for an amount nobody knows. Point at the provider so
+      // the user can add the real bill, which clears this prompt.
+      return NextResponse.json(
+        {
+          error:
+            "No bill recorded yet. Add the bill from the provider's page — that clears this reminder.",
+          link: reminder.utilityProviderId
+            ? `/bills/providers/${reminder.utilityProviderId}`
+            : "/bills",
+        },
+        { status: 400 },
+      );
+    }
     if (reminder.kind === ReminderKind.UTILITY_RECHARGE_DUE) {
       // Prepaid recharges have their own flow (records the payment AND
       // extends validity). The generic confirm would mark it done without

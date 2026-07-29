@@ -1559,6 +1559,10 @@ const utilityProviderBase = z.object({
   recurring: z.boolean().optional(),
   billingCycle: utilityBillCycleEnum.optional(),
   billingDay: z.number().int().min(1).max(31).optional().nullable(),
+  // Cadence is an expectation, not a schedule (electricity). Suppresses
+  // placeholder generation in favour of a "check for the bill" prompt,
+  // and lets each real bill re-anchor the cursor. See utility-cycle.ts.
+  cycleVaries: z.boolean().optional(),
   amountMode: utilityAmountModeEnum.optional(),
   defaultAmount: z.number().positive().max(10_000_000).optional().nullable(),
   status: utilityProviderStatusEnum.optional(),
@@ -1662,18 +1666,53 @@ export const utilityRechargeSchema = z
     path: ["accountId"],
   });
 
-export const utilityBillCreateSchema = z.object({
+const utilityBillBase = z.object({
   clientId: z.string().uuid().optional().nullable(),
   providerId: z.string().uuid(),
   billDate: z.string().min(1),
   dueDate: z.string().min(1),
+  // Actual service window printed on the bill. Optional — omitted, the
+  // period is derived from the provider's nominal cycle. Recording it is
+  // what keeps labels/descriptions/analytics right when a variable-
+  // cadence connection (electricity) bills off its usual rhythm.
+  periodFrom: z.string().optional().nullable(),
+  periodTo: z.string().optional().nullable(),
   billAmount: z.number().positive().max(10_000_000),
   previousReading: z.number().nonnegative().max(99_999_999).optional().nullable(),
   currentReading: z.number().nonnegative().max(99_999_999).optional().nullable(),
   notes: z.string().trim().max(1000).optional().nullable(),
 });
 
-export const utilityBillUpdateSchema = utilityBillCreateSchema.partial();
+// A period is either fully specified or not specified — a lone endpoint
+// would have the server invent the other one. Ordering is checked here so
+// the routes never persist a window that ends before it starts.
+function billPeriodWellFormed(d: {
+  periodFrom?: string | null;
+  periodTo?: string | null;
+}): boolean {
+  const from = d.periodFrom?.trim() || null;
+  const to = d.periodTo?.trim() || null;
+  if (!from && !to) return true;
+  if (!from || !to) return false;
+  const a = new Date(from);
+  const b = new Date(to);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return false;
+  return b >= a;
+}
+
+const PERIOD_ISSUE = {
+  message: "Set both period dates, ending on or after the start",
+  path: ["periodTo"] as PropertyKey[],
+};
+
+export const utilityBillCreateSchema = utilityBillBase.refine(
+  billPeriodWellFormed,
+  PERIOD_ISSUE,
+);
+
+export const utilityBillUpdateSchema = utilityBillBase
+  .partial()
+  .refine(billPeriodWellFormed, PERIOD_ISSUE);
 
 export const utilityBillPaySchema = z
   .object({

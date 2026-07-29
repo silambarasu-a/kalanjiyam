@@ -46,6 +46,7 @@ type Props = {
     recurring?: boolean;
     billingCycle?: BillingCycle | null;
     billingDay?: number | null;
+    cycleVaries?: boolean;
     amountMode?: "FIXED" | "VARIABLE" | null;
     defaultAmount?: number | null;
     prepaid?: boolean;
@@ -102,6 +103,10 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const [billingDay, setBillingDay] = useState(
     initial?.billingDay?.toString() ?? "",
   );
+  // Cadence is an expectation, not a schedule — electricity connections
+  // bill after a month or after two. Switches generation off in favour of
+  // a "check for the bill" reminder.
+  const [cycleVaries, setCycleVaries] = useState(initial?.cycleVaries ?? false);
   const [amountMode, setAmountMode] = useState<"FIXED" | "VARIABLE">(
     initial?.amountMode ?? "VARIABLE",
   );
@@ -144,7 +149,7 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   async function submit() {
     setError(null);
     if (!providerName.trim()) return setError("Provider name is required");
-    if (!prepaid && recurring && amountMode === "FIXED") {
+    if (!prepaid && recurring && !cycleVaries && amountMode === "FIXED") {
       const amt = Number(defaultAmount);
       if (!amt || amt <= 0)
         return setError("Set a monthly amount for a fixed recurring bill");
@@ -174,7 +179,10 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
         recurring: prepaid ? false : recurring,
         billingCycle,
         billingDay: !prepaid && recurring && billingDay ? Number(billingDay) : null,
-        amountMode,
+        cycleVaries: !prepaid && recurring ? cycleVaries : false,
+        // A varying cadence means the bill is always entered by hand, so
+        // there is no "fixed amount each cycle" to auto-charge.
+        amountMode: !prepaid && recurring && cycleVaries ? "VARIABLE" : amountMode,
         defaultAmount: defaultAmount ? Number(defaultAmount) : null,
         prepaid,
         validUntil: prepaid && validUntil ? validUntil : null,
@@ -410,11 +418,12 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
             checked={recurring}
             onChange={(e) => setRecurring(e.target.checked)}
           />
-          Auto-create this bill on a schedule
+          Track this bill on a cycle
         </label>
         <p className="pl-6 text-[11px] text-muted-foreground">
-          A new bill is added for you each cycle — no more entering it by
-          hand.
+          {recurring && cycleVaries
+            ? "You'll be reminded when a bill is due to arrive, and enter the real one."
+            : "A new bill is added for you each cycle — no more entering it by hand."}
         </p>
         {recurring && (
           <div className="space-y-3 pl-6">
@@ -428,7 +437,9 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
                 />
               </div>
               <div>
-                <Label>Statement day (1–31)</Label>
+                <Label>
+                  {cycleVaries ? "Expected statement day (1–31)" : "Statement day (1–31)"}
+                </Label>
                 <Input
                   value={billingDay}
                   onChange={(e) =>
@@ -438,13 +449,44 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-2 rounded-md border bg-background p-2.5 text-xs font-medium">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={cycleVaries}
+                onChange={(e) => setCycleVaries(e.target.checked)}
+              />
+              <span>
+                The gap between bills varies
+                <span className="mt-0.5 block font-normal text-muted-foreground">
+                  For connections like TNEB, where a bill can arrive after
+                  one month or after two. Nothing is auto-created — you get
+                  a reminder to enter the real bill, and each one you add
+                  re-times the next reminder.
+                </span>
+              </span>
+            </label>
+
             <p className="text-[11px] text-muted-foreground">
-              The bill is issued on the statement day and covers the
-              <strong> previous</strong> {billingCycle === "MONTHLY" ? "month" : "cycle"} (postpaid).
-              Payment is then due per the <strong>Due date</strong> rule set
-              above — a later date, before which auto-pay runs.
+              {cycleVaries ? (
+                <>
+                  The cycle above is only used to <strong>time the
+                  reminder</strong>. Payment is due per the{" "}
+                  <strong>Due date</strong> rule set above, counted from the
+                  bill you enter.
+                </>
+              ) : (
+                <>
+                  The bill is issued on the statement day and covers the
+                  <strong> previous</strong>{" "}
+                  {billingCycle === "MONTHLY" ? "month" : "cycle"} (postpaid).
+                  Payment is then due per the <strong>Due date</strong> rule
+                  set above — a later date, before which auto-pay runs.
+                </>
+              )}
             </p>
-            <div>
+            <div className={cycleVaries ? "hidden" : undefined}>
               <Label>Amount</Label>
               <div className="mt-1 flex gap-2 text-xs">
                 {(
@@ -468,7 +510,9 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
                 ))}
               </div>
             </div>
-            <div>
+            {/* No bill is generated on a varying cadence, so there is
+                nothing for a default amount to seed. */}
+            <div className={cycleVaries ? "hidden" : undefined}>
               <Label>
                 {amountMode === "FIXED"
                   ? "Amount each cycle"

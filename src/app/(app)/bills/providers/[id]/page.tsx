@@ -50,7 +50,7 @@ import { RechargeDialog } from "@/components/bills/recharge-dialog";
 import { UtilityBillForm } from "@/components/bills/utility-bill-form";
 import { PayBillDialog } from "@/components/bills/pay-bill-dialog";
 import { EnterBillAmountDialog } from "@/components/bills/enter-bill-amount-dialog";
-import { billPeriodRange } from "@/lib/bill-schedule";
+import { billPeriodRange, periodDays } from "@/lib/bill-schedule";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -71,6 +71,7 @@ type Provider = {
   recurring: boolean;
   billingCycle: "MONTHLY" | "BIMONTHLY" | "QUARTERLY" | "HALF_YEARLY" | "YEARLY";
   billingDay: number | null;
+  cycleVaries: boolean;
   amountMode: "FIXED" | "VARIABLE";
   defaultAmount: number | null;
   nextBillDate: string | null;
@@ -87,6 +88,8 @@ type Bill = {
   providerId: string;
   billDate: string;
   dueDate: string;
+  periodFrom: string | null;
+  periodTo: string | null;
   billAmount: number;
   previousReading: number | null;
   currentReading: number | null;
@@ -121,13 +124,12 @@ const CYCLE_LABEL: Record<Provider["billingCycle"], string> = {
   YEARLY: "every year",
 };
 
-// Compact service-period label ("04 May – 03 Jun") for a bill, computed
-// from its statement date + the provider's billing cycle (arrears).
-function periodLabel(
-  billDateIso: string,
-  cycle: Provider["billingCycle"],
-): string {
-  const { from, to } = billPeriodRange(new Date(billDateIso), cycle);
+// Compact service-period label ("04 May – 03 Jun") for a bill. Uses the
+// window recorded on the bill when there is one, falling back to the
+// cycle-derived guess — a bimonthly connection that issued a one-month
+// bill must not be labelled as covering two.
+function periodLabel(bill: Bill, cycle: Provider["billingCycle"]): string {
+  const { from, to } = billPeriodRange(new Date(bill.billDate), cycle, bill);
   const f = (d: Date) =>
     d.toLocaleDateString("en-IN", {
       day: "2-digit",
@@ -171,34 +173,68 @@ export default function ProviderDetailPage({
     [bills],
   );
 
+  // Last 12 months of units (EB) and cost, with each bill SPREAD across
+  // the calendar months its service window actually touches, pro rata by
+  // days. Dropping a bill's whole total into the month of its statement
+  // date only works when one bill == one month; a bimonthly connection
+  // would spike one bar and leave its neighbour empty, and a connection
+  // that alternates between one- and two-month bills would be
+  // uninterpretable. `days` records how much of each month a bill
+  // covered, so downstream averages can tell "no spend" from "no data".
   const monthlyChart = useMemo(() => {
-    // Last 12 months — units (if EB) and amount.
-    const months: { month: string; units: number; cost: number }[] = [];
-    const cursor = new Date();
-    cursor.setDate(1);
-    cursor.setHours(0, 0, 0, 0);
+    const cycle = provider?.billingCycle ?? "MONTHLY";
+    const now = new Date();
+    const months: {
+      month: string;
+      units: number;
+      cost: number;
+      days: number;
+    }[] = [];
+    const indexByMonth = new Map<string, number>();
     for (let i = 11; i >= 0; i--) {
-      const ref = new Date(cursor);
-      ref.setMonth(ref.getMonth() - i);
+      const ref = new Date(Date.UTC(now.getFullYear(), now.getMonth() - i, 1));
+      indexByMonth.set(`${ref.getUTCFullYear()}-${ref.getUTCMonth()}`, months.length);
       months.push({
-        month: ref.toLocaleDateString("en-IN", { month: "short" }),
+        month: ref.toLocaleDateString("en-IN", {
+          month: "short",
+          timeZone: "UTC",
+        }),
         units: 0,
         cost: 0,
+        days: 0,
       });
     }
     for (const b of bills) {
-      const d = new Date(b.billDate);
-      const monthsBack =
-        (cursor.getFullYear() - d.getFullYear()) * 12 +
-        (cursor.getMonth() - d.getMonth());
-      const idx = 11 - monthsBack;
-      if (idx >= 0 && idx < months.length) {
-        months[idx].units += b.unitsConsumed ?? 0;
-        months[idx].cost += b.billAmount;
+      const { from, to } = billPeriodRange(new Date(b.billDate), cycle, b);
+      const total = periodDays(from, to);
+      let segStart = from;
+      while (segStart <= to) {
+        // Last day of the calendar month `segStart` falls in.
+        const monthEnd = new Date(
+          Date.UTC(segStart.getUTCFullYear(), segStart.getUTCMonth() + 1, 0),
+        );
+        const segEnd = monthEnd < to ? monthEnd : to;
+        const idx = indexByMonth.get(
+          `${segStart.getUTCFullYear()}-${segStart.getUTCMonth()}`,
+        );
+        const days = periodDays(segStart, segEnd);
+        if (idx != null) {
+          const share = days / total;
+          months[idx].units += (b.unitsConsumed ?? 0) * share;
+          months[idx].cost += b.billAmount * share;
+          months[idx].days += days;
+        }
+        segStart = new Date(
+          Date.UTC(
+            segEnd.getUTCFullYear(),
+            segEnd.getUTCMonth(),
+            segEnd.getUTCDate() + 1,
+          ),
+        );
       }
     }
     return months;
-  }, [bills]);
+  }, [bills, provider?.billingCycle]);
 
   const costPerUnit = useMemo(
     () =>
@@ -219,13 +255,28 @@ export default function ProviderDetailPage({
     );
   }
 
-  const thisMonthBill = bills.find((b) => {
-    const d = new Date(b.billDate);
-    const t = new Date();
-    return d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear();
-  });
+  // "This month" is meaningless on anything but a monthly connection —
+  // a bimonthly one has no statement half the time. Show the bill whose
+  // service window covers today instead, falling back to the most recent.
+  const today = new Date();
+  const currentBill =
+    bills.find((b) => {
+      const { from, to } = billPeriodRange(
+        new Date(b.billDate),
+        provider.billingCycle,
+        b,
+      );
+      return today >= from && today <= to;
+    }) ??
+    [...bills].sort(
+      (a, b) => new Date(b.billDate).getTime() - new Date(a.billDate).getTime(),
+    )[0];
   const last12Spend = monthlyChart.reduce((s, m) => s + m.cost, 0);
-  const avgMonthly = last12Spend / 12;
+  // Average over months a bill actually covered. Dividing by a flat 12
+  // under-reports whenever history is shorter than a year, or when the
+  // last bill's window hasn't closed yet.
+  const monthsCovered = monthlyChart.filter((m) => m.days > 0).length;
+  const avgMonthly = monthsCovered > 0 ? last12Spend / monthsCovered : 0;
 
   async function handleHardDelete() {
     const res = await fetch(`/api/utility-providers/${id}?hard=1`, {
@@ -327,8 +378,8 @@ export default function ProviderDetailPage({
                   value={formatINR(provider.advanceBalance)}
                 />
                 <KpiCard
-                  label="This month"
-                  value={thisMonthBill ? formatINR(thisMonthBill.billAmount) : "—"}
+                  label="Current bill"
+                  value={currentBill ? formatINR(currentBill.billAmount) : "—"}
                 />
                 <KpiCard label="Last 12mo" value={formatINR(last12Spend)} />
                 <KpiCard label="Avg / mo" value={formatINR(avgMonthly)} />
@@ -509,17 +560,32 @@ export default function ProviderDetailPage({
             )}
             {provider.recurring && (
               <div className="mt-2 rounded-md bg-muted/50 px-2 py-1.5 text-[11px] text-muted-foreground">
-                <span className="font-medium text-foreground">
-                  Auto-creates{" "}
-                  {provider.amountMode === "FIXED"
-                    ? `${formatINR(provider.defaultAmount ?? 0)} `
-                    : "an estimated "}
-                  bill
-                </span>{" "}
-                {CYCLE_LABEL[provider.billingCycle]}
-                {provider.nextBillDate
-                  ? ` · next ${fmtDate(provider.nextBillDate)}`
-                  : ""}
+                {provider.cycleVaries ? (
+                  <>
+                    <span className="font-medium text-foreground">
+                      Reminds you to enter the bill
+                    </span>{" "}
+                    — expected {CYCLE_LABEL[provider.billingCycle]}, but the
+                    gap varies
+                    {provider.nextBillDate
+                      ? ` · next check ${fmtDate(provider.nextBillDate)}`
+                      : ""}
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground">
+                      Auto-creates{" "}
+                      {provider.amountMode === "FIXED"
+                        ? `${formatINR(provider.defaultAmount ?? 0)} `
+                        : "an estimated "}
+                      bill
+                    </span>{" "}
+                    {CYCLE_LABEL[provider.billingCycle]}
+                    {provider.nextBillDate
+                      ? ` · next ${fmtDate(provider.nextBillDate)}`
+                      : ""}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -576,6 +642,7 @@ export default function ProviderDetailPage({
                 recurring: provider.recurring,
                 billingCycle: provider.billingCycle,
                 billingDay: provider.billingDay,
+                cycleVaries: provider.cycleVaries,
                 amountMode: provider.amountMode,
                 defaultAmount: provider.defaultAmount,
                 prepaid: provider.prepaid,
@@ -643,12 +710,17 @@ export default function ProviderDetailPage({
               providerName: provider.providerName,
               defaultDueDay: provider.defaultDueDay,
               gracePeriodDays: provider.gracePeriodDays,
+              billingCycle: provider.billingCycle,
+              cycleVaries: provider.cycleVaries,
             }}
             previousMeterReading={lastPaidBill?.currentReading ?? null}
             onSaved={() => {
               setNewBillOpen(false);
               globalMutate(`/api/utility-bills?providerId=${id}`);
               globalMutate(`/api/utility-providers/${id}`);
+              // Recording a bill re-anchors the cadence and can clear an
+              // open "bill expected" prompt.
+              globalMutate("/api/reminders?status=UPCOMING");
             }}
             onCancel={() => setNewBillOpen(false)}
           />}
@@ -683,7 +755,10 @@ export default function ProviderDetailPage({
         <EnterBillAmountDialog
           bill={{
             id: enterAmountBill.id,
+            billDate: enterAmountBill.billDate,
             billAmount: enterAmountBill.billAmount,
+            periodFrom: enterAmountBill.periodFrom,
+            periodTo: enterAmountBill.periodTo,
             previousReading: enterAmountBill.previousReading,
             currentReading: enterAmountBill.currentReading,
           }}
@@ -693,6 +768,8 @@ export default function ProviderDetailPage({
             globalMutate(`/api/utility-bills?providerId=${id}`);
             globalMutate(`/api/utility-providers/${id}`);
             globalMutate("/api/utility-providers");
+            // Confirming a placeholder re-anchors the cadence.
+            globalMutate("/api/reminders?status=UPCOMING");
           }}
         />
       )}
@@ -884,7 +961,7 @@ function BillsTable({
                   <td className="px-3 py-2 text-xs">
                     {fmtDate(b.billDate)}
                     <div className="text-[10px] text-muted-foreground">
-                      covers {periodLabel(b.billDate, provider.billingCycle)}
+                      covers {periodLabel(b, provider.billingCycle)}
                     </div>
                   </td>
                   <td className="px-3 py-2 text-xs">

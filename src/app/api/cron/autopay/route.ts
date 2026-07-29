@@ -371,6 +371,9 @@ async function runBills(today: Date) {
               providerName: provider.providerName,
               billDate: bill.billDate,
               cycle: provider.billingCycle,
+              // Prefer the window recorded on the bill over the cycle
+              // guess — see the manual pay route.
+              period: bill,
             }),
             date: paidOn,
             categoryId,

@@ -246,6 +246,9 @@ enum NotificationKind {
   SUBSCRIPTION_RENEWAL_DUE
   UTILITY_BILL_DUE_SOON
   UTILITY_BILL_OVERDUE
+  // Variable-cadence connection whose bill is expected around now —
+  // prompt to check the meter/portal and enter it. No amount attached.
+  UTILITY_BILL_EXPECTED
   // Prepaid connection (JioAirFiber, mobile prepaid, …) whose recharge
   // validity is running out — prompt to recharge before it expires.
   UTILITY_RECHARGE_DUE_SOON
@@ -380,6 +383,10 @@ enum ReminderKind {
   VEHICLE_DOC_RENEWAL
   SUBSCRIPTION_RENEWAL
   UTILITY_BILL_DUE
+  // A variable-cadence provider (`cycleVaries`) is around due to issue a
+  // bill. Not payable — it prompts the user to check and enter the real
+  // bill. dueDate = the expected statement date.
+  UTILITY_BILL_EXPECTED
   // Prepaid recharge validity expiring (dueDate = the validity date).
   UTILITY_RECHARGE_DUE
   VACCINATION_DUE
@@ -1597,6 +1604,15 @@ model UtilityProvider {
   recurring         Boolean               @default(false)
   billingCycle      UtilityBillCycle      @default(MONTHLY)
   billingDay        Int?
+  // Real-world cadences drift. TN electricity is nominally bimonthly but
+  // a bill can land after one month or after ten weeks, so a fixed grid
+  // either mints phantom bills or misses real ones. When `cycleVaries`,
+  // `billingCycle` is treated as an EXPECTATION, not a schedule:
+  //   • the generator raises a UTILITY_BILL_EXPECTED reminder ("go check
+  //     for the bill") instead of creating a placeholder UtilityBill;
+  //   • `nextBillDate` re-anchors off each REAL bill's date rather than
+  //     marching on its own grid, so the two never drift apart.
+  cycleVaries       Boolean               @default(false)
   amountMode        UtilityAmountMode     @default(VARIABLE)
   defaultAmount     Decimal?              @db.Decimal(14, 2)
   // Next date the generator should emit a bill for this provider. Null
@@ -1642,6 +1658,15 @@ model UtilityBill {
   provider          UtilityProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
   billDate          DateTime        @db.Date
   dueDate           DateTime        @db.Date
+  // Actual service window printed on the bill (inclusive both ends).
+  // Nullable: legacy rows and quick entries fall back to deriving the
+  // window from the provider's cycle (see `billPeriodRange`). Recording
+  // it is what keeps the period chip, the ledger description and the
+  // per-month analytics honest when the real cadence drifts off the
+  // nominal cycle — a 1-month EB bill on a bimonthly connection would
+  // otherwise be described, and charted, as covering two months.
+  periodFrom        DateTime?       @db.Date
+  periodTo          DateTime?       @db.Date
   billAmount        Decimal         @db.Decimal(14, 2)
   // Meter readings — required for ELECTRICITY, optional otherwise.
   // unitsConsumed = currentReading - previousReading when both present.

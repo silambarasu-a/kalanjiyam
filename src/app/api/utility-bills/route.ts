@@ -5,6 +5,8 @@ import {
   utilityBillCreateSchema,
   utilityBillListQuerySchema,
 } from "@/lib/validators-domain";
+import { derivedBillPeriod } from "@/lib/bill-schedule";
+import { anchorCursorToBill } from "@/lib/utility-cycle";
 import {
   ReminderKind,
   type Prisma,
@@ -122,6 +124,8 @@ export async function GET(request: Request) {
         provider: b.provider,
         billDate: b.billDate.toISOString(),
         dueDate: b.dueDate.toISOString(),
+        periodFrom: b.periodFrom?.toISOString() ?? null,
+        periodTo: b.periodTo?.toISOString() ?? null,
         billAmount: Number(b.billAmount),
         previousReading: b.previousReading ? Number(b.previousReading) : null,
         currentReading: b.currentReading ? Number(b.currentReading) : null,
@@ -173,6 +177,14 @@ export async function POST(request: Request) {
 
     const billDate = parseDate(d.billDate);
     const dueDate = parseDate(d.dueDate);
+    // Service window as printed on the bill. Validated as both-or-neither
+    // upstream; absent, we fall back to the cycle-derived guess so every
+    // bill still charts and describes itself with a real span.
+    const derived = derivedBillPeriod(billDate, provider.billingCycle);
+    const periodFrom = d.periodFrom?.trim()
+      ? parseDate(d.periodFrom)
+      : derived.from;
+    const periodTo = d.periodTo?.trim() ? parseDate(d.periodTo) : derived.to;
 
     // Auto-compute units consumed for ELECTRICITY when both readings present.
     let unitsConsumed: number | null = null;
@@ -195,6 +207,8 @@ export async function POST(request: Request) {
           providerId: provider.id,
           billDate,
           dueDate,
+          periodFrom,
+          periodTo,
           billAmount: d.billAmount,
           previousReading: d.previousReading ?? null,
           currentReading: d.currentReading ?? null,
@@ -211,6 +225,11 @@ export async function POST(request: Request) {
           amount: d.billAmount,
         },
       });
+      // A real bill is the authoritative anchor for the cadence — the
+      // next one is expected a cycle after THIS statement, not a cycle
+      // after whatever the generator's grid last predicted. Also clears
+      // any open "bill expected" prompt for a variable-cadence provider.
+      await anchorCursorToBill(tx, provider, billDate);
       return bill;
     });
 

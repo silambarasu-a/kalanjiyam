@@ -15,6 +15,8 @@ import {
   type InstantAttachmentUploaderHandle,
 } from "@/components/attachments/instant-attachment-uploader";
 import type { UtilityKindValue } from "@/components/bills/utility-kind";
+import { derivedBillPeriod } from "@/lib/bill-schedule";
+import type { UtilityBillCycle } from "@/generated/prisma/client";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Provider = {
@@ -27,6 +29,12 @@ type Provider = {
   /** Days after the bill date until it's due (grace period). Takes
    *  precedence over defaultDueDay for the due-date prefill. */
   gracePeriodDays?: number | null;
+  /** Nominal cadence — seeds the "period covered" prefill. */
+  billingCycle?: UtilityBillCycle | null;
+  /** True when the gap between bills isn't reliable (electricity). The
+   *  period prefill is then a guess worth checking, so it's shown
+   *  expanded rather than tucked away. */
+  cycleVaries?: boolean;
 };
 
 type Props = {
@@ -111,6 +119,38 @@ export function UtilityBillForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Service window the bill covers. Seeded from the provider's nominal
+  // cycle and re-seeded as the statement date moves — until the user
+  // edits it, at which point their dates stick (same override pattern as
+  // previousReading above). Recording the real window is what keeps the
+  // period label, the ledger description and the per-month charts honest
+  // when a connection bills off its usual rhythm.
+  const [periodOverride, setPeriodOverride] = useState<{
+    from: string;
+    to: string;
+  } | null>(null);
+  const derivedPeriod = useMemo(() => {
+    const stmt = new Date(`${billDate}T00:00:00Z`);
+    if (!billDate || Number.isNaN(stmt.getTime())) return { from: "", to: "" };
+    const { from, to } = derivedBillPeriod(
+      stmt,
+      provider.billingCycle ?? "MONTHLY",
+    );
+    return {
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+    };
+  }, [billDate, provider.billingCycle]);
+  const periodFrom = periodOverride?.from ?? derivedPeriod.from;
+  const periodTo = periodOverride?.to ?? derivedPeriod.to;
+  const periodLength = useMemo(() => {
+    if (!periodFrom || !periodTo) return null;
+    const a = new Date(`${periodFrom}T00:00:00Z`).getTime();
+    const b = new Date(`${periodTo}T00:00:00Z`).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b) || b < a) return null;
+    return Math.round((b - a) / 86_400_000) + 1;
+  }, [periodFrom, periodTo]);
+
   const unitsConsumed = useMemo(() => {
     if (provider.kind !== "ELECTRICITY") return null;
     const prev = Number(previousReading);
@@ -124,6 +164,8 @@ export function UtilityBillForm({
     const amountNum = Number(billAmount);
     if (!Number.isFinite(amountNum) || amountNum <= 0)
       return setError("Enter a positive bill amount");
+    if (periodFrom && periodTo && periodLength == null)
+      return setError("The period must end on or after it starts");
     setSubmitting(true);
     try {
       const payload = {
@@ -131,6 +173,8 @@ export function UtilityBillForm({
         providerId: provider.id,
         billDate,
         dueDate,
+        periodFrom: periodFrom || null,
+        periodTo: periodTo || null,
         billAmount: amountNum,
         previousReading:
           previousReading !== "" ? Number(previousReading) : null,
@@ -168,6 +212,35 @@ export function UtilityBillForm({
         <div>
           <Label>Due date</Label>
           <DateInput value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        </div>
+        <div className="col-span-2 rounded-md border bg-muted/20 p-2.5">
+          <div className="flex items-baseline justify-between">
+            <Label className="mb-0">Period covered</Label>
+            <span className="text-[10px] text-muted-foreground">
+              {periodLength != null
+                ? `${periodLength} days`
+                : "ends before it starts"}
+            </span>
+          </div>
+          <div className="mt-1.5 grid grid-cols-2 gap-3">
+            <DateInput
+              value={periodFrom}
+              onChange={(e) =>
+                setPeriodOverride({ from: e.target.value, to: periodTo })
+              }
+            />
+            <DateInput
+              value={periodTo}
+              onChange={(e) =>
+                setPeriodOverride({ from: periodFrom, to: e.target.value })
+              }
+            />
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            {provider.cycleVaries
+              ? "This connection doesn't bill on a fixed gap — copy the dates from the bill so charts compare like with like."
+              : "Prefilled from the billing cycle. Correct it if the bill says otherwise."}
+          </p>
         </div>
         <div className="col-span-2">
           <Label>Bill amount</Label>

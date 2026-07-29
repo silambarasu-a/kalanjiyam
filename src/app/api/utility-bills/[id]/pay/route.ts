@@ -193,6 +193,10 @@ export async function POST(
               providerName: provider.providerName,
               billDate: bill.billDate,
               cycle: provider.billingCycle,
+              // The window the bill itself states, when recorded — the
+              // cycle-derived guess would misdescribe an off-cycle bill,
+              // and this string is permanent in the ledger.
+              period: bill,
             }),
           date: paidOn,
           categoryId,

@@ -628,6 +628,10 @@ export async function getDashboardCashflow(args: {
     // and a Recharge link. Skip here so it doesn't show a raw enum label
     // and dead-end at the generic confirm dialog (which rejects it).
     if (r.kind === "UTILITY_RECHARGE_DUE") continue;
+    // "Bill expected" carries no amount and no bill to pay — it's a
+    // prompt to go enter one. Showing it among Dues would put a ₹0 row
+    // in the payables list and dead-end at the confirm dialog.
+    if (r.kind === "UTILITY_BILL_EXPECTED") continue;
     const label =
       r.subscription?.name ??
       (r.utilityBill?.provider

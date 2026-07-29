@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { utilityBillUpdateSchema } from "@/lib/validators-domain";
 import { revertUtilityBillPay } from "@/lib/cascades";
+import { derivedBillPeriod } from "@/lib/bill-schedule";
+import { anchorCursorToBill } from "@/lib/utility-cycle";
 import type { UtilityBill } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -93,6 +95,8 @@ export async function GET(
           : null,
         billDate: bill.billDate.toISOString(),
         dueDate: bill.dueDate.toISOString(),
+        periodFrom: bill.periodFrom?.toISOString() ?? null,
+        periodTo: bill.periodTo?.toISOString() ?? null,
         billAmount: Number(bill.billAmount),
         previousReading: bill.previousReading ? Number(bill.previousReading) : null,
         currentReading: bill.currentReading ? Number(bill.currentReading) : null,
@@ -157,28 +161,72 @@ export async function PATCH(
     // Confirming a real amount on an auto-generated VARIABLE placeholder
     // clears the `estimated` flag — that makes it autopay-eligible.
     const confirmEstimated = bill.estimated && d.billAmount != null;
-    await prisma.utilityBill.update({
-      where: { id },
-      data: {
-        billDate,
-        dueDate,
-        billAmount: d.billAmount ?? undefined,
-        previousReading:
-          d.previousReading === undefined ? undefined : d.previousReading,
-        currentReading:
-          d.currentReading === undefined ? undefined : d.currentReading,
-        unitsConsumed,
-        estimated: confirmEstimated ? false : undefined,
-        notes: d.notes === undefined ? undefined : d.notes,
+
+    // The provider owns the cadence, so it's needed both to derive a
+    // fallback service window and to re-anchor the generator cursor.
+    const provider = await prisma.utilityProvider.findFirst({
+      where: { id: bill.providerId, workspaceId: ctx.workspaceId },
+      select: {
+        id: true,
+        recurring: true,
+        prepaid: true,
+        billingCycle: true,
+        cycleVaries: true,
       },
     });
-    // Sync the reminder due date if it changed.
-    if (dueDate) {
-      await prisma.investmentReminder.updateMany({
-        where: { utilityBillId: id, status: "UPCOMING" },
-        data: { dueDate, amount: d.billAmount ?? bill.billAmount },
-      });
+    if (!provider) {
+      return NextResponse.json({ error: "Provider not found" }, { status: 404 });
     }
+
+    // Service window. An explicit period always wins. Otherwise, moving
+    // the statement date invalidates whatever window was on the row, so
+    // re-derive from the new date; an unchanged date leaves it alone.
+    // (The confirm dialog sends the period whenever it sends a date, so
+    // the re-derive is a fallback for programmatic callers.)
+    let periodFrom: Date | null | undefined = undefined;
+    let periodTo: Date | null | undefined = undefined;
+    if (d.periodFrom !== undefined || d.periodTo !== undefined) {
+      const hasBoth = !!d.periodFrom?.trim() && !!d.periodTo?.trim();
+      periodFrom = hasBoth ? parseDate(d.periodFrom!) : null;
+      periodTo = hasBoth ? parseDate(d.periodTo!) : null;
+    } else if (billDate) {
+      const derived = derivedBillPeriod(billDate, provider.billingCycle);
+      periodFrom = derived.from;
+      periodTo = derived.to;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.utilityBill.update({
+        where: { id },
+        data: {
+          billDate,
+          dueDate,
+          periodFrom,
+          periodTo,
+          billAmount: d.billAmount ?? undefined,
+          previousReading:
+            d.previousReading === undefined ? undefined : d.previousReading,
+          currentReading:
+            d.currentReading === undefined ? undefined : d.currentReading,
+          unitsConsumed,
+          estimated: confirmEstimated ? false : undefined,
+          notes: d.notes === undefined ? undefined : d.notes,
+        },
+      });
+      // Sync the reminder due date if it changed.
+      if (dueDate) {
+        await tx.investmentReminder.updateMany({
+          where: { utilityBillId: id, status: "UPCOMING" },
+          data: { dueDate, amount: d.billAmount ?? bill.billAmount },
+        });
+      }
+      // Re-anchor the cadence when this edit made the row a real,
+      // real-dated bill: a moved statement date changes the anchor, and
+      // confirming a placeholder's amount turns a guess into a fact.
+      if (billDate || confirmEstimated) {
+        await anchorCursorToBill(tx, provider, billDate ?? bill.billDate);
+      }
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     return err(e);

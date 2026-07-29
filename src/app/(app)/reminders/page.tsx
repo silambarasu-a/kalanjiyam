@@ -35,6 +35,7 @@ type Reminder = {
     | "VEHICLE_DOC_RENEWAL"
     | "SUBSCRIPTION_RENEWAL"
     | "UTILITY_BILL_DUE"
+    | "UTILITY_BILL_EXPECTED"
     | "UTILITY_RECHARGE_DUE";
   dueDate: string;
   amount: number | null;
@@ -241,6 +242,45 @@ function ReminderRow({
             Open provider
           </Button>
         </Link>
+      </div>
+    );
+  }
+  // Variable-cadence connection (electricity): the bill is expected but
+  // hasn't been recorded, so there is nothing to confirm or pay. Prompt
+  // the user to go add it — doing so clears this reminder automatically.
+  if (reminder.kind === "UTILITY_BILL_EXPECTED" && reminder.utilityProvider) {
+    const late = new Date(reminder.dueDate) < new Date();
+    return (
+      <div className="flex items-center gap-3 px-5 py-3">
+        <Clock
+          className={`h-4 w-4 shrink-0 ${late ? "text-amber-600" : "text-primary"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">
+            {reminder.utilityProvider.providerName} bill
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {late ? "Was expected " : "Expected around "}
+            {formatDate(reminder.dueDate)} · not entered yet
+          </div>
+        </div>
+        <Link href={`/bills/providers/${reminder.utilityProvider.id}`}>
+          <Button size="sm" variant="outline">
+            Add bill
+          </Button>
+        </Link>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={async () => {
+            if (!confirm("Skip this reminder?")) return;
+            await fetch(`/api/reminders/${reminder.id}/skip`, { method: "POST" });
+            globalMutate("/api/reminders?status=UPCOMING");
+          }}
+          aria-label="Skip"
+        >
+          <X className="h-3 w-3" />
+        </Button>
       </div>
     );
   }

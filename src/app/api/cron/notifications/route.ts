@@ -30,6 +30,7 @@ const REMINDER_TO_NOTIFICATION: Record<ReminderKind, NotificationKind> = {
   VEHICLE_DOC_RENEWAL: NotificationKind.GENERIC,
   SUBSCRIPTION_RENEWAL: NotificationKind.SUBSCRIPTION_RENEWAL_DUE,
   UTILITY_BILL_DUE: NotificationKind.UTILITY_BILL_DUE_SOON,
+  UTILITY_BILL_EXPECTED: NotificationKind.UTILITY_BILL_EXPECTED,
   UTILITY_RECHARGE_DUE: NotificationKind.UTILITY_RECHARGE_DUE_SOON,
   VACCINATION_DUE: NotificationKind.VACCINATION_DUE,
   LIVESTOCK_CYCLE_ENDING: NotificationKind.LIVESTOCK_CYCLE_ENDING,
@@ -173,6 +174,8 @@ async function run() {
       label = `${r.utilityBill.provider.providerName} bill`;
     } else if (r.kind === ReminderKind.UTILITY_RECHARGE_DUE && r.utilityProvider) {
       label = `${r.utilityProvider.providerName} recharge`;
+    } else if (r.kind === ReminderKind.UTILITY_BILL_EXPECTED && r.utilityProvider) {
+      label = `${r.utilityProvider.providerName} bill`;
     } else if (r.kind === ReminderKind.VACCINATION_DUE && r.vaccinationLog) {
       const batch = r.vaccinationLog.batch;
       label = `${r.vaccinationLog.vaccine}${batch ? ` (${batch.livestock.name} · ${batch.name})` : ""}`;
@@ -192,7 +195,17 @@ async function run() {
     // reminder's job is to prompt the user to enter the real figure.
     const isEstimatedBill =
       r.kind === ReminderKind.UTILITY_BILL_DUE && !!r.utilityBill?.estimated;
-    const title = isEstimatedBill
+    // Variable-cadence provider: no bill exists yet and none will be
+    // invented. The prompt is "go look", so it must not read like a due
+    // date — an overdue one means the bill is late, not the payment.
+    const isExpectedBill = r.kind === ReminderKind.UTILITY_BILL_EXPECTED;
+    const title = isExpectedBill
+      ? daysOut < 0
+        ? `${label} still not entered`
+        : daysOut === 0
+          ? `${label} expected today`
+          : `${label} expected in ${daysOut} day${daysOut === 1 ? "" : "s"}`
+      : isEstimatedBill
       ? daysOut < 0
         ? `Enter amount for ${label} (overdue)`
         : `Enter amount for ${label}`
@@ -231,7 +244,9 @@ async function run() {
                 ? `/loans/${r.loan.id}`
                 : "/notifications";
 
-    const body = isEstimatedBill
+    const body = isExpectedBill
+      ? "This connection doesn't bill on a fixed cycle. Check the meter or portal and add the bill when it arrives."
+      : isEstimatedBill
       ? "Auto-generated bill — set the actual amount so it can be paid."
       : isExpiry
         ? `Expires on ${r.dueDate.toISOString().slice(0, 10)}`

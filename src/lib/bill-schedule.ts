@@ -141,21 +141,39 @@ export function formatBillDate(d: Date): string {
   return `${day} ${MONTHS_LONG[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
+export type BillPeriod = { from: Date; to: Date };
+
+/** A recorded service window, as it arrives from Prisma or from JSON. */
+export type StoredBillPeriod = {
+  periodFrom?: Date | string | null;
+  periodTo?: Date | string | null;
+};
+
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return atUtcMidnight(d);
+}
+
 /**
- * The service window a postpaid bill covers. Utilities are billed in
- * arrears: the statement date (billDate) is issued just AFTER the service
- * window closes, and the payment due date falls LATER still. So the
- * period is the cycle ENDING the day before the statement, NOT the cycle
- * starting on it — otherwise the due date would land before the period
- * ends, which is impossible.
+ * The service window a postpaid bill covers, DERIVED from the provider's
+ * nominal cycle. Utilities are billed in arrears: the statement date
+ * (billDate) is issued just AFTER the service window closes, and the
+ * payment due date falls LATER still. So the period is the cycle ENDING
+ * the day before the statement, NOT the cycle starting on it — otherwise
+ * the due date would land before the period ends, which is impossible.
  *
  *   statement 04 Jun 2026 (MONTHLY) → covers 04 May 2026 → 03 Jun 2026,
  *   due e.g. 20 Jun 2026.
+ *
+ * This is only ever a GUESS — see `billPeriodRange`, which prefers the
+ * window actually printed on the bill when the user recorded it.
  */
-export function billPeriodRange(
+export function derivedBillPeriod(
   billDate: Date,
   cycle: UtilityBillCycle,
-): { from: Date; to: Date } {
+): BillPeriod {
   const stmt = atUtcMidnight(billDate);
   const to = new Date(stmt);
   to.setUTCDate(to.getUTCDate() - 1); // day before the statement
@@ -164,19 +182,62 @@ export function billPeriodRange(
 }
 
 /**
+ * The service window a bill covers — the bill's OWN recorded period when
+ * it has one, otherwise the cycle-derived guess.
+ *
+ * Real cadences drift (a nominally bimonthly EB connection can issue a
+ * one-month bill), so deriving the window from the cycle alone mislabels
+ * those bills and, worse, bakes the wrong span into the ledger
+ * description at pay time. Both endpoints must be present and ordered
+ * for the stored window to win; a half-recorded window falls back rather
+ * than inventing an endpoint.
+ */
+export function billPeriodRange(
+  billDate: Date,
+  cycle: UtilityBillCycle,
+  stored?: StoredBillPeriod | null,
+): BillPeriod {
+  const from = toDateOrNull(stored?.periodFrom);
+  const to = toDateOrNull(stored?.periodTo);
+  if (from && to && to >= from) return { from, to };
+  return derivedBillPeriod(billDate, cycle);
+}
+
+/** Whether a bill carries a usable recorded period (vs a derived guess). */
+export function hasStoredPeriod(stored?: StoredBillPeriod | null): boolean {
+  const from = toDateOrNull(stored?.periodFrom);
+  const to = toDateOrNull(stored?.periodTo);
+  return !!(from && to && to >= from);
+}
+
+/**
+ * Inclusive length of a service window in days — a window whose ends are
+ * the same day counts as 1. This is the denominator that makes bills of
+ * unequal length comparable: ₹/day and units/day are meaningful across a
+ * 31-day and a 62-day bill where raw totals are not.
+ */
+export function periodDays(from: Date, to: Date): number {
+  const a = atUtcMidnight(from).getTime();
+  const b = atUtcMidnight(to).getTime();
+  return Math.max(1, Math.round((b - a) / 86_400_000) + 1);
+}
+
+/**
  * Proper, self-describing transaction description for a bill payment.
  * The period is the service window billed in arrears (see billPeriodRange):
  *   statement 04 Jun 2026 → "Internet: BSNL bill from 04 May 2026 to 03 June 2026"
  * The kind prefix + provider + billing period make the ledger entry
- * unambiguous at a glance.
+ * unambiguous at a glance. Pass the bill's recorded period so the
+ * description states the span the user was actually billed for.
  */
 export function billDescription(args: {
   kind: UtilityKind;
   providerName: string;
   billDate: Date;
   cycle: UtilityBillCycle;
+  period?: StoredBillPeriod | null;
 }): string {
-  const { from, to } = billPeriodRange(args.billDate, args.cycle);
+  const { from, to } = billPeriodRange(args.billDate, args.cycle, args.period);
   return `${utilityKindLabel(args.kind)}: ${args.providerName} bill from ${formatBillDate(
     from,
   )} to ${formatBillDate(to)}`;
