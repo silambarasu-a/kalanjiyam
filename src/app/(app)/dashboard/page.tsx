@@ -24,7 +24,9 @@ import {
   CheckCircle2,
   Hourglass,
   Wallet,
+  HandCoins,
 } from "lucide-react";
+import { buttonVariants } from "@/components/ui/button";
 import { formatINR, formatDate } from "@/lib/utils";
 import { calendarMonthPeriods } from "@/lib/statement-period";
 import { PeriodFilter } from "@/components/transactions/period-filter";
@@ -69,12 +71,27 @@ type Stats = {
   otherHoldingsCurrent: number;
   cardOutstanding: number;
   loanOutstanding: number;
+  loansLentOutstanding: number;
   chargesOutstanding: number;
   chargesIOwe: number;
 };
 
+type ExpectedInflow = {
+  id: string;
+  source: "LOAN";
+  kind: string;
+  label: string;
+  dueDate: string;
+  /** Always null — an ad-hoc settlement has no fixed amount to quote. */
+  amount: null;
+  estimate: number | null;
+  href: string;
+  payHref?: string;
+};
+
 type Cashflow = {
   dues: Due[];
+  expectedInflows: ExpectedInflow[];
   settled: Settled[];
   currentMonthDueGross: number;
   currentMonthDuePaid: number;
@@ -391,6 +408,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
         <div className="space-y-4">
           <UpcomingDues dues={cashflow?.dues ?? null} />
+          <ExpectedInflows inflows={cashflow?.expectedInflows ?? null} />
           {expiringDocs.length > 0 && (
             <ExpiringDocsSection documents={expiringDocs} />
           )}
@@ -414,9 +432,21 @@ export default function DashboardPage() {
           <SmallCard
             title="Loan outstanding"
             value={stats ? formatINR(stats.loanOutstanding) : "—"}
+            hint="What you owe on borrowed money"
             icon={<Landmark className="h-4 w-4" />}
             href="/loans/bank"
           />
+          {/* Money lent is a receivable, so it gets its own labelled tile
+              rather than being netted against the liability above. */}
+          {stats && stats.loansLentOutstanding > 0 && (
+            <SmallCard
+              title="Money lent out"
+              value={formatINR(stats.loansLentOutstanding)}
+              hint="Principal still to come back to you"
+              icon={<HandCoins className="h-4 w-4" />}
+              href="/loans/hand/lent"
+            />
+          )}
           <SmallCard
             title="Due this month"
             value={cashflow ? formatINR(cashflow.currentMonthDueGross) : "—"}
@@ -479,6 +509,60 @@ export default function DashboardPage() {
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Money you're due to collect on loans you made. Separate from Upcoming dues
+ * because these are inflows — mixing them in would inflate the payables total
+ * and the "paid against this month's dues" progress.
+ *
+ * No amount is shown: an ad-hoc hand loan has no fixed instalment, which is the
+ * whole point. The rate-derived estimate is offered as a cross-check, labelled
+ * as such.
+ */
+function ExpectedInflows({ inflows }: { inflows: ExpectedInflow[] | null }) {
+  if (!inflows || inflows.length === 0) return null;
+  return (
+    <section className="rounded-xl border bg-card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <HandCoins className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />{" "}
+          Expected to come in
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          {inflows.length} item{inflows.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      <ul className="divide-y">
+        {inflows.map((i) => (
+          <li key={i.id} className="flex items-center gap-3 py-2.5">
+            <div className="min-w-0 flex-1">
+              <Link
+                href={i.href}
+                className="truncate font-medium hover:underline"
+              >
+                {i.label}
+              </Link>
+              <div className="text-xs text-muted-foreground">
+                {i.kind} · {formatDate(i.dueDate)}
+                {i.estimate != null && i.estimate > 0
+                  ? ` · ≈ ${formatINR(i.estimate)} est.`
+                  : ""}
+              </div>
+            </div>
+            {i.payHref && (
+              <Link
+                href={i.payHref}
+                className={buttonVariants({ size: "sm", variant: "outline" })}
+              >
+                Record
+              </Link>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

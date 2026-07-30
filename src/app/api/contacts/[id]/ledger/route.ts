@@ -75,14 +75,21 @@ export async function GET(
           },
         },
       }),
-      // Hand loans where this contact is the lender (i.e. money you
-      // borrowed from them and still owe back).
+      // Hand loans with this contact, BOTH ways: ones they lent you (a payable
+      // you still owe back) and ones you lent them (a receivable). Reported as
+      // two separate totals on purpose — the contact screen leads with "they
+      // owe you" and "you owe them" as two numbers, never one netted figure.
       prisma.loan.findMany({
-        where: { workspaceId: ctx.workspaceId, lenderContactId: id },
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [{ lenderContactId: id }, { borrowerContactId: id }],
+        },
         orderBy: [{ active: "desc" }, { startedAt: "desc" }],
         select: {
           id: true,
           kind: true,
+          direction: true,
+          repaymentMode: true,
           principal: true,
           outstanding: true,
           startedAt: true,
@@ -90,6 +97,7 @@ export async function GET(
           active: true,
           emiAmount: true,
           interestRate: true,
+          interestCadence: true,
         },
       }),
       // Expenses this contact paid for the workspace owner (the new
@@ -144,8 +152,17 @@ export async function GET(
     const netTransferred = round2(sentToContact - receivedFromContact);
     const spentOnThem = expenses.reduce((s, e) => s + Number(e.amount), 0);
     type SpentSplit = (typeof expenses)[number];
+    // `loansOwed` keeps its exact original meaning — open principal on money
+    // this contact lent YOU — so existing consumers don't shift. `loansLent` is
+    // the mirror. Never summed together.
     const loansOwed = loans.reduce(
-      (s, l) => s + (l.active ? Number(l.outstanding) : 0),
+      (s, l) =>
+        s + (l.active && l.direction !== "LENT" ? Number(l.outstanding) : 0),
+      0,
+    );
+    const loansLent = loans.reduce(
+      (s, l) =>
+        s + (l.active && l.direction === "LENT" ? Number(l.outstanding) : 0),
       0,
     );
 
@@ -161,6 +178,7 @@ export async function GET(
         netTransferred,
         spentOnThem: round2(spentOnThem),
         loansOwed: round2(loansOwed),
+        loansLent: round2(loansLent),
       },
       charges: charges.map((c) => ({
         id: c.id,
@@ -214,6 +232,8 @@ export async function GET(
       loans: loans.map((l) => ({
         id: l.id,
         kind: l.kind,
+        direction: l.direction,
+        repaymentMode: l.repaymentMode,
         principal: Number(l.principal),
         outstanding: Number(l.outstanding),
         startedAt: l.startedAt.toISOString(),
@@ -221,6 +241,7 @@ export async function GET(
         active: l.active,
         emiAmount: l.emiAmount == null ? null : Number(l.emiAmount),
         interestRate: l.interestRate == null ? null : Number(l.interestRate),
+        interestCadence: l.interestCadence,
       })),
       paidForMe: paidForMe.map((t) => ({
         id: t.id,

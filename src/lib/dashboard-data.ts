@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
+import { counterpartyName } from "@/lib/loan-direction";
+import { interestExpectedSince } from "@/lib/hand-loan-interest";
 
 export type Due = {
   id: string;
@@ -16,6 +18,28 @@ export type Due = {
   href: string;
   /** Deep link that opens the relevant Pay/Confirm dialog on the detail
    * page. UI shows a Pay button when present. */
+  payHref?: string;
+};
+
+/**
+ * Money expected to come IN. Kept out of `Due[]` on purpose: a receivable in
+ * that list would inflate the payables total, `nextMonthBreakdown.loans`, and
+ * the "paid against this month's dues" progress bar.
+ */
+export type ExpectedInflow = {
+  id: string;
+  source: "LOAN";
+  kind: string;
+  label: string;
+  dueDate: string;
+  /**
+   * Always null — the whole point of an ad-hoc hand loan is that the amount
+   * isn't fixed, so quoting one would be a fabrication. `estimate` carries the
+   * rate-derived hint instead, and the UI labels it "est.".
+   */
+  amount: null;
+  estimate: number | null;
+  href: string;
   payHref?: string;
 };
 
@@ -68,7 +92,12 @@ export type DashboardStats = {
   /** FD / RD / GOLD / INSURANCE / OTHER — sum of currentValue (falls back to cost). */
   otherHoldingsCurrent: number;
   cardOutstanding: number;
+  /** Open principal on money BORROWED — a liability. Keeps its original
+   *  meaning, so the existing Loans tile is unaffected by lent loans. */
   loanOutstanding: number;
+  /** Open principal on money LENT out — a receivable, so it ADDS to net
+   *  worth. Reported separately, never netted against `loanOutstanding`. */
+  loansLentOutstanding: number;
   /** Outstanding from OWED_TO_USER charges (others owe the workspace owner).
    *  Asset side of the net-worth equation. */
   chargesOutstanding: number;
@@ -79,6 +108,8 @@ export type DashboardStats = {
 
 export type DashboardCashflow = {
   dues: Due[];
+  /** Interest / principal you're due to collect on money you lent out. */
+  expectedInflows: ExpectedInflow[];
   settled: SettledItem[];
   currentMonthDueGross: number;
   currentMonthDuePaid: number;
@@ -129,7 +160,11 @@ export async function getDashboardStats(args: {
       where: { workspaceId },
       select: { id: true, kind: true },
     }),
-    prisma.loan.aggregate({
+    // Grouped by direction so net worth can treat a LENT loan's outstanding as
+    // an asset (they owe you) and a BORROWED one as a liability — the same
+    // split MemberCharge already uses for OWED_TO_USER / USER_OWES below.
+    prisma.loan.groupBy({
+      by: ["direction"],
       where: { workspaceId, active: true },
       _sum: { outstanding: true },
     }),
@@ -176,7 +211,13 @@ export async function getDashboardStats(args: {
     else liquid += b.balance;
   }
 
-  const loanOutstanding = Number(activeLoans._sum.outstanding ?? 0);
+  let loanOutstanding = 0; // BORROWED — liability
+  let loansLentOutstanding = 0; // LENT — receivable
+  for (const row of activeLoans) {
+    const sum = Number(row._sum.outstanding ?? 0);
+    if (row.direction === "LENT") loansLentOutstanding += sum;
+    else loanOutstanding += sum;
+  }
   // Split market-traded holdings (Market Investments tile) from the rest
   // (Other Holdings small card). Net worth includes BOTH — only the
   // dashboard presentation is split.
@@ -215,7 +256,8 @@ export async function getDashboardStats(args: {
     liquid +
     investedCurrent +
     otherHoldingsCurrent +
-    owedToUserRemaining -
+    owedToUserRemaining +
+    loansLentOutstanding -
     cardOutstanding -
     loanOutstanding -
     userOwesRemaining;
@@ -238,6 +280,7 @@ export async function getDashboardStats(args: {
     otherHoldingsCurrent,
     cardOutstanding,
     loanOutstanding,
+    loansLentOutstanding,
     chargesOutstanding,
     chargesIOwe: userOwesRemaining,
   };
@@ -377,6 +420,7 @@ export async function getDashboardCashflow(args: {
     cardStatementsTouchedThisMonth,
     untaggedCardPaymentsThisMonth,
     loanPaymentsThisMonth,
+    loanReceiptsThisMonth,
     leasePaymentsThisMonth,
     confirmedRemindersThisMonth,
   ] = await Promise.all([
@@ -428,9 +472,28 @@ export async function getDashboardCashflow(args: {
         lender: true,
         kind: true,
         source: true,
+        direction: true,
+        repaymentMode: true,
         emiAmount: true,
         nextDueDate: true,
+        startedAt: true,
+        outstanding: true,
+        interestRate: true,
+        interestCadence: true,
         lenderContact: { select: { name: true } },
+        borrower: true,
+        borrowerContact: { select: { name: true } },
+        // Only needed for the lent-loan interest estimate; a handful of rows
+        // per loan at most (take: 20 loans above).
+        ledgerEntries: {
+          where: { kind: "REPAYMENT" },
+          select: {
+            paidAt: true,
+            principalAmount: true,
+            interestAmount: true,
+            periodTo: true,
+          },
+        },
       },
     }),
     // A lease only ever sits on a crop or livestock batch, so with the farm
@@ -525,6 +588,11 @@ export async function getDashboardCashflow(args: {
         kind: "LOAN_PAYMENT",
         date: { gte: monthStart, lt: nextMonthBegin },
         transferId: null,
+        // A LENT loan's disbursement is also an EXPENSE + LOAN_PAYMENT, but it
+        // is money going OUT to create a receivable, not a repayment. Counting
+        // it here would inflate `loanPaidThisMonth` and make the dashboard
+        // report this month's dues as partly settled by it.
+        NOT: { loan: { direction: "LENT" } },
       },
       orderBy: { date: "desc" },
       take: 50,
@@ -538,7 +606,44 @@ export async function getDashboardCashflow(args: {
             id: true,
             lender: true,
             source: true,
+            direction: true,
+            repaymentMode: true,
+            borrower: true,
             lenderContact: { select: { name: true } },
+            borrowerContact: { select: { name: true } },
+          },
+        },
+      },
+    }),
+    // Money that came back IN on loans you lent out. Surfaced in recent
+    // activity only — deliberately NOT folded into `loanPaidThisMonth`, which
+    // measures payables settled.
+    prisma.transaction.findMany({
+      where: {
+        workspaceId: wsId,
+        type: "INCOME",
+        kind: { in: ["LOAN_PAYMENT", "INTEREST"] },
+        date: { gte: monthStart, lt: nextMonthBegin },
+        transferId: null,
+        loan: { direction: "LENT" },
+      },
+      orderBy: { date: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        amount: true,
+        date: true,
+        loanId: true,
+        loan: {
+          select: {
+            id: true,
+            lender: true,
+            source: true,
+            direction: true,
+            repaymentMode: true,
+            borrower: true,
+            lenderContact: { select: { name: true } },
+            borrowerContact: { select: { name: true } },
           },
         },
       },
@@ -634,6 +739,7 @@ export async function getDashboardCashflow(args: {
 
   // ── DUES (upcoming) ───────────────────────────────────────────────
   const dues: Due[] = [];
+  const expectedInflows: ExpectedInflow[] = [];
   for (const r of upcomingReminders) {
     // Vehicle-doc renewals (PUC / FC / RC / Road tax / Insurance copy)
     // are surfaced via the dedicated "Documents expiring soon" tile
@@ -695,6 +801,35 @@ export async function getDashboardCashflow(args: {
   }
   for (const l of upcomingLoanDues) {
     if (!l.nextDueDate) continue;
+    // Money you lent out is coming IN. It gets its own list — pushing it into
+    // `dues` would inflate the payables total, nextMonthBreakdown.loans, and
+    // the "paid against this month's dues" bar.
+    if (l.direction === "LENT") {
+      const est = interestExpectedSince({
+        startedAt: l.startedAt,
+        annualRate: l.interestRate == null ? null : Number(l.interestRate),
+        outstanding: Number(l.outstanding),
+        entries: l.ledgerEntries.map((e) => ({
+          paidAt: e.paidAt,
+          principalAmount: Number(e.principalAmount),
+          interestAmount: Number(e.interestAmount),
+          periodTo: e.periodTo,
+        })),
+        asOf: today,
+      });
+      expectedInflows.push({
+        id: `loan-receipt:${l.id}`,
+        source: "LOAN",
+        kind: l.interestCadence === "AT_MATURITY" ? "AT MATURITY" : "INTEREST DUE",
+        label: counterpartyName(l),
+        dueDate: l.nextDueDate.toISOString(),
+        amount: null,
+        estimate: est?.expected ?? null,
+        href: `/loans/${l.id}`,
+        payHref: `/loans/${l.id}?settle=1`,
+      });
+      continue;
+    }
     const emi = l.emiAmount == null ? null : Number(l.emiAmount);
     // Only credit a current-month LOAN_PAYMENT against an EMI when the
     // EMI's own due date is in the current month OR overdue. After
@@ -712,8 +847,13 @@ export async function getDashboardCashflow(args: {
     dues.push({
       id: `loan:${l.id}`,
       source: "LOAN",
-      kind: l.source === "CARD_EMI" ? "CARD EMI" : "LOAN EMI",
-      label: l.lenderContact?.name ?? l.lender,
+      kind:
+        l.source === "CARD_EMI"
+          ? "CARD EMI"
+          : l.repaymentMode === "AD_HOC"
+            ? "INTEREST DUE"
+            : "LOAN EMI",
+      label: counterpartyName(l),
       dueDate: l.nextDueDate.toISOString(),
       amount: outstanding,
       ...(emi != null && paidThisMonth > 0
@@ -903,16 +1043,33 @@ export async function getDashboardCashflow(args: {
     });
   }
   for (const t of loanPaymentsThisMonth) {
-    const label =
-      t.loan?.lenderContact?.name ?? t.loan?.lender ?? "Loan payment";
+    const label = t.loan ? counterpartyName(t.loan) : "Loan payment";
     settled.push({
       id: `loan-payment:${t.id}`,
       source: "LOAN",
-      kind: t.loan?.source === "CARD_EMI" ? "CARD EMI" : "LOAN EMI",
+      kind:
+        t.loan?.source === "CARD_EMI"
+          ? "CARD EMI"
+          : t.loan?.repaymentMode === "AD_HOC"
+            ? "HAND LOAN"
+            : "LOAN EMI",
       label,
       amount: Number(t.amount),
       paidAt: t.date.toISOString(),
       href: t.loanId ? `/loans/${t.loanId}` : "/loans/bank",
+    });
+  }
+  // Receipts on money lent out. Listed as activity so the month reads
+  // completely, but they never touch the payables figures above.
+  for (const t of loanReceiptsThisMonth) {
+    settled.push({
+      id: `loan-receipt:${t.id}`,
+      source: "LOAN",
+      kind: "LOAN RECEIPT",
+      label: t.loan ? counterpartyName(t.loan) : "Loan receipt",
+      amount: Number(t.amount),
+      paidAt: t.date.toISOString(),
+      href: t.loanId ? `/loans/${t.loanId}` : "/loans/hand/lent",
     });
   }
   for (const t of leasePaymentsThisMonth) {
@@ -1000,8 +1157,11 @@ export async function getDashboardCashflow(args: {
   nextMonthBreakdown.cards = cardsOutstanding;
   const currentMonthDueGross = currentMonthDuePaid + currentMonthDueRemaining;
 
+  expectedInflows.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
   return {
     dues: visibleDues,
+    expectedInflows,
     settled,
     currentMonthDueGross,
     currentMonthDuePaid,

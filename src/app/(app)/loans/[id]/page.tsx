@@ -22,7 +22,14 @@ import {
   type LoanPaymentRow,
 } from "@/components/loans/loan-payment-history";
 import { LoanPayButton } from "@/components/loans/loan-pay-dialog";
+import { LoanSettleButton } from "@/components/loans/loan-settle-dialog";
+import { LoanWriteOffButton } from "@/components/loans/loan-write-off-button";
 import { LoanEditButton } from "@/components/loans/loan-edit-button";
+import { counterpartyName } from "@/lib/loan-direction";
+import {
+  formatInterestCadence,
+  interestExpectedSince,
+} from "@/lib/hand-loan-interest";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import {
   Tabs,
@@ -82,6 +89,7 @@ export default async function LoanDetailPage({
         },
       },
       lenderContact: { select: { id: true, name: true } },
+      borrowerContact: { select: { id: true, name: true } },
       memberContact: { select: { id: true, name: true, relationship: true } },
       ownerUser: { select: { name: true } },
       goldItems: { orderBy: { createdAt: "asc" } },
@@ -90,26 +98,67 @@ export default async function LoanDetailPage({
   if (!loan || loan.workspaceId !== session?.user.activeWorkspaceId) notFound();
   if (!canAccessRecord(session, loan)) notFound();
 
-  const payments = await prisma.transaction.findMany({
-    where: { loanId: id, workspaceId: loan.workspaceId },
-    orderBy: { date: "desc" },
-    select: {
-      id: true,
-      type: true,
-      kind: true,
-      amount: true,
-      date: true,
-      description: true,
-    },
-  });
+  const [payments, ledger] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { loanId: id, workspaceId: loan.workspaceId },
+      orderBy: { date: "desc" },
+      select: {
+        id: true,
+        type: true,
+        kind: true,
+        amount: true,
+        date: true,
+        description: true,
+        // The persisted split — lets the history table classify each row the
+        // same way the API's guards do, instead of re-deriving from type/kind.
+        loanLedgerEntry: {
+          select: { kind: true, principalAmount: true, interestAmount: true },
+        },
+      },
+    }),
+    prisma.loanLedgerEntry.findMany({
+      where: { loanId: id },
+      orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+    }),
+  ]);
+
+  const isLent = loan.direction === "LENT";
+  const isAdHoc = loan.repaymentMode === "AD_HOC";
+  const counterparty = counterpartyName(loan);
 
   const principal = Number(loan.principal);
   const outstanding = Number(loan.outstanding);
   const paid = Math.max(0, principal - outstanding);
   const pct = principal > 0 ? Math.min(100, (paid / principal) * 100) : 0;
   const totalRepaid = payments
-    .filter((p) => p.type === "EXPENSE")
+    .filter((p) => (isLent ? p.type === "INCOME" : p.type === "EXPENSE"))
     .reduce((s, p) => s + Number(p.amount), 0);
+
+  // Recorded, not back-derived: these are the amounts that actually changed
+  // hands, which is the only knowable figure for an ad-hoc loan.
+  const repaymentEntries = ledger.filter((e) => e.kind === "REPAYMENT");
+  const interestSettled = repaymentEntries.reduce(
+    (s, e) => s + Number(e.interestAmount) + Number(e.gstAmount),
+    0,
+  );
+  const principalSettled = repaymentEntries.reduce(
+    (s, e) => s + Number(e.principalAmount),
+    0,
+  );
+  const interestEstimate = isAdHoc
+    ? interestExpectedSince({
+        startedAt: loan.startedAt,
+        annualRate: loan.interestRate == null ? null : Number(loan.interestRate),
+        outstanding,
+        entries: repaymentEntries.map((e) => ({
+          paidAt: e.paidAt,
+          principalAmount: Number(e.principalAmount),
+          interestAmount: Number(e.interestAmount),
+          periodTo: e.periodTo,
+        })),
+        asOf: new Date(),
+      })
+    : null;
 
   const chargeBreakdown =
     Array.isArray(loan.chargeBreakdown)
@@ -119,10 +168,19 @@ export default async function LoanDetailPage({
   const status = !loan.active
     ? { label: "Closed", tone: "text-muted-foreground" }
     : outstanding === 0
-      ? { label: "Cleared", tone: "text-emerald-700 dark:text-emerald-400" }
+      ? isAdHoc
+        ? // A real, intentional state on an ad-hoc loan: the principal is back
+          // but interest may still be owed. Closing is an explicit action.
+          {
+            label: "Principal recovered · interest pending",
+            tone: "text-amber-700 dark:text-amber-400",
+          }
+        : { label: "Cleared", tone: "text-emerald-700 dark:text-emerald-400" }
       : { label: "Active", tone: "text-primary" };
 
   const sourceKey = loan.source as keyof typeof SOURCE_PATH;
+  const backPath = isLent ? "/loans/hand/lent" : SOURCE_PATH[sourceKey];
+  const backLabel = isLent ? "Money lent out" : SOURCE_LABEL[sourceKey];
   const freqKey = (loan.frequency ?? "MONTHLY") as keyof typeof FREQUENCY_LABEL;
 
   // ── Lifetime cost + amortization (only when we have rate + tenure) ────
@@ -135,7 +193,11 @@ export default async function LoanDetailPage({
       ? Number(loan.emiAmount)
       : calculateEMI(principal, rate, tenure, freq);
 
-  const hasSchedule = rate > 0 && tenure > 0 && emi > 0;
+  // An ad-hoc loan has no amortization. This single gate switches off the
+  // lifetime totals, the EMIs-paid counter, the upcoming-EMIs table, and the
+  // foreclosure-savings callout — all of which would otherwise render a
+  // schedule the two parties never agreed to.
+  const hasSchedule = !isAdHoc && rate > 0 && tenure > 0 && emi > 0;
   const fullSchedule = hasSchedule
     ? amortizationSchedule(principal, rate, tenure, freq, gstPct)
     : [];
@@ -198,33 +260,60 @@ export default async function LoanDetailPage({
   const moreCycles = Math.max(0, cyclesRemaining - upcomingPreview.length);
 
   // ── Balance over time (for the area chart) ────────────────────────────
-  // Walk payments oldest-first, splitting each into principal/interest at
-  // the current balance. Falls back to "amount = principal" when no rate.
-  const repayments = payments
-    .filter((p) => p.type === "EXPENSE")
-    .slice()
-    .reverse();
-  const balanceSeries: BalancePoint[] = [
-    {
+  //
+  // Ledger-first: when the loan has recorded entries, walk them NEWEST-first
+  // back from the authoritative `outstanding`, adding each principal back as we
+  // move into the past. That's exact, and it also handles loans entered
+  // mid-life (isExisting), which have no disbursement to walk forward from.
+  //
+  // Loans predating the ledger fall back to the old forward walk: split each
+  // payment at the running balance, or treat the whole amount as principal when
+  // there's no rate.
+  const balanceSeries: BalancePoint[] = [];
+  if (repaymentEntries.length > 0) {
+    const points: BalancePoint[] = [];
+    let back = outstanding;
+    // repaymentEntries is already newest-first.
+    for (const e of repaymentEntries) {
+      points.push({
+        date: e.paidAt.toISOString(),
+        label: formatDate(e.paidAt),
+        balance: back,
+        payment: Number(e.amount),
+      });
+      back = Math.min(principal, back + Number(e.principalAmount));
+    }
+    balanceSeries.push({
+      date: loan.startedAt.toISOString(),
+      label: formatDate(loan.startedAt),
+      balance: back,
+    });
+    balanceSeries.push(...points.reverse());
+  } else {
+    const repayments = payments
+      .filter((p) => (isLent ? p.type === "INCOME" : p.type === "EXPENSE"))
+      .slice()
+      .reverse();
+    balanceSeries.push({
       date: loan.startedAt.toISOString(),
       label: formatDate(loan.startedAt),
       balance: principal,
-    },
-  ];
-  let runningBalance = principal;
-  for (const p of repayments) {
-    const amount = Number(p.amount);
-    const split =
-      rate > 0
-        ? splitPayment(runningBalance, rate, amount, freq, gstPct)
-        : { principal: Math.min(runningBalance, amount), interest: 0, gst: 0 };
-    runningBalance = Math.max(0, runningBalance - split.principal);
-    balanceSeries.push({
-      date: p.date.toISOString(),
-      label: formatDate(p.date),
-      balance: runningBalance,
-      payment: amount,
     });
+    let runningBalance = principal;
+    for (const p of repayments) {
+      const amount = Number(p.amount);
+      const split =
+        rate > 0
+          ? splitPayment(runningBalance, rate, amount, freq, gstPct)
+          : { principal: Math.min(runningBalance, amount), interest: 0, gst: 0 };
+      runningBalance = Math.max(0, runningBalance - split.principal);
+      balanceSeries.push({
+        date: p.date.toISOString(),
+        label: formatDate(p.date),
+        balance: runningBalance,
+        payment: amount,
+      });
+    }
   }
 
   // Grace-window state for the closed-loan banner. Server-component, so
@@ -247,12 +336,12 @@ export default async function LoanDetailPage({
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href={SOURCE_PATH[sourceKey]} className="text-xs text-muted-foreground">
-            ← {SOURCE_LABEL[sourceKey]}
+          <Link href={backPath} className="text-xs text-muted-foreground">
+            ← {backLabel}
           </Link>
           <div className="mt-1 flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {loan.lenderContact?.name ?? loan.lender}
+              {counterparty}
             </h1>
             <span
               className={`text-[10px] font-semibold uppercase tracking-widest ${status.tone}`}
@@ -261,9 +350,9 @@ export default async function LoanDetailPage({
             </span>
           </div>
           <p className="text-xs uppercase tracking-widest text-muted-foreground">
-            {loan.kind} · {SOURCE_LABEL[sourceKey]}
+            {loan.kind} · {backLabel}
             {loan.loanAccountNumber ? ` · A/c ${loan.loanAccountNumber}` : ""}
-            {loan.borrower ? ` · for ${loan.borrower}` : ""}
+            {!isLent && loan.borrower ? ` · for ${loan.borrower}` : ""}
             {loan.memberContact
               ? ` · ${loan.memberContact.name}${
                   loan.memberContact.relationship
@@ -283,8 +372,12 @@ export default async function LoanDetailPage({
                 id: loan.id,
                 kind: loan.kind,
                 source: loan.source,
+                direction: loan.direction,
+                repaymentMode: loan.repaymentMode,
                 lender: loan.lender,
                 lenderContact: loan.lenderContact,
+                borrowerContact: loan.borrowerContact,
+                interestCadence: loan.interestCadence,
                 memberContactId: loan.memberContactId,
                 memberContact: loan.memberContact,
                 principal,
@@ -322,11 +415,29 @@ export default async function LoanDetailPage({
               }}
             />
           )}
-          {loan.active && outstanding > 0 && (
+          {/* An ad-hoc loan settles through /settle: there is no EMI to split,
+              and on a lent loan the money moves the other way. Note the button
+              stays available at outstanding 0 — interest can still be owed. */}
+          {loan.active && isAdHoc && (
+            <LoanSettleButton
+              loan={{
+                id: loan.id,
+                counterparty,
+                direction: loan.direction,
+                outstanding,
+                principal,
+                interestRate:
+                  loan.interestRate != null ? Number(loan.interestRate) : null,
+                interestCadence: loan.interestCadence,
+                startedAt: loan.startedAt.toISOString(),
+              }}
+            />
+          )}
+          {loan.active && !isAdHoc && outstanding > 0 && (
             <LoanPayButton
               loan={{
                 id: loan.id,
-                lender: loan.lenderContact?.name ?? loan.lender,
+                lender: counterparty,
                 outstanding,
                 emiAmount: loan.emiAmount != null ? Number(loan.emiAmount) : null,
                 interestRate:
@@ -336,6 +447,9 @@ export default async function LoanDetailPage({
                 frequency: (loan.frequency ?? "MONTHLY") as LoanFrequency,
               }}
             />
+          )}
+          {loan.active && isLent && outstanding > 0 && (
+            <LoanWriteOffButton loanId={loan.id} outstanding={outstanding} />
           )}
         </div>
       </div>
@@ -384,7 +498,7 @@ export default async function LoanDetailPage({
           <div className="flex flex-col justify-between gap-4">
             <div>
               <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Outstanding
+                {isLent ? "Receivable" : "Outstanding"}
               </div>
               <div
                 className={`mt-1 text-4xl font-bold tabular-nums ${
@@ -394,7 +508,9 @@ export default async function LoanDetailPage({
                 {formatINR(outstanding)}
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                {formatINR(paid)} paid of {formatINR(principal)}
+                {isLent
+                  ? `${formatINR(paid)} recovered of ${formatINR(principal)} lent to ${counterparty}`
+                  : `${formatINR(paid)} paid of ${formatINR(principal)}`}
               </div>
               {hasSchedule && (
                 <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
@@ -408,18 +524,25 @@ export default async function LoanDetailPage({
                 <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
               </div>
               <div className="mt-1.5 text-[11px] text-muted-foreground tabular-nums">
-                {pct.toFixed(1)}% repaid
+                {pct.toFixed(1)}% {isLent ? "recovered" : "repaid"}
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
-            <SubStat
-              label={
-                loan.emiAmount != null ? `${FREQUENCY_LABEL[freqKey]} EMI` : "EMI"
-              }
-              value={loan.emiAmount != null ? formatINR(Number(loan.emiAmount)) : "—"}
-            />
+            {isAdHoc ? (
+              <SubStat
+                label="Interest settled"
+                value={formatInterestCadence(loan.interestCadence)}
+              />
+            ) : (
+              <SubStat
+                label={
+                  loan.emiAmount != null ? `${FREQUENCY_LABEL[freqKey]} EMI` : "EMI"
+                }
+                value={loan.emiAmount != null ? formatINR(Number(loan.emiAmount)) : "—"}
+              />
+            )}
             <SubStat
               label="Interest rate"
               value={
@@ -427,12 +550,67 @@ export default async function LoanDetailPage({
               }
             />
             <SubStat
-              label="Next due"
-              value={loan.nextDueDate ? formatDate(loan.nextDueDate) : "—"}
+              label={isAdHoc ? "Next settlement" : "Next due"}
+              value={
+                loan.nextDueDate
+                  ? formatDate(loan.nextDueDate)
+                  : loan.interestCadence === "AT_MATURITY"
+                    ? "At maturity"
+                    : "—"
+              }
             />
           </div>
         </div>
       </section>
+
+      {/* Ad-hoc loans have no lifetime schedule, so the tiles report what was
+          actually recorded plus one clearly-labelled estimate. */}
+      {isAdHoc && (
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiTile
+            label={isLent ? "Interest received" : "Interest paid"}
+            value={formatINR(interestSettled)}
+            hint={
+              repaymentEntries.length > 0
+                ? `over ${repaymentEntries.length} settlement${repaymentEntries.length === 1 ? "" : "s"}`
+                : "Nothing recorded yet"
+            }
+            tone={isLent ? "gain" : "loss"}
+          />
+          <KpiTile
+            label="Interest accrued"
+            value={
+              interestEstimate ? formatINR(interestEstimate.expected) : "—"
+            }
+            hint={
+              interestEstimate
+                ? `estimate since ${formatDate(interestEstimate.anchor)}`
+                : "No interest on this loan"
+            }
+          />
+          <KpiTile
+            label={isLent ? "Principal recovered" : "Principal repaid"}
+            value={formatINR(paid)}
+            hint={
+              principalSettled > 0 && Math.abs(principalSettled - paid) > 1
+                ? `${formatINR(principalSettled)} recorded`
+                : `of ${formatINR(principal)}`
+            }
+            tone="gain"
+          />
+          <KpiTile
+            label={isAdHoc && loan.interestCadence === "AT_MATURITY" ? "Matures" : "Next settlement"}
+            value={
+              loan.nextDueDate
+                ? formatDate(loan.nextDueDate)
+                : loan.maturityAt
+                  ? formatDate(loan.maturityAt)
+                  : "—"
+            }
+            hint={formatInterestCadence(loan.interestCadence)}
+          />
+        </section>
+      )}
 
       {lifetime && (
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -527,15 +705,24 @@ export default async function LoanDetailPage({
         <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
           <Row label="Principal" value={formatINR(principal)} />
           <Row
-            label="Tenure"
+            label={isAdHoc ? "Term" : "Tenure"}
             value={
               loan.tenure != null
-                ? `${loan.tenure} ${FREQUENCY_UNIT[freqKey]}`
+                ? isAdHoc
+                  ? `${loan.tenure} months`
+                  : `${loan.tenure} ${FREQUENCY_UNIT[freqKey]}`
                 : "—"
             }
           />
-          <Row label="Cadence" value={FREQUENCY_LABEL[freqKey]} />
-          {loan.gstOnInterest != null && (
+          <Row
+            label={isAdHoc ? "Interest settled" : "Cadence"}
+            value={
+              isAdHoc
+                ? formatInterestCadence(loan.interestCadence)
+                : FREQUENCY_LABEL[freqKey]
+            }
+          />
+          {!isAdHoc && loan.gstOnInterest != null && (
             <Row
               label="GST on interest"
               value={`${Number(loan.gstOnInterest)}%`}
@@ -550,7 +737,13 @@ export default async function LoanDetailPage({
           )}
           {loan.account && (
             <Row
-              label={loan.source === "BANK" ? "Disbursed into" : "Linked account"}
+              label={
+                isLent
+                  ? "Paid from"
+                  : loan.source === "BANK"
+                    ? "Disbursed into"
+                    : "Linked account"
+              }
               value={
                 <Link
                   href={`/accounts/${loan.account.id}`}
@@ -721,9 +914,93 @@ export default async function LoanDetailPage({
         </section>
       )}
 
+      {/* Replaces the "Upcoming EMIs" table for ad-hoc loans: what actually
+          happened, rather than a projection of what should. */}
+      {isAdHoc && ledger.length > 0 && (
+        <section className="rounded-lg border bg-card">
+          <div className="px-5 pt-5">
+            <h2 className="text-sm font-semibold">
+              Interest &amp; repayment ledger
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Every amount that changed hands, as recorded on the day.
+            </p>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-y bg-muted/40 text-[11px] uppercase tracking-widest text-muted-foreground">
+                <tr>
+                  <th className="px-5 py-2 text-left font-medium">Date</th>
+                  <th className="px-3 py-2 text-left font-medium">Covers</th>
+                  <th className="px-3 py-2 text-right font-medium">Interest</th>
+                  <th className="px-3 py-2 text-right font-medium">Principal</th>
+                  <th className="px-5 py-2 text-left font-medium">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.map((e) => (
+                  <tr key={e.id} className="border-b last:border-0">
+                    <td className="px-5 py-2 tabular-nums">
+                      {formatDate(e.paidAt)}
+                      {e.transactionId == null && e.kind !== "WRITE_OFF" && (
+                        <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                          cash
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">
+                      {e.kind === "WRITE_OFF"
+                        ? "written off"
+                        : e.kind === "DISBURSEMENT"
+                          ? isLent
+                            ? "given"
+                            : "received"
+                          : e.periodFrom || e.periodTo
+                            ? `${e.periodFrom ? formatDate(e.periodFrom) : "?"} → ${
+                                e.periodTo ? formatDate(e.periodTo) : "?"
+                              }`
+                            : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {Number(e.interestAmount) > 0
+                        ? formatINR(Number(e.interestAmount))
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {Number(e.principalAmount) > 0
+                        ? formatINR(Number(e.principalAmount))
+                        : "—"}
+                    </td>
+                    <td className="px-5 py-2 text-xs text-muted-foreground">
+                      {e.notes ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t bg-muted/40 text-xs font-medium">
+                  <td className="px-5 py-2" colSpan={2}>
+                    Recorded total
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {formatINR(interestSettled)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {formatINR(principalSettled)}
+                  </td>
+                  <td className="px-5 py-2" />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+      )}
+
       <Tabs defaultValue="history" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="history">Payment history</TabsTrigger>
+          <TabsTrigger value="history">
+            {isLent ? "Cash history" : "Payment history"}
+          </TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
         </TabsList>
         <TabsContent value="history">
@@ -735,8 +1012,13 @@ export default async function LoanDetailPage({
               amount: Number(p.amount),
               date: p.date.toISOString(),
               description: p.description,
+              // Null for pre-ledger rows; the component then falls back to the
+              // type/kind heuristic, exactly like the API guards do.
+              ledgerKind: p.loanLedgerEntry?.kind ?? null,
             }))}
             totalRepaid={totalRepaid}
+            direction={loan.direction}
+            adHoc={isAdHoc}
           />
         </TabsContent>
         <TabsContent value="documents">

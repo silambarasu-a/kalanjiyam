@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Kalanjiyam** is a household-finance + farm-management app. Multi-user multi-workspace (each user can belong to up to 3 workspaces). Each workspace tracks its own Accounts, Cards, Family members, Crops, Livestock, Leases, Workers, Wages, Loans (bank / formal hand / card-EMI), Hand loans (informal), Investments, and Reminders. All data is workspace-scoped — never cross-workspace queries.
+**Kalanjiyam** is a household-finance + farm-management app. Multi-user multi-workspace (each user can belong to up to 3 workspaces). Each workspace tracks its own Accounts, Cards, Family members, Crops, Livestock, Leases, Workers, Wages, Loans (bank / hand — borrowed or lent / card-EMI), Investments, and Reminders. All data is workspace-scoped — never cross-workspace queries.
 
 Predecessor repo for reference only: `../kanakkan` — do not modify. See `/Users/silambu/.claude/plans/hi-similar-to-this-compressed-pine.md` for the full implementation plan.
 
@@ -39,6 +39,12 @@ Run `npm run db:generate` after every change to `prisma/schema.prisma`.
 **Farm domain is user-defined:** Do NOT add enums for crop kinds or livestock kinds. Every workspace has a different farm composition. Use free-form `name` + optional `category`/`species` strings. Seeds stay domain-agnostic (only global default categories).
 
 **API route structure:** `src/app/api/{resource}/route.ts` exports `GET`/`POST`/etc. Each handler calls `requireWorkspace` (which calls `auth()` internally), validates input with Zod, and uses `prisma` directly. No separate service layer.
+
+**Loans are one model, four discriminators:** `Loan.source` (BANK / HAND_FORMAL / CARD_EMI) picks the permission feature and UI; `Loan.direction` (BORROWED / LENT) decides whether `outstanding` is a liability or a receivable and which way every posted transaction points; `Loan.repaymentMode` (EMI / AD_HOC) decides whether an amortization schedule exists at all. LENT and AD_HOC are HAND_FORMAL-only, both enforced server-side, and neither can be changed after creation.
+- EMI loans are paid through `/api/loans/[id]/pay` (formula-split). Ad-hoc hand loans settle through `/api/loans/[id]/settle` (user-entered interest + optional principal, either direction). Each route rejects what the other handles.
+- **Every loan money movement writes a `LoanLedgerEntry`** carrying the persisted principal/interest/GST split. Read it — never re-derive a split from `type`/`kind`, which inverts on a lent loan, and never from the EMI formula, which can't reproduce an ad-hoc amount. `classifyLoanTxn()` in `src/lib/loan-direction.ts` is the single classifier; it falls back to the old heuristic for pre-ledger rows (all borrowed, so still correct). Deleting a loan-linked Transaction must delete its entry in the same `$transaction`.
+- Label loans with `counterpartyName()`, not `loan.lender` — the latter names the wrong party on a lent loan.
+- Ad-hoc interest math lives in `src/lib/hand-loan-interest.ts`, deliberately apart from `loan-math.ts` (whose `cyclesPerYear` switch has no default and must never see a BIMONTHLY / AT_MATURITY cadence). Everything it returns is a UI estimate; nothing is persisted or auto-posted.
 
 **Middleware:** `src/proxy.ts` (Next 16 convention — not `middleware.ts`) checks the NextAuth session cookie on protected paths and redirects unauthenticated users to `/login`. Enforces idle-lock on `/api/*`.
 

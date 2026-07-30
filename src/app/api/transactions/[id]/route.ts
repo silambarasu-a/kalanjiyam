@@ -14,6 +14,7 @@ import {
   splitPayment,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { classifyLoanTxn } from "@/lib/loan-direction";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 import { isS3Configured, presignGet } from "@/lib/s3";
@@ -357,8 +358,13 @@ const body = await request.json();
       );
     }
     // Loan disbursements were created together with the loan; let the
-    // user adjust them through the loan record, not here.
-    if (t.loanId && t.type === "INCOME" && t.kind === "LOAN_PAYMENT") {
+    // user adjust them through the loan record, not here. Classified through
+    // the ledger rather than `type === INCOME`, which names the wrong row on a
+    // lent loan (its disbursement is an EXPENSE and its receipts are INCOME).
+    const loanClass = t.loanId
+      ? await classifyLoanTxn({ id: t.id, type: t.type, kind: t.kind })
+      : null;
+    if (loanClass?.isDisbursement) {
       return NextResponse.json(
         { error: "Edit the loan to change its disbursement." },
         { status: 400 },
@@ -568,18 +574,28 @@ const body = await request.json();
       }
     }
 
+    // An AD_HOC hand-loan settlement carries a user-chosen interest/principal
+    // split that no formula can re-derive from a different gross, so there is
+    // no honest way to reinterpret it. Deleting and re-recording restores the
+    // outstanding exactly (the ledger entry holds the principal), so that's
+    // the supported correction path.
+    if (amountChanged && full?.loan?.repaymentMode === "AD_HOC" && loanClass?.isRepayment) {
+      return NextResponse.json(
+        {
+          error:
+            "Edit this settlement from the loan page, or delete it and record it again.",
+        },
+        { status: 400 },
+      );
+    }
+
     await prisma.$transaction(async (tx) => {
       if (amountChanged && full) {
-        // ── Loan EMI: reverse the old payment's principal portion, then
+        // ── Loan repayment: reverse the old payment's principal portion, then
         // apply the new one against the post-reversal balance. Mirrors
         // the delete-then-recreate semantics so foreclose/reopen flags
         // stay consistent.
-        if (
-          full.loanId &&
-          full.loan &&
-          full.type === "EXPENSE" &&
-          full.kind === "LOAN_PAYMENT"
-        ) {
+        if (full.loanId && full.loan && loanClass?.isRepayment) {
           const rate = full.loan.interestRate
             ? Number(full.loan.interestRate)
             : 0;
@@ -589,12 +605,18 @@ const body = await request.json();
           const freq = (full.loan.frequency ?? "MONTHLY") as LoanFrequency;
           const principal = Number(full.loan.principal);
 
-          const oldPrincipalAddBack = reverseLoanPaymentPrincipal(
-            Number(full.loan.outstanding),
-            oldAmount,
-            rate,
-            freq,
-          );
+          // Ledger-first: when the payment stored its split we know the exact
+          // principal it consumed. `reverseLoanPaymentPrincipal` only has to
+          // guess it for pre-ledger payments, and its own doc comment calls
+          // that approximate whenever the original split was overridden.
+          const oldPrincipalAddBack = loanClass.entry
+            ? Number(loanClass.entry.principalAmount)
+            : reverseLoanPaymentPrincipal(
+                Number(full.loan.outstanding),
+                oldAmount,
+                rate,
+                freq,
+              );
           const balanceBeforeNew = Math.min(
             principal,
             Number(full.loan.outstanding) + oldPrincipalAddBack,
@@ -619,6 +641,19 @@ const body = await request.json();
                     : full.loan.foreclosedAt,
             },
           });
+          // Keep the stored split in step with the new gross, so a later
+          // delete still reverses exactly.
+          if (loanClass.entry) {
+            await tx.loanLedgerEntry.update({
+              where: { id: loanClass.entry.id },
+              data: {
+                principalAmount: newSplit.principal,
+                interestAmount: newSplit.interest,
+                gstAmount: newSplit.gst,
+                amount: newAmount,
+              },
+            });
+          }
         }
 
         // ── Investment BUY/SELL: shift holdings by the amount delta.
@@ -901,14 +936,23 @@ export async function DELETE(
         { status: 400 }
       );
     }
-    // A loan disbursement INCOME is created together with its Loan
-    // record. Removing it in isolation leaves the loan dangling without
-    // funds — make the user delete the loan instead.
-    if (
-      loaded.transaction.loanId &&
-      loaded.transaction.type === "INCOME" &&
-      loaded.transaction.kind === "LOAN_PAYMENT"
-    ) {
+    // A loan disbursement is created together with its Loan record. Removing
+    // it in isolation leaves the loan dangling without funds — make the user
+    // delete the loan instead.
+    //
+    // Classified through the ledger, NOT `type === INCOME`: a lent loan's
+    // disbursement is an EXPENSE, so the old heuristic waved it through and
+    // the repayment-reversal block below then ADDED its principal back,
+    // doubling the receivable. Pre-ledger rows are all borrowed loans, where
+    // the heuristic is still correct, so the fallback is safe.
+    const loanClass = loaded.transaction.loanId
+      ? await classifyLoanTxn({
+          id: loaded.transaction.id,
+          type: loaded.transaction.type,
+          kind: loaded.transaction.kind,
+        })
+      : null;
+    if (loanClass?.isDisbursement) {
       return NextResponse.json(
         { error: "Delete the loan to remove its disbursement." },
         { status: 400 }
@@ -932,22 +976,22 @@ export async function DELETE(
     });
 
     await prisma.$transaction(async (tx) => {
-      // ── Loan EMI repayment: add the principal portion back to the
-      // loan's outstanding and re-open it if this payment had foreclosed
-      // it. Closed-form inverse of splitPayment — accurate for the
-      // common case where the original split wasn't manually overridden.
-      if (
-        t.loanId &&
-        t.loan &&
-        t.type === "EXPENSE" &&
-        t.kind === "LOAN_PAYMENT"
-      ) {
-        const principalAddBack = reverseLoanPaymentPrincipal(
-          Number(t.loan.outstanding),
-          Number(t.amount),
-          t.loan.interestRate ? Number(t.loan.interestRate) : 0,
-          (t.loan.frequency ?? "MONTHLY") as LoanFrequency
-        );
+      // ── Loan repayment: add the principal portion back to the loan's
+      // outstanding and re-open it if this payment had foreclosed it.
+      if (t.loanId && t.loan && loanClass?.isRepayment) {
+        // Ledger-first: the stored entry holds the exact principal this
+        // payment consumed. `reverseLoanPaymentPrincipal` is the closed-form
+        // inverse of splitPayment and only has to guess for pre-ledger
+        // payments — accurate for the common case where the original split
+        // wasn't manually overridden.
+        const principalAddBack = loanClass.entry
+          ? Number(loanClass.entry.principalAmount)
+          : reverseLoanPaymentPrincipal(
+              Number(t.loan.outstanding),
+              Number(t.amount),
+              t.loan.interestRate ? Number(t.loan.interestRate) : 0,
+              (t.loan.frequency ?? "MONTHLY") as LoanFrequency
+            );
         const newOutstanding = Math.min(
           Number(t.loan.principal),
           Number(t.loan.outstanding) + principalAddBack
@@ -963,6 +1007,14 @@ export async function DELETE(
               : {}),
           },
         });
+      }
+
+      // Drop the stored split along with its cash row. `transactionId` is
+      // SetNull (so an accidental transaction delete can't erase the loan's
+      // audit trail wholesale), which makes deleting it here mandatory — an
+      // orphaned entry would keep inflating every interest total.
+      if (loanClass?.entry) {
+        await tx.loanLedgerEntry.delete({ where: { id: loanClass.entry.id } });
       }
 
       // ── Investment BUY/SELL: undo the holdings change made when this

@@ -2499,7 +2499,10 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
 type EmiLoan = {
   id: string;
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  direction: "BORROWED" | "LENT";
+  repaymentMode: "EMI" | "AD_HOC";
   lender: string;
+  counterparty: string;
   outstanding: number;
   emiAmount: number | null;
   active: boolean;
@@ -2540,7 +2543,17 @@ function LoanEmiForm({
         ...(bankData?.loans ?? []),
         ...(handData?.loans ?? []),
         ...(cardData?.loans ?? []),
-      ].filter((l) => l.active && l.outstanding > 0),
+        // This form posts to /api/loans/[id]/pay, which only handles EMI
+        // repayments on money you borrowed. A lent loan (money coming back to
+        // you) or an ad-hoc hand loan (no fixed instalment to split) is settled
+        // through /settle from the loan page instead, and would 400 here.
+      ].filter(
+        (l) =>
+          l.active &&
+          l.outstanding > 0 &&
+          l.direction !== "LENT" &&
+          l.repaymentMode !== "AD_HOC",
+      ),
     [bankData, handData, cardData],
   );
 

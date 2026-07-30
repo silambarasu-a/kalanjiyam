@@ -20,15 +20,22 @@ export type LoanPaymentRow = {
   amount: number;
   date: string;
   description: string;
+  /** The persisted ledger classification; null for pre-ledger rows. */
+  ledgerKind?: "DISBURSEMENT" | "REPAYMENT" | "CHARGE" | "WRITE_OFF" | null;
 };
 
 export function LoanPaymentHistory({
   payments,
   totalRepaid,
+  direction = "BORROWED",
+  adHoc = false,
 }: {
   payments: LoanPaymentRow[];
   totalRepaid: number;
+  direction?: "BORROWED" | "LENT";
+  adHoc?: boolean;
 }) {
+  const isLent = direction === "LENT";
   const router = useRouter();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditableTransaction | null>(null);
@@ -55,15 +62,22 @@ export function LoanPaymentHistory({
     <>
     <section className="rounded-lg border bg-card">
       <header className="px-5 py-3 border-b">
-        <h2 className="text-sm font-semibold">Payment history</h2>
+        <h2 className="text-sm font-semibold">
+          {isLent ? "Cash history" : "Payment history"}
+        </h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {payments.length} {payments.length === 1 ? "entry" : "entries"} ·{" "}
-          {formatINR(totalRepaid)} repaid
+          {formatINR(totalRepaid)} {isLent ? "received" : "repaid"}
+          {adHoc && (
+            <> · settlements made in cash don&apos;t appear here</>
+          )}
         </p>
       </header>
       {payments.length === 0 ? (
         <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-          No payments recorded yet.
+          {adHoc
+            ? "Nothing has moved through an account yet."
+            : "No payments recorded yet."}
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -79,7 +93,17 @@ export function LoanPaymentHistory({
           <tbody>
             {payments.map((p) => {
               const isIncome = p.type === "INCOME";
-              const isDisbursement = isIncome && p.kind === "LOAN_PAYMENT";
+              // Same classification the API guards use. The type/kind heuristic
+              // inverts on a lent loan (its disbursement is an EXPENSE), so read
+              // the ledger first and fall back only for pre-ledger rows — which
+              // are all borrowed loans, where the heuristic is still right.
+              const isDisbursement = p.ledgerKind
+                ? p.ledgerKind === "DISBURSEMENT" || p.ledgerKind === "CHARGE"
+                : isIncome && p.kind === "LOAN_PAYMENT";
+              // An ad-hoc settlement carries a user-chosen split that can't be
+              // re-derived from a different gross, so the API refuses amount
+              // edits. Deleting and re-recording is the supported correction.
+              const canEdit = !isDisbursement && !adHoc;
               const busy = deletingId === p.id;
               return (
                 <tr key={p.id} className="border-b last:border-0 hover:bg-muted/20">
@@ -100,7 +124,7 @@ export function LoanPaymentHistory({
                     {formatINR(p.amount)}
                   </td>
                   <td className="px-2 py-2.5 text-right whitespace-nowrap">
-                    {!isDisbursement && (
+                    {canEdit && (
                       <Button
                         variant="ghost"
                         size="icon"

@@ -2,15 +2,25 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
-import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
+import {
+  canAccessRecord,
+  checkRoutePermission,
+  visibilityFilter,
+} from "@/lib/permissions";
 import { loanCreateSchema } from "@/lib/validators-domain";
 import { calculateEMI, countPaidEmis, monthsPerCycle, advanceByCycle } from "@/lib/loan-math";
+import { nextInterestDueDate } from "@/lib/hand-loan-interest";
+import { counterpartyName } from "@/lib/loan-direction";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import { computeAccountBalance } from "@/lib/account-balance";
 import {
   LoanKind,
   LoanSource,
   LoanFrequency,
+  LoanDirection,
+  LoanRepaymentMode,
+  LoanInterestCadence,
+  LoanLedgerKind,
   TransactionType,
   TransactionKind,
 } from "@/generated/prisma/client";
@@ -27,19 +37,69 @@ function featureForSource(source: "BANK" | "HAND_FORMAL" | "CARD_EMI") {
   return source === "BANK" ? "bank_loans" : source === "CARD_EMI" ? "card_emi" : "hand_loans";
 }
 
+/**
+ * Look up the hand-loan counterparty and confirm it belongs to this workspace.
+ * Returns null when no id was supplied (legacy hand loans carry only the
+ * free-text name) and the "not-found" sentinel when the id is bogus or
+ * cross-workspace, so the caller can 404.
+ */
+async function resolveWorkspaceContact(
+  workspaceId: string,
+  contactId: string | null | undefined,
+): Promise<{ id: string; name: string } | null | "not-found"> {
+  if (!contactId) return null;
+  const contact = await prisma.contact.findFirst({
+    where: { id: contactId, workspaceId },
+    select: { id: true, name: true },
+  });
+  return contact ?? "not-found";
+}
+
+const ALL_SOURCES = ["BANK", "HAND_FORMAL", "CARD_EMI"] as const;
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const source = url.searchParams.get("source") as LoanSource | null;
-    const feature = source ? featureForSource(source) : "bank_loans";
-    const ctx = await requireWorkspace(feature, "read");
+    const direction = url.searchParams.get("direction") as LoanDirection | null;
+    // Loans are permission-gated per source, so a source-less list must not
+    // leak across features. It used to check `bank_loans` and then return loans
+    // of EVERY source, so a member with bank_loans:full + hand_loans:hidden
+    // could read hand loans through it. Now we resolve which sources the caller
+    // can actually read and filter to those. `dashboard` on the source-less
+    // path only establishes the workspace — the per-source filter below is what
+    // does the real gating.
+    const ctx = await requireWorkspace(
+      source ? featureForSource(source) : "dashboard",
+      "read",
+    );
     const session = await auth();
+
+    // With an explicit `source`, requireWorkspace above already gated it and
+    // ctx.ownOnly is the correct visibility scope. Without one we have to gate
+    // AND scope each source independently — a member can hold a different level
+    // on each of bank_loans / hand_loans / card_emi, so one shared ownOnly
+    // would be wrong for at least one of them.
+    const scope = source
+      ? { source, ...visibilityFilter(session, ctx.ownOnly) }
+      : (() => {
+          const branches = ALL_SOURCES.map((s) => {
+            const perm = checkRoutePermission(session, featureForSource(s), "read");
+            return perm.allowed
+              ? { source: s, ...visibilityFilter(session, perm.ownOnly) }
+              : null;
+          }).filter((b): b is NonNullable<typeof b> => b !== null);
+          return branches.length ? { OR: branches } : null;
+        })();
+    // No readable source at all — an empty list, not a 403: the caller does
+    // hold `dashboard` read, there is just nothing here for them.
+    if (!scope) return NextResponse.json({ loans: [] });
 
     const loans = await prisma.loan.findMany({
       where: {
         workspaceId: ctx.workspaceId,
-        ...(source ? { source } : {}),
-        ...visibilityFilter(session, ctx.ownOnly),
+        ...scope,
+        ...(direction ? { direction } : {}),
       },
       orderBy: [{ active: "desc" }, { startedAt: "desc" }],
       include: {
@@ -47,6 +107,7 @@ export async function GET(request: Request) {
         account: { select: { id: true, name: true } },
         card: { select: { id: true, name: true } },
         lenderContact: { select: { id: true, name: true } },
+        borrowerContact: { select: { id: true, name: true } },
         memberContact: { select: { id: true, name: true, relationship: true } },
         goldItems: {
           orderBy: { createdAt: "asc" },
@@ -61,25 +122,52 @@ export async function GET(request: Request) {
         },
       },
     });
+    // Interest settled per loan, in one groupBy rather than N+1 per row. Only
+    // loans with ledger entries appear; the rest report 0, which is all that
+    // was ever knowable for pre-ledger history.
+    const interestByLoan = new Map<string, number>();
+    if (loans.length > 0) {
+      const sums = await prisma.loanLedgerEntry.groupBy({
+        by: ["loanId"],
+        where: { loanId: { in: loans.map((l) => l.id) }, kind: "REPAYMENT" },
+        _sum: { interestAmount: true, gstAmount: true },
+      });
+      for (const s of sums) {
+        interestByLoan.set(
+          s.loanId,
+          Number(s._sum.interestAmount ?? 0) + Number(s._sum.gstAmount ?? 0),
+        );
+      }
+    }
+
     return NextResponse.json({
       loans: loans.map((l) => ({
         id: l.id,
         kind: l.kind,
         source: l.source,
+        direction: l.direction,
+        repaymentMode: l.repaymentMode,
         // Always serve the contact's *current* name when one is linked,
         // falling back to the denormalised string for legacy/bank loans.
+        // `lender` is kept for the existing consumers; `counterparty` is what
+        // new code should read, since on a lent loan the other party is the
+        // borrower.
         lender: l.lenderContact?.name ?? l.lender,
+        counterparty: counterpartyName(l),
         lenderContact: l.lenderContact,
         borrower: l.borrower,
+        borrowerContact: l.borrowerContact,
         memberContactId: l.memberContactId,
         memberContact: l.memberContact,
         principal: Number(l.principal),
         outstanding: Number(l.outstanding),
+        interestSettled: interestByLoan.get(l.id) ?? 0,
         interestRate: l.interestRate == null ? null : Number(l.interestRate),
         gstOnInterest: l.gstOnInterest == null ? null : Number(l.gstOnInterest),
         emiAmount: l.emiAmount == null ? null : Number(l.emiAmount),
         tenure: l.tenure,
         frequency: l.frequency,
+        interestCadence: l.interestCadence,
         charges: l.charges == null ? null : Number(l.charges),
         chargeBreakdown: l.chargeBreakdown ?? null,
         account: l.account,
@@ -157,29 +245,76 @@ export async function POST(request: Request) {
       }
     }
 
-    // lenderContactId only applies to HAND_FORMAL. Reject so a bad client
-    // can't attach a contact to a bank/card-EMI loan.
+    const isLent = data.direction === "LENT";
+    const isAdHoc = data.repaymentMode === "AD_HOC";
+
+    // Direction / mode are only meaningful on hand loans. The Zod refines
+    // already cover this, but a hand-rolled request must not be able to reach
+    // the ledger-writing code below with an impossible combination.
+    if (isLent && data.source !== "HAND_FORMAL") {
+      return NextResponse.json(
+        { error: "Only hand loans can be money you lent out" },
+        { status: 400 },
+      );
+    }
+    if (isAdHoc && data.source !== "HAND_FORMAL") {
+      return NextResponse.json(
+        { error: "Only hand loans can be settled as you go" },
+        { status: 400 },
+      );
+    }
+    // lenderContactId only applies to a BORROWED HAND_FORMAL loan. Reject so a
+    // bad client can't attach a contact to a bank/card-EMI loan, or put a lent
+    // loan on the wrong side of a contact's ledger.
     if (data.lenderContactId && data.source !== "HAND_FORMAL") {
       return NextResponse.json(
         { error: "Lender contact only applies to hand loans" },
         { status: 400 },
       );
     }
-    // For HAND_FORMAL, the lender is a workspace contact. Resolve the name
-    // from the contact so the denormalised `lender` column always matches —
-    // ignore whatever string the client sent.
+    if (data.lenderContactId && isLent) {
+      return NextResponse.json(
+        { error: "Lender contact only applies to money you borrowed" },
+        { status: 400 },
+      );
+    }
+    if (data.borrowerContactId && !isLent) {
+      return NextResponse.json(
+        { error: "Borrower contact only applies to money you lent" },
+        { status: 400 },
+      );
+    }
+    // For HAND_FORMAL, the counterparty is a workspace contact. Resolve the
+    // name from the contact so the denormalised column always matches — ignore
+    // whatever string the client sent.
+    const counterpartyContact =
+      data.source === "HAND_FORMAL"
+        ? await resolveWorkspaceContact(
+            ctx.workspaceId,
+            isLent ? data.borrowerContactId : data.lenderContactId,
+          )
+        : null;
+    if (counterpartyContact === "not-found") {
+      return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+    }
+
     let resolvedLenderName = data.lender;
     let resolvedLenderContactId: string | null = null;
-    if (data.source === "HAND_FORMAL" && data.lenderContactId) {
-      const contact = await prisma.contact.findUnique({
-        where: { id: data.lenderContactId },
-        select: { id: true, name: true, workspaceId: true },
-      });
-      if (!contact || contact.workspaceId !== ctx.workspaceId) {
-        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+    let resolvedBorrowerName = data.borrower ?? null;
+    let resolvedBorrowerContactId: string | null = null;
+    if (counterpartyContact) {
+      if (isLent) {
+        resolvedBorrowerName = counterpartyContact.name;
+        resolvedBorrowerContactId = counterpartyContact.id;
+        // `lender` is NOT NULL and read directly by the label sites that
+        // haven't been switched to counterpartyName() yet (dashboard dues,
+        // reports, recent activity). Storing the borrower's name there keeps
+        // all of them rendering the right human instead of a stale "you".
+        resolvedLenderName = counterpartyContact.name;
+      } else {
+        resolvedLenderName = counterpartyContact.name;
+        resolvedLenderContactId = counterpartyContact.id;
       }
-      resolvedLenderName = contact.name;
-      resolvedLenderContactId = contact.id;
     }
 
     // memberContactId: the family member (workspace contact) whose name /
@@ -197,19 +332,28 @@ export async function POST(request: Request) {
     // tenure is the number of payment cycles (months for MONTHLY,
     // quarters for QUARTERLY, etc.). Convert to total months for the
     // maturity date math.
-    const frequency = data.frequency ?? "MONTHLY";
+    //
+    // AD_HOC loans have no EMI cycle to size, so `frequency` is pinned to
+    // MONTHLY and `tenure` therefore *is* a month count — that's what lets the
+    // form label it "Term (months)". Clamped here rather than only in the form
+    // so a hand-rolled request can't create a quarterly-cycle ad-hoc loan whose
+    // tenure then silently means something else.
+    const frequency = isAdHoc ? "MONTHLY" : (data.frequency ?? "MONTHLY");
     const tenureCycles = data.tenure ?? null;
     const totalMonths =
       tenureCycles != null ? tenureCycles * monthsPerCycle(frequency) : null;
 
     // Server-side fallback: if the client didn't send an explicit emiAmount
     // but we have principal + rate + tenure, compute the standard
-    // reducing-balance EMI so every loan has a numeric EMI on file.
-    const computedEmi =
-      data.emiAmount ??
-      (data.interestRate != null && tenureCycles
-        ? calculateEMI(data.principal, data.interestRate, tenureCycles, frequency) || null
-        : null);
+    // reducing-balance EMI so every loan has a numeric EMI on file. An AD_HOC
+    // loan has no instalment at all — a computed one would make the UI render a
+    // schedule the two parties never agreed to.
+    const computedEmi = isAdHoc
+      ? null
+      : (data.emiAmount ??
+        (data.interestRate != null && tenureCycles
+          ? calculateEMI(data.principal, data.interestRate, tenureCycles, frequency) || null
+          : null));
 
     // Maturity falls out of startedAt + total months when the client
     // hasn't overridden it.
@@ -249,7 +393,17 @@ export async function POST(request: Request) {
     const computedNextDueDate =
       data.nextDueDate
         ? new Date(data.nextDueDate)
-        : data.kind === "CREDIT_CARD_LOAN" && effectiveStatementDate != null
+        : isAdHoc
+          ? // No EMI schedule to advance — the next date is the next interest
+            // settlement, one cadence out (or the maturity date for
+            // AT_MATURITY). Null when the loan charges no interest, and it then
+            // simply never comes up as due.
+            nextInterestDueDate(
+              new Date(data.startedAt),
+              data.interestCadence ?? null,
+              computedMaturity,
+            )
+          : data.kind === "CREDIT_CARD_LOAN" && effectiveStatementDate != null
           ? nextStatementDueDate(
               data.isExisting ? new Date() : new Date(data.startedAt),
               effectiveStatementDate,
@@ -281,11 +435,14 @@ export async function POST(request: Request) {
 
     // If the client supplied a per-line breakdown, sum it; otherwise fall
     // back to the explicit `charges` total. This is the amount that banks
-    // deduct upfront — processing fee, GST, stamp duty, insurance, etc.
-    const breakdown = data.chargeBreakdown ?? [];
-    const chargesTotal = breakdown.length
-      ? Math.round(breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100) / 100
-      : data.charges ?? 0;
+    // deduct upfront — processing fee, GST, stamp duty, insurance, etc. Never
+    // applies to an ad-hoc hand loan.
+    const breakdown = isAdHoc ? [] : (data.chargeBreakdown ?? []);
+    const chargesTotal = isAdHoc
+      ? 0
+      : breakdown.length
+        ? Math.round(breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100) / 100
+        : data.charges ?? 0;
 
     // Gold items are only meaningful for GOLD-kind loans; ignore on other
     // kinds even if the client mistakenly sent them.
@@ -330,17 +487,24 @@ export async function POST(request: Request) {
           ownerUserId: ctx.userId,
           kind: data.kind as LoanKind,
           source: data.source as LoanSource,
+          direction: data.direction as LoanDirection,
+          repaymentMode: data.repaymentMode as LoanRepaymentMode,
           lender: resolvedLenderName,
           lenderContactId: resolvedLenderContactId,
-          borrower: data.borrower,
+          borrower: resolvedBorrowerName,
+          borrowerContactId: resolvedBorrowerContactId,
           memberContactId: data.memberContactId ?? null,
           principal: data.principal,
           outstanding: initialOutstanding,
           interestRate: data.interestRate ?? null,
-          gstOnInterest: data.gstOnInterest ?? null,
+          // GST on interest is a card-EMI construct; private lending has none.
+          gstOnInterest: isAdHoc ? null : data.gstOnInterest ?? null,
           emiAmount: computedEmi,
           tenure: data.tenure ?? null,
           frequency: frequency as LoanFrequency,
+          interestCadence: isAdHoc
+            ? ((data.interestCadence ?? null) as LoanInterestCadence | null)
+            : null,
           charges: chargesTotal > 0 ? chargesTotal : null,
           chargeBreakdown: breakdown.length ? breakdown : undefined,
           accountId: data.accountId ?? null,
@@ -387,31 +551,60 @@ export async function POST(request: Request) {
         });
       }
 
-      // Disbursement INCOME — full principal credited to the chosen
-      // account. Applies to both BANK loans (passbook credit from the bank)
-      // and HAND_FORMAL loans (cash from a contact deposited into a bank
-      // account). Upfront charges only apply to BANK loans (processing
-      // fee, stamp duty, GST, insurance, etc.) and post as a separate
-      // EXPENSE so the net account change is (principal − charges).
+      // Disbursement — the full principal moves through the chosen account.
+      //
+      // BORROWED: credited IN. Applies to both BANK loans (passbook credit
+      // from the bank) and HAND_FORMAL loans (cash from a contact deposited
+      // into a bank account).
+      //
+      // LENT: the mirror image — it leaves the account, because you handed the
+      // money over. Never TransactionType.HAND_LOAN: computeAccountBalance only
+      // aggregates INCOME / EXPENSE / TRANSFER, so a HAND_LOAN row would be
+      // invisible to every balance in the app.
+      //
+      // Upfront charges only apply to BANK loans (processing fee, stamp duty,
+      // GST, insurance, etc.) and post as a separate EXPENSE so the net account
+      // change is (principal − charges).
       if (
         !data.isExisting &&
         (data.source === "BANK" || data.source === "HAND_FORMAL") &&
         data.accountId
       ) {
-        await tx.transaction.create({
+        const disbursementTxn = await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
-            type: TransactionType.INCOME,
+            type: isLent ? TransactionType.EXPENSE : TransactionType.INCOME,
             kind: TransactionKind.LOAN_PAYMENT,
             amount: data.principal,
-            description:
-              data.source === "HAND_FORMAL"
+            description: isLent
+              ? `Loan given to ${resolvedLenderName}`
+              : data.source === "HAND_FORMAL"
                 ? `Hand loan from ${resolvedLenderName}`
                 : `Loan disbursement · ${resolvedLenderName}`,
             date: new Date(data.startedAt),
             accountId: data.accountId,
             loanId: loan.id,
             userId: ctx.userId,
+            createdByUserId: ctx.userId,
+            // Deliberately NOT setting paidByContactId / beneficiaryContactId.
+            // paidByContactId on an EXPENSE makes the row surface in the contact
+            // ledger's `paidForMe` list ("they paid an expense for me"), the
+            // opposite of what a loan you gave out means. The loan →
+            // borrowerContact link is the correct join.
+          },
+        });
+        // Tag the disbursement in the ledger. This is what lets every reader
+        // identify it without the `type === INCOME && kind === LOAN_PAYMENT`
+        // heuristic, which inverts once loans can run the other way.
+        await tx.loanLedgerEntry.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            loanId: loan.id,
+            kind: LoanLedgerKind.DISBURSEMENT,
+            principalAmount: data.principal,
+            amount: data.principal,
+            paidAt: new Date(data.startedAt),
+            transactionId: disbursementTxn.id,
             createdByUserId: ctx.userId,
           },
         });
@@ -421,7 +614,7 @@ export async function POST(request: Request) {
             breakdown.length > 0
               ? breakdown.map((c) => c.label).join(", ")
               : "Processing & other charges";
-          await tx.transaction.create({
+          const chargesTxn = await tx.transaction.create({
             data: {
               workspaceId: ctx.workspaceId,
               type: TransactionType.EXPENSE,
@@ -432,6 +625,21 @@ export async function POST(request: Request) {
               accountId: data.accountId,
               loanId: loan.id,
               userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+          // Charges are neither principal nor interest — they move cash but
+          // never touch `outstanding`, so all three split columns stay 0 and
+          // only `amount` carries the figure.
+          await tx.loanLedgerEntry.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              loanId: loan.id,
+              kind: LoanLedgerKind.CHARGE,
+              amount: chargesTotal,
+              paidAt: new Date(data.startedAt),
+              transactionId: chargesTxn.id,
+              notes: chargeLabel,
               createdByUserId: ctx.userId,
             },
           });

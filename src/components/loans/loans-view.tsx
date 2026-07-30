@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { Plus, Trash2, Landmark, Banknote, Receipt } from "lucide-react";
+import { Plus, Trash2, Landmark, Banknote, Receipt, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { LoanForm, type LoanFormHandle } from "@/components/loans/loan-form";
 import { LoanPayDialog } from "@/components/loans/loan-pay-dialog";
+import { LoanSettleDialog } from "@/components/loans/loan-settle-dialog";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
@@ -22,6 +23,10 @@ import {
   monthsPerCycle,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import {
+  formatInterestCadence,
+  type LoanInterestCadence,
+} from "@/lib/hand-loan-interest";
 import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -38,16 +43,21 @@ type Loan = {
   id: string;
   kind: string;
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  direction: "BORROWED" | "LENT";
+  repaymentMode: "EMI" | "AD_HOC";
   lender: string;
+  counterparty: string;
   loanAccountNumber: string | null;
   memberContact: { id: string; name: string; relationship: string | null } | null;
   principal: number;
   outstanding: number;
+  interestSettled: number;
   interestRate: number | null;
   gstOnInterest: number | null;
   emiAmount: number | null;
   tenure: number | null;
   frequency: LoanFrequency | null;
+  interestCadence: LoanInterestCadence | null;
   startedAt: string;
   nextDueDate: string | null;
   active: boolean;
@@ -67,9 +77,18 @@ const FREQUENCY_LABEL: Record<LoanFrequency, { tenureUnit: string; emi: string }
 function computeEmiProgress(
   l: Pick<
     Loan,
-    "principal" | "outstanding" | "tenure" | "emiAmount" | "interestRate" | "frequency"
+    | "principal"
+    | "outstanding"
+    | "tenure"
+    | "emiAmount"
+    | "interestRate"
+    | "frequency"
+    | "repaymentMode"
   >,
 ): { paid: number; total: number; left: number } | null {
+  // An ad-hoc loan has no instalments to count. Rendering "3 of 12 paid" from
+  // a fabricated EMI would describe a schedule that doesn't exist.
+  if (l.repaymentMode === "AD_HOC") return null;
   if (!l.tenure || !l.emiAmount || l.emiAmount <= 0) return null;
   const rate = l.interestRate ?? 0;
   const freq = l.frequency ?? "MONTHLY";
@@ -86,9 +105,9 @@ function computeEmiProgress(
 const SOURCE_META = {
   BANK: { label: "Bank loans", Icon: Landmark, emptyHint: "Add your first bank loan." },
   HAND_FORMAL: {
-    label: "Hand loans (formal)",
+    label: "Hand loans",
     Icon: Banknote,
-    emptyHint: "Formal hand loans with interest and EMI schedule.",
+    emptyHint: "Money you borrowed from someone, with or without a fixed EMI.",
   },
   CARD_EMI: {
     label: "Card EMI",
@@ -98,20 +117,46 @@ const SOURCE_META = {
   },
 } as const;
 
+const LENT_META = {
+  label: "Money lent out",
+  Icon: HandCoins,
+  emptyHint:
+    "Money you gave out. Collect interest on your own cadence and reduce the principal whenever they pay back.",
+} as const;
+
 export function LoansView({
   source,
+  direction = "BORROWED",
 }: {
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  direction?: "BORROWED" | "LENT";
 }) {
-  const meta = SOURCE_META[source];
-  const { data, isLoading } = useSWR<{ loans: Loan[] }>(
-    `/api/loans?source=${source}`,
-    fetcher
+  const isLent = direction === "LENT";
+  const meta = isLent ? LENT_META : SOURCE_META[source];
+  // Hand loans are split across two routes, so the list is filtered by
+  // direction and each side gets its own SWR key.
+  const listKey =
+    source === "HAND_FORMAL"
+      ? `/api/loans?source=${source}&direction=${direction}`
+      : `/api/loans?source=${source}`;
+  const { data, isLoading } = useSWR<{ loans: Loan[] }>(listKey, fetcher);
+  // The sibling side's count, purely so the toggle can show both numbers —
+  // that's what makes the lent list discoverable without a second nav item.
+  const { data: siblingData } = useSWR<{ loans: Loan[] }>(
+    source === "HAND_FORMAL"
+      ? `/api/loans?source=${source}&direction=${isLent ? "BORROWED" : "LENT"}`
+      : null,
+    fetcher,
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [payLoan, setPayLoan] = useState<Loan | null>(null);
+  const [settleLoan, setSettleLoan] = useState<Loan | null>(null);
   const loanFormRef = useRef<LoanFormHandle>(null);
   const [loanFormBusy, setLoanFormBusy] = useState(false);
+
+  const refreshList = async () => {
+    await globalMutate((k) => typeof k === "string" && k.startsWith("/api/loans"));
+  };
 
   const allLoans = data?.loans ?? [];
   const activeLoans = allLoans.filter((l) => l.active);
@@ -120,6 +165,7 @@ export function LoansView({
   const activeOutstanding = activeLoans.reduce((s, l) => s + l.outstanding, 0);
   const activePrincipal = activeLoans.reduce((s, l) => s + l.principal, 0);
   const activeRepaid = Math.max(0, activePrincipal - activeOutstanding);
+  const interestSettled = allLoans.reduce((s, l) => s + (l.interestSettled ?? 0), 0);
   // Normalise EMIs to a monthly figure so loans with mixed frequencies
   // can be compared on a single line.
   const monthlyCommitment = activeLoans.reduce((s, l) => {
@@ -130,25 +176,50 @@ export function LoansView({
 
   return (
     <div className="space-y-6">
+      {source === "HAND_FORMAL" && (
+        <div className="inline-flex rounded-lg border bg-card p-1 text-sm">
+          <DirectionTab
+            href="/loans/hand"
+            label="Borrowed"
+            count={isLent ? siblingData?.loans.length : allLoans.length}
+            active={!isLent}
+          />
+          <DirectionTab
+            href="/loans/hand/lent"
+            label="Lent"
+            count={isLent ? allLoans.length : siblingData?.loans.length}
+            active={isLent}
+          />
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{meta.label}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {activeOutstanding > 0
-              ? `${formatINR(activeOutstanding)} outstanding across active loans`
-              : "No outstanding balance"}
+              ? isLent
+                ? `${formatINR(activeOutstanding)} still to come back to you`
+                : `${formatINR(activeOutstanding)} outstanding across active loans`
+              : isLent
+                ? "Nothing outstanding"
+                : "No outstanding balance"}
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-2">
           <Plus className="h-4 w-4" />
-          {source === "CARD_EMI" ? "Convert to EMI" : "New loan"}
+          {isLent
+            ? "New loan given"
+            : source === "CARD_EMI"
+              ? "Convert to EMI"
+              : "New loan"}
         </Button>
       </div>
 
       {allLoans.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
-            label="Outstanding"
+            label={isLent ? "Receivable" : "Outstanding"}
             value={formatINR(activeOutstanding)}
             hint={
               activePrincipal > 0
@@ -157,17 +228,28 @@ export function LoansView({
             }
             tone={activeOutstanding > 0 ? "outstanding" : "settled"}
           />
+          {isLent ? (
+            <StatCard
+              label="Interest received"
+              value={interestSettled > 0 ? formatINR(interestSettled) : "—"}
+              hint={
+                interestSettled > 0 ? "recorded to date" : "Nothing collected yet"
+              }
+              tone="settled"
+            />
+          ) : (
+            <StatCard
+              label="Monthly EMI"
+              value={monthlyCommitment > 0 ? formatINR(Math.round(monthlyCommitment)) : "—"}
+              hint={
+                monthlyCommitment > 0
+                  ? `across ${activeLoans.length} loan${activeLoans.length === 1 ? "" : "s"}`
+                  : "No EMI on file"
+              }
+            />
+          )}
           <StatCard
-            label="Monthly EMI"
-            value={monthlyCommitment > 0 ? formatINR(Math.round(monthlyCommitment)) : "—"}
-            hint={
-              monthlyCommitment > 0
-                ? `across ${activeLoans.length} loan${activeLoans.length === 1 ? "" : "s"}`
-                : "No EMI on file"
-            }
-          />
-          <StatCard
-            label="Repaid"
+            label={isLent ? "Principal recovered" : "Repaid"}
             value={formatINR(activeRepaid)}
             hint={
               activePrincipal > 0
@@ -209,14 +291,14 @@ export function LoansView({
                   breaks z-indexed nested anchors. */}
               <Link
                 href={`/loans/${l.id}`}
-                aria-label={`View ${l.lender}`}
+                aria-label={`View ${l.counterparty}`}
                 className="absolute inset-0 z-0 rounded-xl focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
               />
               <div className="relative flex items-start justify-between gap-3 pointer-events-none">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <meta.Icon className="h-4 w-4 text-primary shrink-0" />
-                    <h3 className="truncate font-semibold">{l.lender}</h3>
+                    <h3 className="truncate font-semibold">{l.counterparty}</h3>
                     {!l.active && (
                       <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
                         closed
@@ -227,7 +309,9 @@ export function LoansView({
                     {l.kind} · started {formatDate(l.startedAt)}
                     {l.card ? ` · on ${l.card.name}` : ""}
                     {l.tenure
-                      ? ` · ${l.tenure}${FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].tenureUnit}`
+                      ? l.repaymentMode === "AD_HOC"
+                        ? ` · ${l.tenure}mo term`
+                        : ` · ${l.tenure}${FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].tenureUnit}`
                       : ""}
                   </div>
                   {l.loanAccountNumber && (
@@ -256,17 +340,26 @@ export function LoansView({
                   )}
                 </div>
                 <div className="flex gap-1 shrink-0 pointer-events-auto">
-                  {l.active && (
-                    <Button size="sm" variant="outline" onClick={() => setPayLoan(l)}>
-                      Pay
-                    </Button>
-                  )}
+                  {l.active &&
+                    (l.repaymentMode === "AD_HOC" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setSettleLoan(l)}
+                      >
+                        {l.direction === "LENT" ? "Record receipt" : "Settle"}
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => setPayLoan(l)}>
+                        Pay
+                      </Button>
+                    ))}
                   {/* Closed loans are permanent — DELETE is API-blocked
                       anyway, so hide the button entirely to avoid a
                       misleading affordance. */}
                   {l.active && (
                     <ConfirmPopover
-                      title={`Delete "${l.lender}"?`}
+                      title={`Delete "${l.counterparty}"?`}
                       description="The loan and its payment history will be removed. This cannot be undone."
                       confirmLabel="Delete"
                       busyLabel="Deleting…"
@@ -280,7 +373,7 @@ export function LoansView({
                           throw new Error(body.error ?? "Failed");
                         }
                         toast.success("Loan deleted");
-                        globalMutate(`/api/loans?source=${source}`);
+                        refreshList();
                       }}
                       trigger={
                         <Button variant="ghost" size="icon" aria-label="Delete">
@@ -294,14 +387,26 @@ export function LoansView({
               <div className="relative pointer-events-none">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Outstanding</span>
+                    <span className="text-xs text-muted-foreground">
+                      {l.direction === "LENT" ? "Receivable" : "Outstanding"}
+                    </span>
                     <ToneBadge
                       tone={l.outstanding > 0 ? "outstanding" : "settled"}
-                      label={l.outstanding > 0 ? "Active" : "Cleared"}
+                      label={
+                        l.outstanding > 0
+                          ? "Active"
+                          : l.active
+                            ? // outstanding 0 while still open is a real state on
+                              // an ad-hoc loan: principal back, interest pending.
+                              "Interest pending"
+                            : "Cleared"
+                      }
                     />
                   </div>
                   <span className="text-[10px] text-muted-foreground">
-                    {formatINR(paid)} paid of {formatINR(l.principal)}
+                    {formatINR(paid)}{" "}
+                    {l.direction === "LENT" ? "recovered" : "paid"} of{" "}
+                    {formatINR(l.principal)}
                   </span>
                 </div>
                 <MoneyValue
@@ -317,13 +422,26 @@ export function LoansView({
                   />
                 </div>
               </div>
-              {l.emiAmount != null && (
+              {l.repaymentMode === "AD_HOC" ? (
                 <div className="relative pointer-events-none text-xs text-muted-foreground">
-                  {FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi[0].toUpperCase() +
-                    FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi.slice(1)}{" "}
-                  EMI {formatINR(l.emiAmount)}
-                  {l.interestRate ? ` · ${l.interestRate}% p.a.` : ""}
+                  {l.interestRate
+                    ? `Interest ${formatInterestCadence(l.interestCadence).toLowerCase()} · ${l.interestRate}% p.a.`
+                    : "Interest-free"}
+                  {l.interestSettled > 0
+                    ? ` · ${formatINR(l.interestSettled)} ${
+                        l.direction === "LENT" ? "received" : "paid"
+                      }`
+                    : ""}
                 </div>
+              ) : (
+                l.emiAmount != null && (
+                  <div className="relative pointer-events-none text-xs text-muted-foreground">
+                    {FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi[0].toUpperCase() +
+                      FREQUENCY_LABEL[l.frequency ?? "MONTHLY"].emi.slice(1)}{" "}
+                    EMI {formatINR(l.emiAmount)}
+                    {l.interestRate ? ` · ${l.interestRate}% p.a.` : ""}
+                  </div>
+                )
               )}
               {emiProgress && (
                 <div className="relative pointer-events-none text-[11px] text-muted-foreground tabular-nums">
@@ -347,12 +465,17 @@ export function LoansView({
         <DialogContent className="w-[min(36rem,calc(100%-2rem))]">
           <DialogHeader>
             <DialogTitle>
-              {source === "CARD_EMI" ? "Convert a purchase to EMI" : "New loan"}
+              {isLent
+                ? "New loan given"
+                : source === "CARD_EMI"
+                  ? "Convert a purchase to EMI"
+                  : "New loan"}
             </DialogTitle>
           </DialogHeader>
           <LoanForm
             ref={loanFormRef}
             source={source}
+            direction={direction}
             onSaved={() => setCreateOpen(false)}
             onSubmittingChange={setLoanFormBusy}
           />
@@ -370,9 +493,44 @@ export function LoansView({
       <LoanPayDialog
         loan={payLoan}
         onClose={() => setPayLoan(null)}
-        onPaid={() => globalMutate(`/api/loans?source=${source}`)}
+        onPaid={refreshList}
+      />
+
+      <LoanSettleDialog
+        loan={settleLoan}
+        onClose={() => setSettleLoan(null)}
+        onSaved={refreshList}
       />
     </div>
+  );
+}
+
+function DirectionTab({
+  href,
+  label,
+  count,
+  active,
+}: {
+  href: string;
+  label: string;
+  count: number | undefined;
+  active: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+        active
+          ? "bg-primary text-primary-foreground"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {label}
+      {count != null && (
+        <span className="ml-1.5 tabular-nums opacity-70">({count})</span>
+      )}
+    </Link>
   );
 }
 

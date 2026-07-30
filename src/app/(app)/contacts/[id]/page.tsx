@@ -67,6 +67,8 @@ type SpentExpense = {
 type LinkedLoan = {
   id: string;
   kind: string;
+  direction: "BORROWED" | "LENT";
+  repaymentMode: "EMI" | "AD_HOC";
   principal: number;
   outstanding: number;
   startedAt: string;
@@ -74,6 +76,7 @@ type LinkedLoan = {
   active: boolean;
   emiAmount: number | null;
   interestRate: number | null;
+  interestCadence: string | null;
 };
 type Ledger = {
   member: { id: string; name: string };
@@ -86,7 +89,10 @@ type Ledger = {
     receivedFromContact: number;
     netTransferred: number;
     spentOnThem: number;
+    /** Open principal on money they lent YOU. */
     loansOwed: number;
+    /** Open principal on money YOU lent them. Never netted with loansOwed. */
+    loansLent: number;
   };
   charges: Charge[];
   transfers: Transfer[];
@@ -227,19 +233,28 @@ export default function MemberLedgerDetail() {
                 : "balanced"
           }
         />
-        <Stat
-          label={data.totals.loansOwed > 0 ? "You owe them" : "Spent on them"}
-          value={formatINR(
-            data.totals.loansOwed > 0
-              ? data.totals.loansOwed
-              : data.totals.spentOnThem,
-          )}
-          hint={
-            data.totals.loansOwed > 0
-              ? "open hand-loan principal"
-              : "not recovered"
-          }
-        />
+        {/* Owe and owed are shown as two labelled numbers, never one netted
+            figure or an either/or — you can be on both sides at once. */}
+        {data.totals.loansLent > 0 || data.totals.loansOwed > 0 ? (
+          <>
+            <Stat
+              label="They owe you"
+              value={formatINR(data.totals.loansLent)}
+              hint="open lent principal"
+            />
+            <Stat
+              label="You owe them"
+              value={formatINR(data.totals.loansOwed)}
+              hint="open hand-loan principal"
+            />
+          </>
+        ) : (
+          <Stat
+            label="Spent on them"
+            value={formatINR(data.totals.spentOnThem)}
+            hint="not recovered"
+          />
+        )}
       </div>
 
       <Tabs defaultValue="statement" className="gap-3">
@@ -504,85 +519,128 @@ export default function MemberLedgerDetail() {
         </TabsContent>
 
         <TabsContent value="loans">
-          <div className="flex items-center justify-end mb-2">
-            <Link
-              href="/loans/hand"
-              className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground self-center px-2"
-            >
-              Manage hand loans
-            </Link>
-          </div>
-          <div className="rounded-lg border bg-card divide-y">
-            {data.loans.map((l) => {
-              const paid = Math.max(0, l.principal - l.outstanding);
-              const pct =
-                l.principal > 0 ? Math.min(100, (paid / l.principal) * 100) : 0;
-              return (
-                <div key={l.id} className="px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    <Link
-                      href={`/loans/${l.id}`}
-                      className="flex-1 min-w-0 -mx-5 px-5 py-1 rounded-md hover:bg-accent/40 transition"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{l.kind}</span>
-                        {!l.active && (
-                          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                            cleared
-                          </span>
+          {/* Grouped by direction rather than mixed: an outstanding balance
+              means opposite things on the two sides. */}
+          {(
+            [
+              {
+                key: "LENT" as const,
+                heading: "You lent them",
+                manageHref: "/loans/hand/lent",
+                manageLabel: "Manage money lent",
+              },
+              {
+                key: "BORROWED" as const,
+                heading: "They lent you",
+                manageHref: "/loans/hand",
+                manageLabel: "Manage hand loans",
+              },
+            ]
+          ).map((group) => {
+            const rows = data.loans.filter((l) => l.direction === group.key);
+            if (rows.length === 0) return null;
+            return (
+              <div key={group.key} className="mb-4 last:mb-0">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                    {group.heading}
+                  </h3>
+                  <Link
+                    href={group.manageHref}
+                    className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground px-2"
+                  >
+                    {group.manageLabel}
+                  </Link>
+                </div>
+                <div className="rounded-lg border bg-card divide-y">
+                  {rows.map((l) => {
+                    const paid = Math.max(0, l.principal - l.outstanding);
+                    const pct =
+                      l.principal > 0
+                        ? Math.min(100, (paid / l.principal) * 100)
+                        : 0;
+                    const isLent = l.direction === "LENT";
+                    return (
+                      <div key={l.id} className="px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          <Link
+                            href={`/loans/${l.id}`}
+                            className="flex-1 min-w-0 -mx-5 px-5 py-1 rounded-md hover:bg-accent/40 transition"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{l.kind}</span>
+                              {!l.active && (
+                                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                                  cleared
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Started {formatDate(l.startedAt)}
+                              {l.interestRate != null && l.interestRate > 0
+                                ? ` · ${l.interestRate}% p.a.`
+                                : " · interest-free"}
+                              {l.nextDueDate && l.active
+                                ? ` · next ${isLent ? "collection" : "due"} ${formatDate(l.nextDueDate)}`
+                                : ""}
+                            </div>
+                          </Link>
+                          <div className="text-right">
+                            <div className="text-sm font-semibold tabular-nums">
+                              {formatINR(l.outstanding)}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground">
+                              of {formatINR(l.principal)}
+                            </div>
+                          </div>
+                          {l.active && (
+                            <Link
+                              href={`/loans/${l.id}?${
+                                l.repaymentMode === "AD_HOC" ? "settle=1" : "pay=1"
+                              }`}
+                              className={buttonVariants({
+                                size: "sm",
+                                variant: "outline",
+                              })}
+                            >
+                              {isLent
+                                ? "Receive"
+                                : l.repaymentMode === "AD_HOC"
+                                  ? "Settle"
+                                  : "Pay"}
+                            </Link>
+                          )}
+                        </div>
+                        {l.principal > 0 && (
+                          <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full bg-primary transition-[width]"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Started {formatDate(l.startedAt)}
-                        {l.interestRate != null && l.interestRate > 0
-                          ? ` · ${l.interestRate}% p.a.`
-                          : " · interest-free"}
-                        {l.nextDueDate && l.active
-                          ? ` · next due ${formatDate(l.nextDueDate)}`
-                          : ""}
-                      </div>
-                    </Link>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold tabular-nums">
-                        {formatINR(l.outstanding)}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground">
-                        of {formatINR(l.principal)}
-                      </div>
-                    </div>
-                    {l.active && l.outstanding > 0 && (
-                      <Link
-                        href={`/loans/${l.id}?pay=1`}
-                        className={buttonVariants({
-                          size: "sm",
-                          variant: "outline",
-                        })}
-                      >
-                        Pay
-                      </Link>
-                    )}
-                  </div>
-                  {l.principal > 0 && (
-                    <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full bg-primary transition-[width]"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  )}
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
+          <div className="rounded-lg border bg-card divide-y">
             {data.loans.length === 0 && (
               <div className="px-5 py-8 text-sm text-muted-foreground text-center">
-                No hand loans with this contact yet.{" "}
+                No hand loans with this contact yet. Add one under{" "}
+                <Link href="/loans/hand" className="underline text-foreground">
+                  Hand Loans
+                </Link>{" "}
+                if you borrowed from them, or{" "}
                 <Link
-                  href="/loans/hand"
+                  href="/loans/hand/lent"
                   className="underline text-foreground"
                 >
-                  Add one
+                  Money lent out
                 </Link>{" "}
-                if you&apos;ve borrowed from them.
+                if you lent to them.
               </div>
             )}
           </div>

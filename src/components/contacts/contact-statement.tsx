@@ -72,6 +72,14 @@ type Statement = {
     spentOnThemInPeriod: number;
     eventCount: number;
   };
+  /** Hand-loan principal each way, plus interest actually settled. Reported
+   *  alongside the charge-based position, never merged into it. */
+  loanPositions?: {
+    theyOweYouPrincipal: number;
+    youOweThemPrincipal: number;
+    interestReceived: number;
+    interestPaid: number;
+  };
   monthly: FlowBucket[];
   events: StatementEvent[];
 };
@@ -118,6 +126,7 @@ export function ContactStatement({
   const { data, isLoading } = useSWR<Statement>(url, fetcher);
 
   const s = data?.summary;
+  const lp = data?.loanPositions;
   const events = data?.events ?? [];
   const monthly = data?.monthly ?? [];
 
@@ -233,6 +242,48 @@ export function ContactStatement({
         >
           {netSentence}
         </p>
+        {/* Hand loans are reported as their own labelled pair. Deliberately
+            not folded into the two cards above (which are charge-based) and
+            never netted against each other. */}
+        {lp && (lp.theyOweYouPrincipal > 0 || lp.youOweThemPrincipal > 0) && (
+          <div className="rounded-lg border bg-muted/30 p-3 text-xs">
+            <div className="font-medium">Hand loans</div>
+            <div className="mt-1.5 grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground">
+                  They owe you · principal
+                </span>
+                <span className="tabular-nums">
+                  {formatINR(lp.theyOweYouPrincipal)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground">
+                  You owe them · principal
+                </span>
+                <span className="tabular-nums">
+                  {formatINR(lp.youOweThemPrincipal)}
+                </span>
+              </div>
+              {lp.interestReceived > 0 && (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-muted-foreground">Interest received</span>
+                  <span className="tabular-nums">
+                    {formatINR(lp.interestReceived)}
+                  </span>
+                </div>
+              )}
+              {lp.interestPaid > 0 && (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-muted-foreground">Interest paid</span>
+                  <span className="tabular-nums">
+                    {formatINR(lp.interestPaid)}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ── Period filter — its own labelled, full-width row. ── */}

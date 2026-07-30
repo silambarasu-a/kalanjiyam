@@ -22,9 +22,17 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
  *   - MemberCharges        → ACCRUAL (an obligation was booked; no cash)
  *   - Non-recoverable splits (spent on them) → INFO
  *   - "They paid for me" (gift / none)       → INFO
- *   - Hand loans (they lent)                 → LOAN
+ *   - Hand loans (either direction)          → LOAN header + per-entry rows
  * Recoverable splits and recoverable "paid for me" rows are represented by
  * their MemberCharge (ACCRUAL) instead, so nothing is double-counted.
+ *
+ * Loan cash comes from the LoanLedgerEntry rows that carry a `transactionId` —
+ * the only ones where money actually left or entered an account. The per-loan
+ * header row is always cashDelta 0, so the principal is never counted twice.
+ * Entries with no transaction (cash-in-hand settlements, write-offs, isExisting
+ * disbursements) are informational. Loans with no entries at all predate the
+ * ledger and keep exactly the old single-header-row behaviour, so historical
+ * statements don't shift.
  */
 
 function err(e: unknown) {
@@ -158,14 +166,33 @@ export async function GET(
           },
         }),
         prisma.loan.findMany({
-          where: { workspaceId: ctx.workspaceId, lenderContactId: id },
+          where: {
+            workspaceId: ctx.workspaceId,
+            OR: [{ lenderContactId: id }, { borrowerContactId: id }],
+          },
           select: {
             id: true,
             kind: true,
+            direction: true,
             principal: true,
             outstanding: true,
             startedAt: true,
             active: true,
+            ledgerEntries: {
+              select: {
+                id: true,
+                kind: true,
+                principalAmount: true,
+                interestAmount: true,
+                gstAmount: true,
+                amount: true,
+                paidAt: true,
+                periodFrom: true,
+                periodTo: true,
+                transactionId: true,
+                notes: true,
+              },
+            },
           },
         }),
       ]);
@@ -339,9 +366,29 @@ export async function GET(
       });
     }
 
-    // ── Hand loans (informational — tracked under Loans) ────────────────
+    // ── Hand loans ──────────────────────────────────────────────────────
+    //
+    // The per-loan header row is ALWAYS informational (cashDelta 0) so the
+    // principal can never be counted twice. Real cash comes from the
+    // LoanLedgerEntry rows that carry a `transactionId` — those are the only
+    // ones where money actually left or entered an account. Entries with no
+    // transaction (cash-in-hand settlements, write-offs, isExisting
+    // disbursements) stay informational too.
+    //
+    // Loans with NO ledger entries at all predate the ledger, so they keep
+    // exactly the old single-header-row behaviour and historical statements
+    // don't shift.
+    let lentOutstanding = 0;
+    let borrowedOutstanding = 0;
+    let interestReceived = 0;
+    let interestPaid = 0;
     for (const l of loans) {
+      const isLent = l.direction === "LENT";
       const outstanding = Number(l.outstanding);
+      if (l.active) {
+        if (isLent) lentOutstanding += outstanding;
+        else borrowedOutstanding += outstanding;
+      }
       events.push({
         id: `loan:${l.id}`,
         ts: l.startedAt.getTime(),
@@ -349,7 +396,7 @@ export async function GET(
         type: "LOAN",
         group: "LOAN",
         label: `Hand loan · ${l.kind}`,
-        description: "Borrowed from them",
+        description: isLent ? "You lent to them" : "Borrowed from them",
         account: null,
         amount: Number(l.principal),
         direction: "NEUTRAL",
@@ -361,6 +408,71 @@ export async function GET(
           ? `${formatCompact(outstanding)} still outstanding`
           : "cleared",
       });
+
+      for (const e of l.ledgerEntries) {
+        const principal = Number(e.principalAmount);
+        const interest = Number(e.interestAmount) + Number(e.gstAmount);
+        const amount = Number(e.amount);
+        if (e.kind === "REPAYMENT") {
+          if (isLent) interestReceived += interest;
+          else interestPaid += interest;
+        }
+        // Money in on a lent loan's repayment and on a borrowed loan's
+        // disbursement; out on the mirror cases.
+        const isIn =
+          e.kind === "REPAYMENT" ? isLent : !isLent;
+        const hasCash = e.transactionId != null && amount > 0;
+        const parts: string[] = [];
+        if (interest > 0) parts.push(`${formatCompact(interest)} interest`);
+        if (principal > 0) parts.push(`${formatCompact(principal)} principal`);
+        const period =
+          e.periodFrom || e.periodTo
+            ? ` · covers ${e.periodFrom ? e.periodFrom.toISOString().slice(0, 10) : "?"} → ${
+                e.periodTo ? e.periodTo.toISOString().slice(0, 10) : "?"
+              }`
+            : "";
+        events.push({
+          id: `loan-entry:${e.id}`,
+          ts: e.paidAt.getTime(),
+          date: e.paidAt.toISOString(),
+          type:
+            e.kind === "WRITE_OFF"
+              ? "LOAN_WRITE_OFF"
+              : e.kind === "REPAYMENT"
+                ? isLent
+                  ? "LOAN_RECEIPT"
+                  : "LOAN_REPAYMENT"
+                : isLent
+                  ? "LOAN_GIVEN"
+                  : "LOAN_TAKEN",
+          group: hasCash ? "CASH" : e.kind === "WRITE_OFF" ? "INFO" : "LOAN",
+          label:
+            e.kind === "WRITE_OFF"
+              ? "Written off"
+              : e.kind === "REPAYMENT"
+                ? isLent
+                  ? "Loan receipt"
+                  : "Loan payment"
+                : isLent
+                  ? "Loan given"
+                  : "Loan taken",
+          description: `${parts.join(" + ") || "—"}${period}${
+            e.notes ? ` · ${e.notes}` : ""
+          }${hasCash ? "" : " · no account"}`,
+          account: null,
+          amount: e.kind === "WRITE_OFF" ? principal : amount,
+          direction: hasCash ? (isIn ? "IN" : "OUT") : "NEUTRAL",
+          cashDelta: hasCash ? (isIn ? amount : -amount) : 0,
+          runningCash: 0,
+          transactionId: e.transactionId,
+          loanId: l.id,
+          hint: hasCash
+            ? null
+            : e.kind === "WRITE_OFF"
+              ? "principal cancelled, no cash moved"
+              : "settled outside any account",
+        });
+      }
     }
 
     // Chronological pass: assign the running net-cash balance to every event.
@@ -431,6 +543,15 @@ export async function GET(
         settledInPeriod: round2(settledInPeriod),
         spentOnThemInPeriod: round2(spentOnThemInPeriod),
         eventCount: rangeEvents.length,
+      },
+      // Loan positions are their own labelled pair, deliberately NOT folded
+      // into theyOweYou / youOweThem (which stay MemberCharge-only so no
+      // existing number silently changes) and never netted against each other.
+      loanPositions: {
+        theyOweYouPrincipal: round2(lentOutstanding),
+        youOweThemPrincipal: round2(borrowedOutstanding),
+        interestReceived: round2(interestReceived),
+        interestPaid: round2(interestPaid),
       },
       monthly,
       // Newest-first for the statement table.

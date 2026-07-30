@@ -6,7 +6,11 @@ import { canAccessRecord } from "@/lib/permissions";
 import { loanPaymentSchema } from "@/lib/validators-domain";
 import { splitPayment, advanceByCycle, type LoanFrequency } from "@/lib/loan-math";
 import { nextStatementDueDate } from "@/lib/statement-period";
-import { TransactionType, TransactionKind } from "@/generated/prisma/client";
+import {
+  TransactionType,
+  TransactionKind,
+  LoanLedgerKind,
+} from "@/generated/prisma/client";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -40,6 +44,15 @@ export async function POST(
     const session = await auth();
     if (loan.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // Money you lent out moves the other way and has no EMI to split against —
+    // /settle handles it. Rejected rather than redirected so a mis-wired client
+    // can't post an EXPENSE against a receivable.
+    if (loan.direction === "LENT") {
+      return NextResponse.json(
+        { error: "This is money you lent — record a settlement instead." },
+        { status: 400 },
+      );
     }
     const body = await request.json();
     const parsed = loanPaymentSchema.safeParse(body);
@@ -156,6 +169,29 @@ export async function POST(
           cardId: data.cardId ?? null,
           loanId: id,
           userId: ctx.userId,
+          createdByUserId: ctx.userId,
+        },
+      });
+      // Persist the split. Until this table existed the principal/interest
+      // breakdown was computed here, returned in the response, and thrown
+      // away — so reversal had to re-derive the principal with
+      // `reverseLoanPaymentPrincipal`, which its own doc comment calls
+      // approximate whenever the split was manually overridden. Storing it
+      // makes deleting or editing this payment restore the outstanding
+      // exactly, and makes "interest actually paid" a recorded fact rather
+      // than something three different files each back-derive.
+      await tx.loanLedgerEntry.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          loanId: id,
+          kind: LoanLedgerKind.REPAYMENT,
+          principalAmount: principalDrop,
+          interestAmount: interestPortion,
+          gstAmount: gstPortion,
+          amount: data.amount,
+          paidAt: new Date(data.paidAt),
+          transactionId: txn.id,
+          notes: data.notes ?? null,
           createdByUserId: ctx.userId,
         },
       });

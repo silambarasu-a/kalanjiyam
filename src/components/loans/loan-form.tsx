@@ -14,6 +14,11 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
+import {
+  cadenceMonths,
+  INTEREST_CADENCE_OPTIONS,
+  type LoanInterestCadence,
+} from "@/lib/hand-loan-interest";
 import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
@@ -102,8 +107,12 @@ export type EditingLoan = {
   id: string;
   kind: LoanKind;
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  direction: "BORROWED" | "LENT";
+  repaymentMode: "EMI" | "AD_HOC";
   lender: string;
   lenderContact: { id: string; name: string } | null;
+  borrowerContact: { id: string; name: string } | null;
+  interestCadence: LoanInterestCadence | null;
   memberContactId: string | null;
   memberContact: { id: string; name: string; relationship: string | null } | null;
   principal: number;
@@ -134,6 +143,8 @@ export type EditingLoan = {
 
 type LoanFormProps = {
   source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
+  /** Which way the money went. Locked in edit mode — the API rejects changes. */
+  direction?: "BORROWED" | "LENT";
   onSaved: () => void;
   /** Mirrors internal `submitting` state up so a parent button can disable. */
   onSubmittingChange?: (submitting: boolean) => void;
@@ -143,10 +154,13 @@ type LoanFormProps = {
 };
 
 export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanForm(
-  { source, onSaved, onSubmittingChange, lockedCardId, editingLoan },
+  { source, direction: directionProp, onSaved, onSubmittingChange, lockedCardId, editingLoan },
   ref
 ) {
   const editing = !!editingLoan;
+  // Direction is fixed by the route on create and by the record on edit.
+  const direction = editingLoan?.direction ?? directionProp ?? "BORROWED";
+  const isLent = direction === "LENT";
   const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   // Contacts back the HAND_FORMAL lender picker AND the "Member" picker
@@ -159,7 +173,8 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const creditCards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT");
   // Show all active contacts, plus the currently-linked lender/member even if
   // archived so the edit form doesn't drop the selection silently.
-  const linkedContactId = editingLoan?.lenderContact?.id;
+  const linkedContactId =
+    editingLoan?.borrowerContact?.id ?? editingLoan?.lenderContact?.id;
   const contacts = (contactsData?.members ?? []).filter(
     (m) =>
       m.active ||
@@ -177,8 +192,21 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     editingLoan?.memberContactId ?? ""
   );
   const [lender, setLender] = useState(editingLoan?.lender ?? "");
-  const [lenderContactId, setLenderContactId] = useState(
-    editingLoan?.lenderContact?.id ?? "",
+  // One state for whichever side of the loan the contact sits on. Which field
+  // it maps to on submit depends on `direction`.
+  const [counterpartyContactId, setCounterpartyContactId] = useState(
+    (isLent ? editingLoan?.borrowerContact?.id : editingLoan?.lenderContact?.id) ??
+      "",
+  );
+  // Money you lend is always settled ad-hoc. A borrowed hand loan can go either
+  // way, so the user picks — informal borrowing is often interest-only for
+  // months with the principal repaid whenever it's possible.
+  const [repaymentMode, setRepaymentMode] = useState<"EMI" | "AD_HOC">(
+    editingLoan?.repaymentMode ?? (isLent ? "AD_HOC" : "EMI"),
+  );
+  const adHoc = isLent || repaymentMode === "AD_HOC";
+  const [interestCadence, setInterestCadence] = useState<LoanInterestCadence | "">(
+    editingLoan?.interestCadence ?? (isLent ? "MONTHLY" : ""),
   );
   const [principal, setPrincipal] = useState(numStr(editingLoan?.principal));
   const [outstanding, setOutstanding] = useState(
@@ -265,7 +293,11 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   // Live EMI preview based on principal + rate + tenure, using the standard
   // reducing-balance formula. The user can still override emiAmount
   // explicitly (some bank quotes round differently).
+  //
+  // Never shown for an ad-hoc loan: an amortization table is a fiction when the
+  // two parties agreed only a rate and a cadence.
   const preview = useMemo(() => {
+    if (adHoc) return null;
     const p = Number(principal);
     const r = Number(interestRate);
     const t = Number(tenure);
@@ -277,7 +309,18 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
     const totals = loanTotals(p, r, t, frequency, gst);
     if (!totals.emi) return null;
     return totals;
-  }, [principal, interestRate, tenure, gstOnInterest, frequency, source, kind]);
+  }, [adHoc, principal, interestRate, tenure, gstOnInterest, frequency, source, kind]);
+
+  // Simple interest for one cadence period on the entered principal — a
+  // ballpark so the user can sanity-check the rate, explicitly not a schedule.
+  const adHocInterestHint = useMemo(() => {
+    if (!adHoc) return null;
+    const p = Number(principal);
+    const r = Number(interestRate);
+    const months = cadenceMonths(interestCadence || null);
+    if (!p || !r || !months) return null;
+    return Math.round(p * (r / 100) * (months / 12));
+  }, [adHoc, principal, interestRate, interestCadence]);
 
   const tenureUnit =
     FREQUENCY_OPTIONS.find((f) => f.value === frequency)?.tenureUnit ?? "months";
@@ -333,12 +376,22 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       // Only enforce on create. Editing legacy hand loans (created before
       // contacts existed) must still be saveable even when no contact is
       // linked — the user can pick one later.
-      if (!editing && !lenderContactId) {
-        setError("Pick the contact you borrowed from");
+      if (!editing && !counterpartyContactId) {
+        setError(
+          isLent ? "Pick the contact you lent to" : "Pick the contact you borrowed from",
+        );
         return;
       }
     } else if (!lender.trim()) {
       setError("Enter lender");
+      return;
+    }
+    if (adHoc && interestRate && !interestCadence) {
+      setError("Pick how often interest is settled");
+      return;
+    }
+    if (adHoc && interestCadence === "AT_MATURITY" && !tenure) {
+      setError("End-of-tenure interest needs a term");
       return;
     }
     if (source === "CARD_EMI" && !cardId) {
@@ -362,29 +415,36 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           ? Number(outstanding)
           : undefined;
 
-      // For HAND_FORMAL the server resolves the canonical lender name from
-      // the picked contact, but the validator still requires a non-empty
-      // string — fall back to the contact's name we have on hand.
+      // For HAND_FORMAL the server resolves the canonical name from the picked
+      // contact, but the validator still requires a non-empty string — fall
+      // back to the contact's name we have on hand.
       const submittedLender =
         source === "HAND_FORMAL"
-          ? (contacts.find((c) => c.id === lenderContactId)?.name ??
+          ? (contacts.find((c) => c.id === counterpartyContactId)?.name ??
               lender.trim() ??
               "")
           : lender.trim();
       const payload = {
         kind,
-        ...(editing ? {} : { source }),
+        ...(editing ? {} : { source, direction, repaymentMode: adHoc ? "AD_HOC" : "EMI" }),
         lender: submittedLender,
+        // The contact goes on whichever side of the loan it belongs to. Sending
+        // the wrong one is a 400 — the API refuses to put a lent loan on the
+        // lender side of a contact's ledger.
         lenderContactId:
-          source === "HAND_FORMAL" ? lenderContactId || null : undefined,
+          source === "HAND_FORMAL" && !isLent ? counterpartyContactId || null : undefined,
+        borrowerContactId: isLent ? counterpartyContactId || null : undefined,
         memberContactId: memberContactId || null,
         principal: principalNum,
         outstanding: outstandingPayload,
         interestRate: interestRate ? Number(interestRate) : null,
-        gstOnInterest: gstOnInterest ? Number(gstOnInterest) : null,
-        emiAmount: effectiveEmi ?? null,
+        // GST, a fixed EMI, and upfront charges are all bank constructs. The
+        // server clamps these too; sending null keeps the two in agreement.
+        gstOnInterest: adHoc ? null : gstOnInterest ? Number(gstOnInterest) : null,
+        emiAmount: adHoc ? null : effectiveEmi ?? null,
         tenure: tenure ? Number(tenure) : null,
-        frequency,
+        frequency: adHoc ? "MONTHLY" : frequency,
+        interestCadence: adHoc ? interestCadence || null : undefined,
         accountId:
           source === "BANK" || source === "HAND_FORMAL"
             ? accountId || null
@@ -408,8 +468,8 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             : null,
         isExisting,
         startedAt,
-        chargeBreakdown: breakdown.length ? breakdown : null,
-        charges: breakdown.length ? chargesTotal : null,
+        chargeBreakdown: adHoc ? null : breakdown.length ? breakdown : null,
+        charges: adHoc ? null : breakdown.length ? chargesTotal : null,
         notes: notes.trim() || undefined,
         goldItems:
           kind === "GOLD"
@@ -466,13 +526,13 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
-            <span className="text-xs font-medium">Lender</span>
+            <span className="text-xs font-medium">{isLent ? "Lent to" : "Lender"}</span>
             {source === "HAND_FORMAL" ? (
               <div className="space-y-1">
                 <div className="mt-1">
                   <NativeSelect
-                    value={lenderContactId}
-                    onChange={setLenderContactId}
+                    value={counterpartyContactId}
+                    onChange={setCounterpartyContactId}
                     placeholder={
                       contactsLoading
                         ? "Loading contacts…"
@@ -498,8 +558,16 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                     first, then come back here.
                   </p>
                 )}
+                {isLent && (
+                  // MemberCharge with OWED_TO_USER models the same obligation
+                  // and also feeds net worth, so recording both double-counts.
+                  <p className="text-[11px] text-muted-foreground">
+                    Don&apos;t also record this as a &ldquo;they owe me&rdquo; charge
+                    under Contacts — it would be counted twice.
+                  </p>
+                )}
                 {editing &&
-                  !lenderContactId &&
+                  !counterpartyContactId &&
                   editingLoan?.lender && (
                     <p className="text-[11px] text-muted-foreground">
                       Currently:{" "}
@@ -587,6 +655,55 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         </label>
       </div>
 
+      {/* Borrowed hand loans can run either way, so the user picks. Money you
+          lend is always ad-hoc, and bank / card-EMI loans always have a fixed
+          instalment, so neither shows this. Locked in edit mode — switching it
+          after cash has moved would strand the existing entries. */}
+      {source === "HAND_FORMAL" && !isLent && (
+        <fieldset className="rounded-lg border p-3">
+          <legend className="px-1 text-xs font-medium">Repayment</legend>
+          <div className="space-y-2">
+            {(
+              [
+                {
+                  value: "EMI" as const,
+                  label: "Fixed EMI",
+                  hint: "A set instalment on a schedule, split by the reducing-balance formula.",
+                },
+                {
+                  value: "AD_HOC" as const,
+                  label: "Interest + principal as it goes",
+                  hint: "Pay whatever interest is agreed on each due date, and reduce the principal whenever you can.",
+                },
+              ]
+            ).map((opt) => (
+              <label key={opt.value} className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="repaymentMode"
+                  className="mt-0.5"
+                  checked={repaymentMode === opt.value}
+                  disabled={editing}
+                  onChange={() => setRepaymentMode(opt.value)}
+                />
+                <span className="text-xs">
+                  <span className="font-medium">{opt.label}</span>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    {opt.hint}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {editing && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Can&apos;t be changed once the loan exists — it would strand the
+              payments already recorded against it.
+            </p>
+          )}
+        </fieldset>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs font-medium">Principal (₹)</span>
@@ -620,16 +737,35 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             </span>
           </div>
         </label>
+        {adHoc ? (
+          <label className="block">
+            <span className="text-xs font-medium">Interest settled</span>
+            <NativeSelect
+              value={interestCadence}
+              onChange={(next) => setInterestCadence(next as LoanInterestCadence)}
+              placeholder="— pick a cadence —"
+              options={INTEREST_CADENCE_OPTIONS.map((c) => ({
+                value: c.value,
+                label: c.label,
+              }))}
+            />
+          </label>
+        ) : (
+          <label className="block">
+            <span className="text-xs font-medium">EMI cadence</span>
+            <NativeSelect
+              value={frequency}
+              onChange={(next) => setFrequency(next as LoanFrequency)}
+              options={FREQUENCY_OPTIONS.map((f) => ({ value: f.value, label: f.label }))}
+            />
+          </label>
+        )}
         <label className="block">
-          <span className="text-xs font-medium">EMI cadence</span>
-          <NativeSelect
-            value={frequency}
-            onChange={(next) => setFrequency(next as LoanFrequency)}
-            options={FREQUENCY_OPTIONS.map((f) => ({ value: f.value, label: f.label }))}
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium">Tenure ({tenureUnit})</span>
+          {/* Ad-hoc loans are pinned to a monthly cycle server-side, so the
+              tenure is a plain month count there. */}
+          <span className="text-xs font-medium">
+            {adHoc ? "Term (months)" : `Tenure (${tenureUnit})`}
+          </span>
           <Input
             type="number"
             min={1}
@@ -637,19 +773,38 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             onChange={(e) => setTenure(e.target.value)}
           />
         </label>
-        <label className="block">
-          <span className="text-xs font-medium">EMI amount (₹)</span>
-          <AmountInput
-            value={emiAmount}
-            onChange={setEmiAmount}
-            placeholder={preview?.emi ? String(Math.round(preview.emi)) : "Auto"}
-          />
-        </label>
+        {!adHoc && (
+          <label className="block">
+            <span className="text-xs font-medium">EMI amount (₹)</span>
+            <AmountInput
+              value={emiAmount}
+              onChange={setEmiAmount}
+              placeholder={preview?.emi ? String(Math.round(preview.emi)) : "Auto"}
+            />
+          </label>
+        )}
       </div>
       <p className="-mt-1 text-xs text-muted-foreground">
-        Leave EMI blank to use the standard reducing-balance calculation.
-        {tenure && frequency !== "MONTHLY" && totalLoanMonths > 0 && (
-          <> · {tenure} {tenureUnit} = {totalLoanMonths} months total</>
+        {adHoc ? (
+          adHocInterestHint ? (
+            <>
+              ≈ {formatINR(adHocInterestHint)} interest per settlement at{" "}
+              {interestRate}% p.a. on the current principal — you&apos;ll enter the
+              actual amount each time.
+            </>
+          ) : (
+            <>
+              Interest is entered as it changes hands, in whatever amount. The
+              cadence only sets when it&apos;s next due.
+            </>
+          )
+        ) : (
+          <>
+            Leave EMI blank to use the standard reducing-balance calculation.
+            {tenure && frequency !== "MONTHLY" && totalLoanMonths > 0 && (
+              <> · {tenure} {tenureUnit} = {totalLoanMonths} months total</>
+            )}
+          </>
         )}
       </p>
 
@@ -1093,9 +1248,11 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             <span className="text-xs font-medium">
               {editing
                 ? "Linked bank account"
-                : source === "HAND_FORMAL"
-                  ? "Received into (bank account)"
-                  : "Disbursed into (bank account)"}
+                : isLent
+                  ? "Paid from (bank account)"
+                  : source === "HAND_FORMAL"
+                    ? "Received into (bank account)"
+                    : "Disbursed into (bank account)"}
             </span>
             <div className="mt-1">
               <NativeSelect
@@ -1106,15 +1263,18 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             </div>
             {!editing && source === "HAND_FORMAL" && (
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Saves an INCOME transaction for the borrowed amount on this
-                account. Leave blank to track only the liability.
+                {isLent
+                  ? "Saves an EXPENSE transaction for the amount you handed over. Leave blank to track the receivable only."
+                  : "Saves an INCOME transaction for the borrowed amount on this account. Leave blank to track only the liability."}
               </p>
             )}
             {editing && !isExisting && (
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {source === "BANK"
                   ? "Disbursement and any upfront charges already posted to the current account will move with this change."
-                  : "The income transaction already posted to the current account will move with this change."}
+                  : isLent
+                    ? "The expense transaction already posted to the current account will move with this change."
+                    : "The income transaction already posted to the current account will move with this change."}
               </p>
             )}
           </label>
@@ -1129,14 +1289,18 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               onChange={(e) => setIsExisting(e.target.checked)}
             />
             <span className="text-sm">
-              {source === "BANK"
-                ? "Already disbursed (don't create a disbursement transaction)"
-                : "Already received (don't create an income transaction)"}
+              {isLent
+                ? "Already given (don't create an expense transaction)"
+                : source === "BANK"
+                  ? "Already disbursed (don't create a disbursement transaction)"
+                  : "Already received (don't create an income transaction)"}
             </span>
           </label>
           {!editing && isExisting && (
             <label className="block">
-              <span className="text-xs font-medium">Current outstanding (₹)</span>
+              <span className="text-xs font-medium">
+                {isLent ? "Current principal outstanding (₹)" : "Current outstanding (₹)"}
+              </span>
               <AmountInput
                 value={outstanding}
                 onChange={setOutstanding}
@@ -1146,7 +1310,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 Leave blank if no payments yet.{" "}
                 {outstanding !== "" && Number(outstanding) === 0
                   ? "Loan will be marked as paid and closed automatically."
-                  : "Enter the remaining balance after EMIs already paid."}
+                  : isLent
+                    ? "Enter the principal still to come back to you."
+                    : "Enter the remaining balance after EMIs already paid."}
               </p>
             </label>
           )}

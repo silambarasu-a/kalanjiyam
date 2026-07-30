@@ -896,6 +896,16 @@ const loanFrequencyEnum = z.enum([
   "HALF_YEARLY",
   "YEARLY",
 ]);
+const loanDirectionEnum = z.enum(["BORROWED", "LENT"]);
+const loanRepaymentModeEnum = z.enum(["EMI", "AD_HOC"]);
+const loanInterestCadenceEnum = z.enum([
+  "MONTHLY",
+  "BIMONTHLY",
+  "QUARTERLY",
+  "HALF_YEARLY",
+  "YEARLY",
+  "AT_MATURITY",
+]);
 
 export const goldLoanItemSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -908,9 +918,12 @@ export const goldLoanItemSchema = z.object({
 const loanFieldsSchema = z.object({
   kind: loanKindEnum.optional().default("PERSONAL"),
   source: loanSourceEnum,
+  direction: loanDirectionEnum.optional().default("BORROWED"),
+  repaymentMode: loanRepaymentModeEnum.optional().default("EMI"),
   lender: z.string().trim().min(1).max(120),
   lenderContactId: z.string().uuid().optional().nullable(),
   borrower: z.string().trim().max(120).optional().nullable(),
+  borrowerContactId: z.string().uuid().optional().nullable(),
   memberContactId: z.string().uuid().optional().nullable(),
   principal: z.number().positive(),
   outstanding: z.number().nonnegative().optional(),
@@ -919,6 +932,7 @@ const loanFieldsSchema = z.object({
   emiAmount: z.number().positive().optional().nullable(),
   tenure: z.number().int().positive().optional().nullable(),
   frequency: loanFrequencyEnum.optional().default("MONTHLY"),
+  interestCadence: loanInterestCadenceEnum.optional().nullable(),
   charges: z.number().nonnegative().optional().nullable(),
   chargeBreakdown: z
     .array(
@@ -947,10 +961,16 @@ export const loanCreateSchema = loanFieldsSchema
     message: "Card EMI needs a card",
     path: ["cardId"],
   })
-  .refine((d) => d.source !== "HAND_FORMAL" || !!d.lenderContactId, {
-    message: "Pick the contact you borrowed from",
-    path: ["lenderContactId"],
-  })
+  .refine(
+    (d) =>
+      d.source !== "HAND_FORMAL" ||
+      d.direction === "LENT" ||
+      !!d.lenderContactId,
+    {
+      message: "Pick the contact you borrowed from",
+      path: ["lenderContactId"],
+    },
+  )
   // CREDIT_CARD_LOAN needs *either* a linked card (whose account provides
   // the billing cycle) *or* an explicit per-loan loanStatementDate (covers
   // standalone HDFC Jumbo-style loans where there's no parent card to pick).
@@ -962,47 +982,153 @@ export const loanCreateSchema = loanFieldsSchema
         "Credit card loan needs either a linked card or a statement-day override",
       path: ["cardId"],
     },
+  )
+  // ── Direction ─────────────────────────────────────────────────────────
+  // Bank and card-EMI loans are borrowed by construction, and the whole lent
+  // flow (ad-hoc receipts, no EMI) has no meaning there.
+  .refine((d) => d.direction !== "LENT" || d.source === "HAND_FORMAL", {
+    message: "Only hand loans can be money you lent out",
+    path: ["direction"],
+  })
+  .refine((d) => d.direction !== "LENT" || !!d.borrowerContactId, {
+    message: "Pick the contact you lent to",
+    path: ["borrowerContactId"],
+  })
+  // On a lent loan the lender is you. A stray lenderContactId would put the
+  // loan on the wrong side of that contact's ledger.
+  .refine((d) => d.direction !== "LENT" || !d.lenderContactId, {
+    message: "Lender contact only applies to money you borrowed",
+    path: ["lenderContactId"],
+  })
+  .refine((d) => d.direction !== "BORROWED" || !d.borrowerContactId, {
+    message: "Borrower contact only applies to money you lent",
+    path: ["borrowerContactId"],
+  })
+  .refine((d) => d.direction !== "LENT" || d.repaymentMode === "AD_HOC", {
+    message: "Money you lend is settled ad-hoc, not on a fixed EMI",
+    path: ["repaymentMode"],
+  })
+  // ── Ad-hoc mode ───────────────────────────────────────────────────────
+  // Only hand loans settle ad-hoc; a bank would not let you pay whatever you
+  // felt like each month.
+  .refine((d) => d.repaymentMode !== "AD_HOC" || d.source === "HAND_FORMAL", {
+    message: "Only hand loans can be settled as you go",
+    path: ["repaymentMode"],
+  })
+  .refine((d) => d.repaymentMode !== "AD_HOC" || d.emiAmount == null, {
+    message: "Ad-hoc loans have no fixed EMI",
+    path: ["emiAmount"],
+  })
+  .refine((d) => d.repaymentMode !== "AD_HOC" || d.gstOnInterest == null, {
+    message: "GST on interest doesn't apply to private lending",
+    path: ["gstOnInterest"],
+  })
+  .refine((d) => d.repaymentMode !== "AD_HOC" || !d.chargeBreakdown?.length, {
+    message: "Upfront charges are a bank construct",
+    path: ["chargeBreakdown"],
+  })
+  .refine((d) => d.repaymentMode === "AD_HOC" || d.interestCadence == null, {
+    message: "Interest cadence only applies to loans settled as you go",
+    path: ["interestCadence"],
+  })
+  // A cadence is what drives the next-settlement date. Interest-free hand
+  // loans stay valid without one — they simply never come up as due.
+  .refine(
+    (d) =>
+      d.repaymentMode !== "AD_HOC" ||
+      !d.interestRate ||
+      d.interestCadence != null,
+    {
+      message: "Pick how often interest is settled",
+      path: ["interestCadence"],
+    },
+  )
+  .refine(
+    (d) =>
+      d.interestCadence !== "AT_MATURITY" ||
+      d.tenure != null ||
+      d.maturityAt != null,
+    {
+      message: "End-of-tenure interest needs a term or a maturity date",
+      path: ["tenure"],
+    },
   );
 
 export const loanUpdateSchema = loanFieldsSchema.partial().extend({
   active: z.boolean().optional(),
 });
 
-export const loanPaymentSchema = z.object({
-  // Optional client-minted UUID for the resulting Transaction. Used by
-  // the instant-upload flow so the dialog's draft attachments link
-  // without a follow-up round trip.
-  clientId: z.string().uuid().optional().nullable(),
-  amount: z.number().positive(),
-  paidAt: z.string(),
-  accountId: z.string().uuid().optional().nullable(),
-  cardId: z.string().uuid().optional().nullable(),
-  principalPortion: z.number().nonnegative().optional().nullable(),
-  interestPortion: z.number().nonnegative().optional().nullable(),
-  gstPortion: z.number().nonnegative().optional().nullable(),
+export const loanPaymentSchema = z
+  .object({
+    // Optional client-minted UUID for the resulting Transaction. Used by
+    // the instant-upload flow so the dialog's draft attachments link
+    // without a follow-up round trip.
+    clientId: z.string().uuid().optional().nullable(),
+    amount: z.number().positive(),
+    paidAt: z.string(),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    principalPortion: z.number().nonnegative().optional().nullable(),
+    interestPortion: z.number().nonnegative().optional().nullable(),
+    gstPortion: z.number().nonnegative().optional().nullable(),
+    notes: z.string().trim().max(200).optional().nullable(),
+  })
+  // A manual override that adds up to more than was actually paid would be
+  // stored as-is and silently over-reduce the outstanding. Only fires when the
+  // client sends an explicit split — the auto-split path sends nulls — so this
+  // is behaviour-preserving for every existing caller.
+  .refine(
+    (d) =>
+      (d.principalPortion ?? 0) + (d.interestPortion ?? 0) + (d.gstPortion ?? 0) <=
+      d.amount + 0.01,
+    {
+      message: "Principal + interest + GST cannot exceed the amount paid",
+      path: ["principalPortion"],
+    },
+  );
+
+/**
+ * An ad-hoc settlement on a hand loan: interest (whatever actually changed
+ * hands as of that date) and/or a partial principal reduction. Works in both
+ * directions — on a lent loan the money comes in, on a borrowed one it goes
+ * out — and the route derives the sign from `Loan.direction`.
+ *
+ * Deliberately no "mode" field: an interest-only entry is simply one with no
+ * principalAmount, so the principal can never move by accident.
+ */
+export const loanSettleSchema = z
+  .object({
+    // Optional client-minted UUID for the resulting Transaction, so the
+    // instant-upload flow can attach receipts without a second round trip.
+    // Mirrors loanPaymentSchema.clientId.
+    clientId: z.string().uuid().optional().nullable(),
+    interestAmount: z.number().nonnegative().optional().nullable(),
+    principalAmount: z.number().nonnegative().optional().nullable(),
+    paidAt: z.string(),
+    periodFrom: z.string().optional().nullable(),
+    periodTo: z.string().optional().nullable(),
+    // Optional: cash-in-hand settlement is the norm on hand loans. With no
+    // account the ledger entry is still written but no Transaction posts, so
+    // no account balance moves.
+    accountId: z.string().uuid().optional().nullable(),
+    // The principal can hit zero while interest is still owed, so closing is
+    // an explicit user choice and never inferred from outstanding === 0.
+    closeLoan: z.boolean().optional().default(false),
+    notes: z.string().trim().max(200).optional().nullable(),
+  })
+  .refine((d) => (d.interestAmount ?? 0) + (d.principalAmount ?? 0) > 0, {
+    message: "Enter an interest amount, a principal amount, or both",
+    path: ["interestAmount"],
+  })
+  .refine((d) => !d.periodFrom || !d.periodTo || d.periodFrom <= d.periodTo, {
+    message: "Period end must be on or after the period start",
+    path: ["periodTo"],
+  });
+
+/** Writing off unrecovered principal on a lent hand loan. */
+export const loanWriteOffSchema = z.object({
+  writtenOffAt: z.string(),
   notes: z.string().trim().max(200).optional().nullable(),
-});
-
-export const handLoanMemberCreateSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  email: z.string().trim().email().optional().or(z.literal("")),
-  phone: z.string().trim().max(20).optional(),
-  familyMemberId: z.string().uuid().optional().nullable(),
-  notes: z.string().trim().max(500).optional().nullable(),
-});
-
-export const handLoanMemberUpdateSchema = handLoanMemberCreateSchema.partial().extend({
-  active: z.boolean().optional(),
-});
-
-export const handLoanEntryCreateSchema = z.object({
-  memberId: z.string().uuid(),
-  direction: z.enum(["GIVEN", "RECEIVED"]),
-  amount: z.number().positive(),
-  date: z.string(),
-  notes: z.string().trim().max(500).optional().nullable(),
-  accountId: z.string().uuid().optional().nullable(),
-  cardId: z.string().uuid().optional().nullable(),
 });
 
 const leaseFieldsSchema = z.object({

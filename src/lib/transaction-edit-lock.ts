@@ -3,11 +3,13 @@
  *
  * Three rules apply, in order:
  *
- * 1. **Closed-loan lock** — once a loan auto-closes (last EMI paid,
+ * 1. **Closed-loan lock** — once a loan closes (last payment made,
  *    outstanding=0), every transaction pinned to that loan is frozen,
- *    EXCEPT the most-recent EMI payment within `TIMING.loanEmiGraceDays` of
+ *    EXCEPT the most-recent repayment within `TIMING.loanEmiGraceDays` of
  *    its paid date. Lets the user undo a wrong final payment, but the
- *    historical record stays immutable after the grace window.
+ *    historical record stays immutable after the grace window. "Repayment"
+ *    is resolved from the loan ledger rather than the transaction's
+ *    type/kind, because a lent loan's payments run the other way.
  *
  * 2. **Card-account transactions** are locked once the billing period
  *    containing them has closed into a CardStatement. The bill has been
@@ -25,6 +27,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { isInClosedStatement } from "@/lib/card-statement-service";
+import { classifyLoanTxn } from "@/lib/loan-direction";
 import { TIMING, ONE_DAY_MS } from "@/lib/timing";
 
 export type EditLockRole =
@@ -71,23 +74,46 @@ export async function checkTransactionEditAllowed(args: {
       select: { active: true },
     });
     if (loan && !loan.active) {
-      const isEmiPayment =
-        transaction.type === "EXPENSE" && transaction.kind === "LOAN_PAYMENT";
-      // Find the latest EMI payment for this loan; that's the only one
+      // Classified through the ledger, not `type === EXPENSE`: on a lent loan
+      // the closing receipt is an INCOME, so the type check called it a locked
+      // disbursement and refused even a same-minute correction. Pre-ledger
+      // rows fall back to the type/kind test, which is still right for them.
+      const { isRepayment: isEmiPayment } = await classifyLoanTxn({
+        id: transaction.id,
+        type: transaction.type ?? "",
+        kind: transaction.kind ?? null,
+      });
+      // Find the latest repayment for this loan; that's the only one
       // eligible for the 3-day grace window. Tiebreaker on createdAt so
       // two same-day EMIs resolve deterministically (truly last-inserted
       // wins) instead of flipping between page loads.
-      const latestPayment = isEmiPayment
-        ? await prisma.transaction.findFirst({
+      //
+      // Ledger-first for the same reason: matching on type/kind picks the
+      // wrong row on a lent loan.
+      const latestEntry = isEmiPayment
+        ? await prisma.loanLedgerEntry.findFirst({
             where: {
               loanId: transaction.loanId,
-              type: "EXPENSE",
-              kind: "LOAN_PAYMENT",
+              kind: "REPAYMENT",
+              transactionId: { not: null },
             },
-            orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-            select: { id: true, date: true },
+            orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+            select: { transactionId: true, paidAt: true },
           })
         : null;
+      const latestPayment = latestEntry?.transactionId
+        ? { id: latestEntry.transactionId, date: latestEntry.paidAt }
+        : isEmiPayment
+          ? await prisma.transaction.findFirst({
+              where: {
+                loanId: transaction.loanId,
+                type: "EXPENSE",
+                kind: "LOAN_PAYMENT",
+              },
+              orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+              select: { id: true, date: true },
+            })
+          : null;
       const isLatestEmi = latestPayment?.id === transaction.id;
       const ageDaysSincePaid = latestPayment
         ? Math.floor(
@@ -104,8 +130,8 @@ export async function checkTransactionEditAllowed(args: {
         const message = !isEmiPayment
           ? `This loan is closed; its disbursement and charges are locked.${overrideHint}`
           : isLatestEmi
-            ? `The closing EMI is past its ${TIMING.loanEmiGraceDays}-day grace window (paid ${ageDaysSincePaid} days ago).${overrideHint}`
-            : `This loan is closed. Only the closing EMI can be reversed, and only within ${TIMING.loanEmiGraceDays} days of payment.${overrideHint}`;
+            ? `The closing payment is past its ${TIMING.loanEmiGraceDays}-day grace window (paid ${ageDaysSincePaid} days ago).${overrideHint}`
+            : `This loan is closed. Only the closing payment can be reversed, and only within ${TIMING.loanEmiGraceDays} days of payment.${overrideHint}`;
         return {
           ok: false,
           status: 423,
@@ -113,7 +139,7 @@ export async function checkTransactionEditAllowed(args: {
           canForce: canBypass(role),
         };
       }
-      // Closing EMI inside grace window — skip the remaining rules so the
+      // Closing payment inside grace window — skip the remaining rules so the
       // workspace edit-window doesn't lock the same row a second time.
       return { ok: true };
     }
