@@ -31,6 +31,11 @@ import {
   isAdvanceNonNegViolation,
 } from "@/lib/utility-advance-guard";
 
+// Deleting a transaction unwinds every cascade hanging off it, each one a
+// round-trip to a remote database. The platform default cuts the function
+// off before those can finish on the heavier ones.
+export const maxDuration = 30;
+
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
@@ -1237,6 +1242,15 @@ export async function DELETE(
         tx,
       });
       await tx.transaction.delete({ where: { id } });
+    },
+    {
+      // Deleting a transaction fans out across every cascade it touches —
+      // reopening contact charges, unwinding its leftover transfer,
+      // archiving attachments. Each is a round-trip to a remote database and
+      // Prisma's 5s default is not enough for a settlement covering several
+      // charges.
+      timeout: 15_000,
+      maxWait: 10_000,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

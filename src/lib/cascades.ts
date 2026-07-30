@@ -313,56 +313,68 @@ export async function revertChargeSettlements(
   });
   if (settlements.length === 0) return notes;
 
-  const touched = new Set(settlements.map((s) => s.chargeId));
+  // How much this transaction was paying towards each charge.
+  const removedByCharge = new Map<string, number>();
   let reversed = 0;
   for (const s of settlements) {
-    reversed += Number(s.amount);
-    await tx.memberCharge.update({
-      where: { id: s.chargeId },
-      data: { settledAmount: { decrement: s.amount } },
-    });
+    const amt = Number(s.amount);
+    reversed += amt;
+    removedByCharge.set(s.chargeId, (removedByCharge.get(s.chargeId) ?? 0) + amt);
   }
+  const chargeIds = [...removedByCharge.keys()];
+
   await tx.memberChargeSettlement.deleteMany({
     where: { id: { in: settlements.map((s) => s.id) } },
   });
 
-  // Recompute status and lastSettlementAt from what actually survives,
-  // rather than assuming this transaction was the only settlement.
-  for (const chargeId of touched) {
-    const c = await tx.memberCharge.findUnique({
-      where: { id: chargeId },
-      select: {
-        amount: true,
-        settledAmount: true,
-        status: true,
-        settlements: {
-          orderBy: { paidAt: "desc" },
-          take: 1,
-          select: { paidAt: true },
-        },
-      },
-    });
-    if (!c) continue;
-    // A written-off charge stays written off — deleting a payment against it
-    // doesn't revive the debt.
-    if (c.status === "WRITTEN_OFF") continue;
-    const settled = Number(c.settledAmount);
+  // Current state of every touched charge, and the newest settlement that
+  // SURVIVES the delete — one round-trip each rather than a pair per charge.
+  // This runs inside a transaction delete, which is already query-heavy, and
+  // every one of them is a round-trip to a remote database.
+  const [charges, latest] = await Promise.all([
+    tx.memberCharge.findMany({
+      where: { id: { in: chargeIds } },
+      select: { id: true, amount: true, settledAmount: true, status: true },
+    }),
+    tx.memberChargeSettlement.groupBy({
+      by: ["chargeId"],
+      where: { chargeId: { in: chargeIds } },
+      _max: { paidAt: true },
+    }),
+  ]);
+  const latestByCharge = new Map(
+    latest.map((r) => [r.chargeId, r._max.paidAt ?? null]),
+  );
+
+  for (const c of charges) {
+    const removed = removedByCharge.get(c.id) ?? 0;
+    const settled = Math.max(
+      0,
+      Math.round((Number(c.settledAmount) - removed) * 100) / 100,
+    );
     await tx.memberCharge.update({
-      where: { id: chargeId },
+      where: { id: c.id },
       data: {
-        status:
-          settled >= Number(c.amount) - 0.01
-            ? "SETTLED"
-            : settled > 0.005
-              ? "PARTIAL"
-              : "OUTSTANDING",
-        lastSettlementAt: c.settlements[0]?.paidAt ?? null,
+        settledAmount: settled,
+        lastSettlementAt: latestByCharge.get(c.id) ?? null,
+        // A written-off charge stays written off — deleting a payment
+        // against it doesn't revive the debt.
+        ...(c.status === "WRITTEN_OFF"
+          ? {}
+          : {
+              status:
+                settled >= Number(c.amount) - 0.01
+                  ? "SETTLED"
+                  : settled > 0.005
+                    ? "PARTIAL"
+                    : "OUTSTANDING",
+            }),
       },
     });
   }
 
   notes.push(
-    `Reopened ${touched.size} charge${touched.size === 1 ? "" : "s"} (₹${reversed.toLocaleString("en-IN")} no longer settled)`,
+    `Reopened ${chargeIds.length} charge${chargeIds.length === 1 ? "" : "s"} (₹${reversed.toLocaleString("en-IN")} no longer settled)`,
   );
   return notes;
 }

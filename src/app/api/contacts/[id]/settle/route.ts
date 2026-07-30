@@ -19,6 +19,11 @@ import {
   TransactionType,
 } from "@/generated/prisma/client";
 
+// A settle writes a chain of dependent rows and each one is a round-trip to
+// a remote database. The platform default cuts the function off well before
+// the transaction's own budget below, which surfaced as a bare 500.
+export const maxDuration = 30;
+
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
@@ -211,75 +216,95 @@ export async function POST(
 
     const fundedFromAdvance = data.fundedFromAdvance === true;
 
-    const result = await prisma.$transaction(async (tx) => {
-      // Re-read the charges INSIDE the transaction. Reading them outside
-      // and validating against that snapshot is what let two concurrent
-      // settles both clear the same charge.
-      const charges = await tx.memberCharge.findMany({
-        where: { id: { in: chargeIds } },
-      });
-      if (charges.length !== chargeIds.length) {
-        throw new WorkspaceAccessError(404, "One or more charges not found");
-      }
-      for (const c of charges) {
-        if (
-          c.workspaceId !== ctx.workspaceId ||
-          c.beneficiaryContactId !== contactId
-        ) {
-          throw new WorkspaceAccessError(
-            400,
-            "Charge does not belong to this contact",
-          );
-        }
-        if (c.status === MemberChargeStatus.SETTLED) {
-          throw new WorkspaceAccessError(400, "A charge is already settled");
-        }
-        if (c.status === MemberChargeStatus.WRITTEN_OFF) {
-          throw new WorkspaceAccessError(
-            400,
-            "A charge was written off and can't be settled",
-          );
-        }
-      }
-      const directions = new Set(charges.map((c) => c.direction));
-      if (directions.size > 1) {
-        throw new WorkspaceAccessError(
-          400,
-          "Mix of directions — settle 'they owe me' and 'I owe them' charges separately",
+    // ── Validate the charges BEFORE opening the transaction ──────────────
+    // These reads are only for failing fast with a useful message. They are
+    // deliberately NOT the thing that makes concurrent settles safe — the
+    // atomic { increment } plus the MemberCharge_settled_le_amount_check
+    // constraint is, and that holds however stale this snapshot gets. Doing
+    // it out here keeps the interactive transaction short, which matters:
+    // it has a 5s budget and every query is a round-trip to a remote
+    // database.
+    const charges = await prisma.memberCharge.findMany({
+      where: { id: { in: chargeIds } },
+    });
+    if (charges.length !== chargeIds.length) {
+      return NextResponse.json(
+        { error: "One or more charges not found" },
+        { status: 404 },
+      );
+    }
+    for (const c of charges) {
+      if (
+        c.workspaceId !== ctx.workspaceId ||
+        c.beneficiaryContactId !== contactId
+      ) {
+        return NextResponse.json(
+          { error: "Charge does not belong to this contact" },
+          { status: 400 },
         );
       }
-      const direction = charges[0].direction;
-      const isIncoming = direction !== MemberChargeDirection.USER_OWES;
-
-      const byId = new Map(charges.map((c) => [c.id, c]));
-      for (const line of data.lines) {
-        const c = byId.get(line.chargeId)!;
-        const remaining = Number(c.amount) - Number(c.settledAmount);
-        if (line.amount > remaining + 0.005) {
-          throw new WorkspaceAccessError(
-            400,
-            `A line exceeds what's outstanding on its charge (₹${remaining.toFixed(2)})`,
-          );
-        }
+      if (c.status === MemberChargeStatus.SETTLED) {
+        return NextResponse.json(
+          { error: "A charge is already settled" },
+          { status: 400 },
+        );
       }
+      if (c.status === MemberChargeStatus.WRITTEN_OFF) {
+        return NextResponse.json(
+          { error: "A charge was written off and can't be settled" },
+          { status: 400 },
+        );
+      }
+    }
+    if (new Set(charges.map((c) => c.direction)).size > 1) {
+      return NextResponse.json(
+        {
+          error:
+            "Mix of directions — settle 'they owe me' and 'I owe them' charges separately",
+        },
+        { status: 400 },
+      );
+    }
+    const isIncoming = charges[0].direction !== MemberChargeDirection.USER_OWES;
 
+    const byId = new Map(charges.map((c) => [c.id, c]));
+    for (const line of data.lines) {
+      const c = byId.get(line.chargeId)!;
+      const remaining = Number(c.amount) - Number(c.settledAmount);
+      if (line.amount > remaining + 0.005) {
+        return NextResponse.json(
+          {
+            error: `A line exceeds what's outstanding on its charge (₹${remaining.toFixed(2)})`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (fundedFromAdvance) {
+      // Their money sitting with us pays down what they owe us; our money
+      // sitting with them pays down what we owe them. The CHECK >= 0 on the
+      // counter is what actually settles a race here; this is the friendly
+      // message for the ordinary case.
+      const available = Number(
+        isIncoming ? contact.advanceHeld : contact.advancePaid,
+      );
+      if (total > available + 0.005) {
+        return NextResponse.json(
+          { error: `Only ₹${available.toFixed(2)} of advance credit is available` },
+          { status: 400 },
+        );
+      }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
       // ── Advance-funded: no cash, draw the credit down instead ──────────
       if (fundedFromAdvance) {
-        // Their money sitting with us pays down what they owe us; our money
-        // sitting with them pays down what we owe them.
-        const field = isIncoming ? "advanceHeld" : "advancePaid";
-        const available = Number(
-          isIncoming ? contact.advanceHeld : contact.advancePaid,
-        );
-        if (total > available + 0.005) {
-          throw new WorkspaceAccessError(
-            400,
-            `Only ₹${available.toFixed(2)} of advance credit is available`,
-          );
-        }
         await tx.contact.update({
           where: { id: contactId },
-          data: { [field]: { decrement: total } },
+          data: isIncoming
+            ? { advanceHeld: { decrement: total } }
+            : { advancePaid: { decrement: total } },
         });
       }
 
@@ -307,20 +332,26 @@ export async function POST(
         txnId = txn.id;
       }
 
-      // One settlement row per line. The increment is atomic so two
-      // concurrent settles can't lose each other's writes; the CHECK
-      // constraint rejects the one that would over-settle.
+      // All the settlement rows in one round-trip.
+      await tx.memberChargeSettlement.createMany({
+        data: data.lines.map((line) => ({
+          chargeId: line.chargeId,
+          amount: line.amount,
+          paidAt,
+          notes: data.notes,
+          transactionId: txnId,
+          fundedByAdvance: fundedFromAdvance,
+        })),
+      });
+
+      // The increment has to be per row — it's the atomic step that stops
+      // two concurrent settles from losing each other's writes, and the
+      // CHECK constraint rejects whichever one would over-settle. Each
+      // update hands back the value the database actually landed on, so the
+      // status below is never derived from a stale read.
+      const settledIds: string[] = [];
+      const partialIds: string[] = [];
       for (const line of data.lines) {
-        await tx.memberChargeSettlement.create({
-          data: {
-            chargeId: line.chargeId,
-            amount: line.amount,
-            paidAt,
-            notes: data.notes,
-            transactionId: txnId,
-            fundedByAdvance: fundedFromAdvance,
-          },
-        });
         const updated = await tx.memberCharge.update({
           where: { id: line.chargeId },
           data: {
@@ -329,17 +360,22 @@ export async function POST(
           },
           select: { amount: true, settledAmount: true },
         });
-        // Status comes from the value the database actually landed on, not
-        // from the stale figure we validated against.
-        const isSettled =
-          Number(updated.settledAmount) >= Number(updated.amount) - 0.01;
-        await tx.memberCharge.update({
-          where: { id: line.chargeId },
-          data: {
-            status: isSettled
-              ? MemberChargeStatus.SETTLED
-              : MemberChargeStatus.PARTIAL,
-          },
+        (Number(updated.settledAmount) >= Number(updated.amount) - 0.01
+          ? settledIds
+          : partialIds
+        ).push(line.chargeId);
+      }
+      // Two round-trips for the statuses instead of one per line.
+      if (settledIds.length > 0) {
+        await tx.memberCharge.updateMany({
+          where: { id: { in: settledIds } },
+          data: { status: MemberChargeStatus.SETTLED },
+        });
+      }
+      if (partialIds.length > 0) {
+        await tx.memberCharge.updateMany({
+          where: { id: { in: partialIds } },
+          data: { status: MemberChargeStatus.PARTIAL },
         });
       }
 
@@ -444,6 +480,17 @@ export async function POST(
         isIncoming,
         leftover,
       };
+    },
+    {
+      // A settle is a handful of dependent writes — a batched settlement
+      // insert, one atomic increment per charge, then the leftover's
+      // transfer and obligation. Against a remote database each is a
+      // round-trip, and Prisma's 5s default was blowing up on real
+      // multi-charge settles. Everything that doesn't have to be in here
+      // (the charge reads, the account lookups, the validation) already
+      // runs before it opens.
+      timeout: 15_000,
+      maxWait: 10_000,
     });
 
     void sendPaymentConfirmationEmail({
