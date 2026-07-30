@@ -179,6 +179,12 @@ export async function GET(
         spentOnThem: round2(spentOnThem),
         loansOwed: round2(loansOwed),
         loansLent: round2(loansLent),
+        // Advance credit sits alongside the owe/owed pair, never inside it
+        // and never netted against it: `advanceHeld` is their money parked
+        // with us, `advancePaid` is ours parked with them. Both are real
+        // positions the contact screen shows in their own right.
+        advanceHeld: round2(Number(member.advanceHeld)),
+        advancePaid: round2(Number(member.advancePaid)),
       },
       charges: charges.map((c) => ({
         id: c.id,
@@ -189,6 +195,7 @@ export async function GET(
         notes: c.notes,
         createdAt: c.createdAt.toISOString(),
         sourceTransferId: c.sourceTransferId,
+        lastSettlementAt: c.lastSettlementAt?.toISOString() ?? null,
         origin: c.originSplit?.transaction
           ? {
               id: c.originSplit.transaction.id,

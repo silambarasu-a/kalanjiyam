@@ -43,6 +43,7 @@ type Charge = {
   notes: string | null;
   createdAt: string;
   sourceTransferId: string | null;
+  lastSettlementAt: string | null;
   origin: { id: string; description: string; date: string } | null;
   settlements: Settlement[];
 };
@@ -93,6 +94,10 @@ type Ledger = {
     loansOwed: number;
     /** Open principal on money YOU lent them. Never netted with loansOwed. */
     loansLent: number;
+    /** Their money parked with you, spendable against their future charges. */
+    advanceHeld: number;
+    /** Your money parked with them. Never netted against advanceHeld. */
+    advancePaid: number;
   };
   charges: Charge[];
   transfers: Transfer[];
@@ -256,6 +261,34 @@ export default function MemberLedgerDetail() {
           />
         )}
       </div>
+
+      {/* Advance credit is its own position — money parked, not money owed —
+          so it sits outside the owe/owed grid rather than being folded into
+          it. Both directions can be live at once. */}
+      {(data.totals.advanceHeld > 0 || data.totals.advancePaid > 0) && (
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          {data.totals.advanceHeld > 0 && (
+            <span className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5">
+              <span className="font-medium">
+                {formatINR(data.totals.advanceHeld)}
+              </span>{" "}
+              <span className="text-muted-foreground">
+                of their money held as advance credit
+              </span>
+            </span>
+          )}
+          {data.totals.advancePaid > 0 && (
+            <span className="rounded-md border border-sky-500/40 bg-sky-500/5 px-3 py-1.5">
+              <span className="font-medium">
+                {formatINR(data.totals.advancePaid)}
+              </span>{" "}
+              <span className="text-muted-foreground">
+                of your money sitting with them
+              </span>
+            </span>
+          )}
+        </div>
+      )}
 
       <Tabs defaultValue="statement" className="gap-3">
         <TabsList
@@ -888,8 +921,14 @@ export default function MemberLedgerDetail() {
           contactName={data.member.name}
           direction={bulkSettleDirection}
           charges={openCharges.filter(
-            (c) => c.direction === bulkSettleDirection,
+            (c) => c.direction === bulkSettleDirection && c.status !== "SETTLED",
           )}
+          // Their credit clears what they owe; ours clears what we owe.
+          advanceAvailable={
+            bulkSettleDirection === "OWED_TO_USER"
+              ? data.totals.advanceHeld
+              : data.totals.advancePaid
+          }
           onSaved={() => {
             globalMutate(`/api/contacts/${id}/ledger`);
             mutateBalances();

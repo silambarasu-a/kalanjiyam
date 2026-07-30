@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canModifyRecord } from "@/lib/permissions";
 import { recomputeStatementPaidAt } from "@/lib/card-statement-service";
+import { reconcileChargesForDeletedTransfer } from "@/lib/cascades";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -48,8 +49,17 @@ export async function DELETE(
     // paidAt afterwards (this transfer might have been the one closing
     // the bill).
     const tagged = transfer.statementId;
-    // Cascade: legs reference transferId with onDelete: Cascade.
-    await prisma.transfer.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      // Reconcile the obligation this transfer created BEFORE the row goes.
+      // An `oweBack` charge points back via sourceTransferId (SetNull → it
+      // would survive sourceless) and an `expectBack` charge hangs off the
+      // leg's TransactionSplit (Cascade → it would survive with no
+      // back-reference at all). Either way it outlives the money that
+      // created it unless we deal with it here.
+      await reconcileChargesForDeletedTransfer(tx, id);
+      // Cascade: legs reference transferId with onDelete: Cascade.
+      await tx.transfer.delete({ where: { id } });
+    });
     if (tagged) {
       await recomputeStatementPaidAt(tagged);
     }

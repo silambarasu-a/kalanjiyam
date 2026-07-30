@@ -104,6 +104,12 @@ export type DashboardStats = {
   /** Outstanding from USER_OWES charges (owner owes contacts). Liability
    *  side — counted against net worth. */
   chargesIOwe: number;
+  /** Contacts' money parked with the workspace as advance credit. A
+   *  liability: it's spendable on their behalf or returnable, not ours. */
+  advanceHeld: number;
+  /** Workspace money parked with contacts. A receivable. Never netted
+   *  against `advanceHeld` — both sides can be live at once. */
+  advancePaid: number;
 };
 
 export type DashboardCashflow = {
@@ -155,6 +161,7 @@ export async function getDashboardStats(args: {
     outstandingCharges,
     monthIncomeAgg,
     monthExpenseAgg,
+    advanceAgg,
   ] = await Promise.all([
     prisma.account.findMany({
       where: { workspaceId },
@@ -197,6 +204,13 @@ export async function getDashboardStats(args: {
         transferId: null,
       },
       _sum: { amount: true },
+    }),
+    // Advance credit held both ways. Their money parked with us is a
+    // liability (we owe it back or must spend it on their behalf); ours
+    // parked with them is a receivable.
+    prisma.contact.aggregate({
+      where: { workspaceId },
+      _sum: { advanceHeld: true, advancePaid: true },
     }),
   ]);
 
@@ -252,15 +266,19 @@ export async function getDashboardStats(args: {
   // as "what others owe me". Keep that semantic so the tile doesn't
   // break; the new `userOwesRemaining` is surfaced separately.
   const chargesOutstanding = owedToUserRemaining;
+  const advanceHeld = Number(advanceAgg._sum.advanceHeld ?? 0);
+  const advancePaid = Number(advanceAgg._sum.advancePaid ?? 0);
   const netWorth =
     liquid +
     investedCurrent +
     otherHoldingsCurrent +
     owedToUserRemaining +
-    loansLentOutstanding -
+    loansLentOutstanding +
+    advancePaid -
     cardOutstanding -
     loanOutstanding -
-    userOwesRemaining;
+    userOwesRemaining -
+    advanceHeld;
   const income = Number(monthIncomeAgg._sum.amount ?? 0);
   const expense = Number(monthExpenseAgg._sum.amount ?? 0);
 
@@ -283,6 +301,8 @@ export async function getDashboardStats(args: {
     loansLentOutstanding,
     chargesOutstanding,
     chargesIOwe: userOwesRemaining,
+    advanceHeld,
+    advancePaid,
   };
 }
 

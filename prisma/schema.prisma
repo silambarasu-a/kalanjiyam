@@ -676,6 +676,17 @@ model Contact {
   user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   notes        String?
   active       Boolean   @default(true)
+  // Advance credit balances, kept as running counters rather than charges.
+  // `advanceHeld` is THEIR money sitting with us (they overpaid a settlement
+  // and asked us to hold it); `advancePaid` is OUR money sitting with them.
+  // Deliberately not modelled as a MemberCharge: a charge could be both
+  // cash-repaid and applied as credit for the same rupees, and it would
+  // double-count `totals.settled`. Both are guarded by a CHECK >= 0 and
+  // consumed with an atomic decrement — same pattern as
+  // UtilityProvider.advanceBalance. Never netted against each other, and
+  // never folded into owedToUser / userOwes.
+  advanceHeld  Decimal   @default(0) @db.Decimal(14, 2)
+  advancePaid  Decimal   @default(0) @db.Decimal(14, 2)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -843,6 +854,14 @@ model Transfer {
   // direction=USER_OWES so the user can settle it later.
   createsObligation Boolean        @default(false)
   obligationCharges MemberCharge[] @relation("TransferObligation")
+  // Set when this transfer carries the leftover of a bulk contact
+  // settlement (they sent more than the charges being cleared). It ties
+  // the two halves of one real-world payment together so deleting the
+  // settlement can clean up the leftover instead of stranding it.
+  // SetNull, not Cascade — the delete has to run through application code
+  // so the leftover's MemberCharge gets reconciled rather than orphaned.
+  settlementTxnId   String?        @unique
+  settlementTxn     Transaction?   @relation("SettlementLeftoverTransfer", fields: [settlementTxnId], references: [id], onDelete: SetNull)
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
@@ -1014,6 +1033,9 @@ model Transaction {
   memberChargeSettlements MemberChargeSettlement[]
   reminderConfirmation    InvestmentReminder?      @relation("ReminderConfirmation")
   splits                  TransactionSplit[]       @relation("TransactionSplits")
+  // The leftover transfer created alongside this bulk-settlement, if the
+  // contact paid more than the charges it cleared.
+  leftoverTransfer        Transfer?                @relation("SettlementLeftoverTransfer")
 
   @@index([workspaceId, date])
   @@index([workspaceId, categoryId])
@@ -1100,10 +1122,16 @@ model MemberChargeSettlement {
   paidAt        DateTime
   transactionId String?
   transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  // True when this settlement was funded by drawing down the contact's
+  // advance credit instead of moving cash. Such rows always have
+  // transactionId = null; the flag distinguishes them from an audit-only
+  // settlement (a real payment the user chose not to attach to an account).
+  fundedByAdvance Boolean    @default(false)
   notes         String?
   createdAt     DateTime     @default(now())
 
   @@index([chargeId, paidAt])
+  @@index([transactionId])
 }
 
 //

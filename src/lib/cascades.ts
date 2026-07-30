@@ -247,6 +247,156 @@ export async function revertUtilityAdvance(
 }
 
 /**
+ * The policy for a MemberCharge whose originating record is being deleted.
+ * Shared by the transaction-delete and transfer-delete paths so the two can
+ * never drift:
+ *
+ *   - SETTLED / WRITTEN_OFF → leave alone (the audit trail is deliberate).
+ *   - no settlements        → delete; nothing refers to it any more.
+ *   - has settlements       → WRITTEN_OFF, so those settlements stay
+ *                             attributable to something.
+ */
+export async function reconcileOrphanedCharges(
+  tx: Prisma.TransactionClient,
+  chargeIds: Iterable<string>,
+): Promise<string[]> {
+  const notes: string[] = [];
+  for (const chargeId of new Set(chargeIds)) {
+    const c = await tx.memberCharge.findUnique({
+      where: { id: chargeId },
+      select: {
+        amount: true,
+        status: true,
+        _count: { select: { settlements: true } },
+      },
+    });
+    if (!c) continue;
+    if (c.status === "WRITTEN_OFF" || c.status === "SETTLED") continue;
+    if (c._count.settlements === 0) {
+      await tx.memberCharge.delete({ where: { id: chargeId } });
+      notes.push(
+        `Removed the ₹${Number(c.amount).toLocaleString("en-IN")} obligation it created`,
+      );
+    } else {
+      await tx.memberCharge.update({
+        where: { id: chargeId },
+        data: { status: "WRITTEN_OFF" },
+      });
+      notes.push(
+        `Wrote off the ₹${Number(c.amount).toLocaleString("en-IN")} obligation (part-settled, so its settlements are kept)`,
+      );
+    }
+  }
+  return notes;
+}
+
+/**
+ * Undo the settlements a bulk/single contact settlement transaction paid for.
+ *
+ * Without this, deleting a settlement transaction reverses the cash off the
+ * account but leaves every charge SETTLED — the receivable disappears and the
+ * money was never received. The charges are only reachable from the
+ * transaction through `MemberChargeSettlement.transactionId`, which is
+ * SetNull, so nothing else in the delete path sees them.
+ *
+ * Advance-funded settlements are untouched here: they carry no transactionId,
+ * so no transaction delete can reach them.
+ */
+export async function revertChargeSettlements(
+  tx: Prisma.TransactionClient,
+  txnId: string,
+): Promise<string[]> {
+  const notes: string[] = [];
+  const settlements = await tx.memberChargeSettlement.findMany({
+    where: { transactionId: txnId },
+    select: { id: true, chargeId: true, amount: true },
+  });
+  if (settlements.length === 0) return notes;
+
+  const touched = new Set(settlements.map((s) => s.chargeId));
+  let reversed = 0;
+  for (const s of settlements) {
+    reversed += Number(s.amount);
+    await tx.memberCharge.update({
+      where: { id: s.chargeId },
+      data: { settledAmount: { decrement: s.amount } },
+    });
+  }
+  await tx.memberChargeSettlement.deleteMany({
+    where: { id: { in: settlements.map((s) => s.id) } },
+  });
+
+  // Recompute status and lastSettlementAt from what actually survives,
+  // rather than assuming this transaction was the only settlement.
+  for (const chargeId of touched) {
+    const c = await tx.memberCharge.findUnique({
+      where: { id: chargeId },
+      select: {
+        amount: true,
+        settledAmount: true,
+        status: true,
+        settlements: {
+          orderBy: { paidAt: "desc" },
+          take: 1,
+          select: { paidAt: true },
+        },
+      },
+    });
+    if (!c) continue;
+    // A written-off charge stays written off — deleting a payment against it
+    // doesn't revive the debt.
+    if (c.status === "WRITTEN_OFF") continue;
+    const settled = Number(c.settledAmount);
+    await tx.memberCharge.update({
+      where: { id: chargeId },
+      data: {
+        status:
+          settled >= Number(c.amount) - 0.01
+            ? "SETTLED"
+            : settled > 0.005
+              ? "PARTIAL"
+              : "OUTSTANDING",
+        lastSettlementAt: c.settlements[0]?.paidAt ?? null,
+      },
+    });
+  }
+
+  notes.push(
+    `Reopened ${touched.size} charge${touched.size === 1 ? "" : "s"} (₹${reversed.toLocaleString("en-IN")} no longer settled)`,
+  );
+  return notes;
+}
+
+/**
+ * Reconcile the MemberCharges a transfer created, before the transfer row
+ * goes away.
+ *
+ * A transfer's charge is reachable two different ways and neither survives
+ * the delete on its own: an `oweBack` charge points back through
+ * `sourceTransferId` (SetNull → it would be left sourceless), and an
+ * `expectBack` charge is only reachable through the TransactionSplit on the
+ * transfer's leg (Cascade → it would be left with no back-reference at all).
+ */
+export async function reconcileChargesForDeletedTransfer(
+  tx: Prisma.TransactionClient,
+  transferId: string,
+): Promise<string[]> {
+  const charges = await tx.memberCharge.findMany({
+    where: {
+      OR: [
+        { sourceTransferId: transferId },
+        { originSplit: { transaction: { transferId } } },
+      ],
+    },
+    select: { id: true },
+  });
+  return reconcileOrphanedCharges(
+    tx,
+    charges.map((c) => c.id),
+  );
+}
+
+/**
  * Undo a broiler-contract Lift transaction. The lift POST creates an
  * INCOME Transaction (kind=CONTRACT_PAYOUT) plus a SALE LivestockEvent
  * and an EXIT WeighingLog — all three reference the same date. When

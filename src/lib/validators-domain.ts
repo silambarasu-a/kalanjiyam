@@ -1544,24 +1544,81 @@ export const eventUpdateSchema = z
  * per line. All charges must share the same `direction` so a single
  * cash flow makes sense.
  */
-export const contactBulkSettleSchema = z.object({
-  lines: z
-    .array(
-      z.object({
-        chargeId: z.string().uuid(),
-        amount: z.number().positive(),
-      }),
-    )
-    .min(1)
-    .max(50),
-  /** Account or card cash flows through. Required — without it the
-   *  settlements are purely audit and don't move money, which is fine
-   *  if the user picks "no cash flow" — we still record the settlements. */
-  accountId: z.string().uuid().optional().nullable(),
-  cardId: z.string().uuid().optional().nullable(),
-  paidAt: z.string().min(1),
-  notes: z.string().trim().max(200).optional().nullable(),
-});
+/**
+ * What to do with money received beyond the charges it cleared. They owed
+ * ₹1300 and sent ₹1500 — the extra ₹200 is one of:
+ *   OBLIGATION — it flips into a debt the other way (you now owe them).
+ *   GIFT       — theirs to give / yours to give, nothing owed either way.
+ *   ADVANCE    — held as credit against their future charges.
+ */
+export const contactSettleLeftoverKindEnum = z.enum([
+  "OBLIGATION",
+  "GIFT",
+  "ADVANCE",
+]);
+
+export const contactBulkSettleSchema = z
+  .object({
+    lines: z
+      .array(
+        z.object({
+          chargeId: z.string().uuid(),
+          amount: z.number().positive(),
+        }),
+      )
+      .min(1)
+      .max(50),
+    /** Account or card cash flows through. Required — without it the
+     *  settlements are purely audit and don't move money, which is fine
+     *  if the user picks "no cash flow" — we still record the settlements. */
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    paidAt: z.string().min(1),
+    notes: z.string().trim().max(200).optional().nullable(),
+    /** Total cash that actually changed hands. Omit and it's assumed to
+     *  equal the sum of the lines — which is exactly how every pre-leftover
+     *  caller behaves, so they keep working untouched. */
+    receivedAmount: z.number().positive().max(100_000_000).optional(),
+    /** Only present when `receivedAmount` exceeds the allocated lines. The
+     *  server recomputes the amount and refuses to take this one on trust. */
+    leftover: z
+      .object({
+        amount: z.number().positive().max(100_000_000),
+        kind: contactSettleLeftoverKindEnum,
+        notes: z.string().trim().max(200).optional().nullable(),
+      })
+      .optional(),
+    /** Settle the lines by drawing down this contact's advance credit
+     *  instead of moving cash. Mutually exclusive with every cash field. */
+    fundedFromAdvance: z.literal(true).optional(),
+  })
+  .refine((d) => !d.leftover || d.receivedAmount !== undefined, {
+    message: "Send the total received amount alongside a leftover",
+    path: ["receivedAmount"],
+  })
+  .refine(
+    (d) =>
+      d.receivedAmount === undefined ||
+      d.receivedAmount + 0.01 >=
+        d.lines.reduce((sum, l) => sum + l.amount, 0),
+    {
+      message: "You allocated more than the amount received",
+      path: ["receivedAmount"],
+    },
+  )
+  .refine((d) => !d.leftover || !!d.accountId || !!d.cardId, {
+    message: "Pick an account to record the extra amount",
+    path: ["leftover"],
+  })
+  .refine(
+    (d) =>
+      !d.fundedFromAdvance ||
+      (!d.accountId && !d.cardId && !d.leftover && d.receivedAmount === undefined),
+    {
+      message: "Advance credit can't be combined with a cash payment",
+      path: ["fundedFromAdvance"],
+    },
+  );
 
 /* ---------------- Subscription schemas ---------------- */
 

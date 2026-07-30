@@ -19,6 +19,8 @@ import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 import { isS3Configured, presignGet } from "@/lib/s3";
 import {
+  reconcileChargesForDeletedTransfer,
+  revertChargeSettlements,
   revertContractLift,
   revertSubscriptionPay,
   revertUtilityAdvance,
@@ -396,6 +398,21 @@ const body = await request.json();
           {
             error:
               "Can't change the amount of a subscription payment. Edit the subscription's master amount instead, or delete this payment.",
+          },
+          { status: 400 },
+        );
+      }
+      // A settlement transaction's amount is the sum of the charge
+      // settlements it paid for. Changing it here would leave every one of
+      // those charges settled for an amount that no longer moved.
+      const settlementCount = await prisma.memberChargeSettlement.count({
+        where: { transactionId: id },
+      });
+      if (settlementCount > 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Can't change the amount of a contact settlement — it's split across the charges it cleared. Delete it and settle again.",
           },
           { status: 400 },
         );
@@ -1187,6 +1204,26 @@ export async function DELETE(
             });
           }
         }
+      }
+
+      // ── Contact settlement: put back what this payment settled.
+      // The charges are reachable only through
+      // MemberChargeSettlement.transactionId (SetNull), so nothing above
+      // sees them — without this the cash reverses off the account while
+      // every charge stays SETTLED and the receivable silently vanishes.
+      await revertChargeSettlements(tx, t.id);
+
+      // A bulk settlement can carry a leftover transfer (they paid more
+      // than the charges it cleared). The two halves are one real payment,
+      // so the leftover goes with it — through application code, not a DB
+      // cascade, so its own obligation gets reconciled rather than orphaned.
+      const leftoverTransfer = await tx.transfer.findUnique({
+        where: { settlementTxnId: t.id },
+        select: { id: true },
+      });
+      if (leftoverTransfer) {
+        await reconcileChargesForDeletedTransfer(tx, leftoverTransfer.id);
+        await tx.transfer.delete({ where: { id: leftoverTransfer.id } });
       }
 
       // Archive any TRANSACTION_RECEIPT attachments tied to this txn

@@ -78,7 +78,13 @@ export async function GET() {
           notes: m.notes,
           active: m.active,
           linkedUser: m.user ? { id: m.user.id, email: m.user.email, name: m.user.name } : null,
-          totals: t,
+          // Advance credit rides alongside the owe/owed pair rather than
+          // inside it — it's money parked, not money owed.
+          totals: {
+            ...t,
+            advanceHeld: Number(m.advanceHeld),
+            advancePaid: Number(m.advancePaid),
+          },
         };
       }),
     });

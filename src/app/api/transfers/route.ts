@@ -4,12 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { transferCreateSchema } from "@/lib/validators-domain";
-import {
-  TransactionType,
-  MemberChargeStatus,
-  MemberChargeType,
-  MemberChargeDirection,
-} from "@/generated/prisma/client";
+import { TransactionType } from "@/generated/prisma/client";
+import { createContactTransfer } from "@/lib/contact-transfer";
 import {
   findStatementForPayment,
   materializeStatementsFor,
@@ -194,136 +190,70 @@ export async function POST(request: Request) {
     }
 
     const transfer = await prisma.$transaction(async (tx) => {
+      // One side is a contact → both of those shapes live in
+      // createContactTransfer, shared with the bulk-settle leftover so the
+      // two record an identical set of rows. The validator guarantees the
+      // other side is an account.
+      if (!fromAccount || !toAccount) {
+        const contact = (fromContact ?? toContact)!;
+        const account = (fromAccount ?? toAccount)!;
+        const outgoing = !!fromAccount;
+        const { transferId } = await createContactTransfer(tx, {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          contactId: contact.id,
+          contactName: contact.name,
+          accountId: account.id,
+          amount,
+          date,
+          notes: notes ?? null,
+          outgoing,
+          obligation: outgoing ? !!expectBack : !!oweBack,
+          statementId: statementIdToTag,
+        });
+        return { id: transferId };
+      }
+
+      // Self-transfer: two transaction legs that link via transferId.
       const t = await tx.transfer.create({
         data: {
           workspaceId: ctx.workspaceId,
           userId: ctx.userId,
-          fromAccountId: fromAccount?.id ?? null,
-          fromContactId: fromContact?.id ?? null,
-          toAccountId: toAccount?.id ?? null,
-          toContactId: toContact?.id ?? null,
+          fromAccountId: fromAccount.id,
+          toAccountId: toAccount.id,
           amount,
           date,
           notes,
           statementId: statementIdToTag,
-          createsObligation: !!oweBack,
+          createsObligation: false,
         },
       });
-
-      if (fromAccount && toAccount) {
-        // Self-transfer: two transaction legs that link via transferId.
-        await tx.transaction.createMany({
-          data: [
-            {
-              workspaceId: ctx.workspaceId,
-              type: TransactionType.TRANSFER,
-              amount,
-              description: notes ?? "Transfer out",
-              date,
-              accountId: fromAccount.id,
-              userId: ctx.userId,
-              createdByUserId: ctx.userId,
-              transferId: t.id,
-            },
-            {
-              workspaceId: ctx.workspaceId,
-              type: TransactionType.TRANSFER,
-              amount,
-              description: notes ?? "Transfer in",
-              date,
-              accountId: toAccount.id,
-              userId: ctx.userId,
-              createdByUserId: ctx.userId,
-              transferId: t.id,
-            },
-          ],
-        });
-      } else if (fromAccount && toContact) {
-        // Outflow: my account → person. Single leg pinned to the member as
-        // beneficiary so member-centric reports pick it up. When the user
-        // marked the transfer as recoverable, create a MemberCharge first
-        // and link the leg to it so the contact's Outstanding stat picks up
-        // the amount and the existing settle flow can clear it.
-        let memberChargeId: string | null = null;
-        if (expectBack) {
-          const mc = await tx.memberCharge.create({
-            data: {
-              workspaceId: ctx.workspaceId,
-              beneficiaryContactId: toContact.id,
-              amount,
-              status: MemberChargeStatus.OUTSTANDING,
-              notes: notes ?? null,
-            },
-          });
-          memberChargeId = mc.id;
-        }
-        const txn = await tx.transaction.create({
-          data: {
+      await tx.transaction.createMany({
+        data: [
+          {
             workspaceId: ctx.workspaceId,
             type: TransactionType.TRANSFER,
             amount,
-            description: notes ?? `Transfer to ${toContact.name}`,
+            description: notes ?? "Transfer out",
             date,
             accountId: fromAccount.id,
-            beneficiaryContactId: toContact.id,
-            memberChargeType: expectBack
-              ? MemberChargeType.RECOVERABLE
-              : MemberChargeType.NONE,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,
           },
-        });
-        // Mirror the contact link as a TransactionSplit so the new
-        // splits-based readers (contact ledger "spent on them", multi-split
-        // UI) see this transfer just like any expense share.
-        await tx.transactionSplit.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            transactionId: txn.id,
-            contactId: toContact.id,
-            amount,
-            isRecoverable: !!expectBack,
-            memberChargeId,
-            notes: notes ?? null,
-          },
-        });
-      } else if (fromContact && toAccount) {
-        // Inflow: person → my account. Single leg on the destination
-        // account; the payer member lives on the Transfer row, not the
-        // leg, since beneficiaryContactId means "money received by", which
-        // doesn't apply when the workspace is the recipient.
-        await tx.transaction.create({
-          data: {
+          {
             workspaceId: ctx.workspaceId,
             type: TransactionType.TRANSFER,
             amount,
-            description: notes ?? `Transfer from ${fromContact.name}`,
+            description: notes ?? "Transfer in",
             date,
             accountId: toAccount.id,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,
           },
-        });
-        // Money I need to pay back later → create a USER_OWES charge
-        // linked to this transfer. The settlement flow on the contact
-        // ledger uses MemberChargeSettlement just like the other
-        // direction, only the cash flow reverses on settle.
-        if (oweBack) {
-          await tx.memberCharge.create({
-            data: {
-              workspaceId: ctx.workspaceId,
-              beneficiaryContactId: fromContact.id,
-              amount,
-              status: MemberChargeStatus.OUTSTANDING,
-              direction: MemberChargeDirection.USER_OWES,
-              sourceTransferId: t.id,
-              notes: notes ?? null,
-            },
-          });
-        }
-      }
+        ],
+      });
       return t;
     });
     if (statementIdToTag) {

@@ -78,7 +78,14 @@ export async function GET(
 
     const contact = await prisma.contact.findUnique({
       where: { id },
-      select: { id: true, name: true, relationship: true, workspaceId: true },
+      select: {
+        id: true,
+        name: true,
+        relationship: true,
+        workspaceId: true,
+        advanceHeld: true,
+        advancePaid: true,
+      },
     });
     if (!contact || contact.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -90,7 +97,7 @@ export async function GET(
     const from = fromStr ? startOfDay(new Date(fromStr)) : null;
     const to = toStr ? endOfDay(new Date(toStr)) : null;
 
-    const [transfers, charges, spentSplits, paidForMe, loans] =
+    const [transfers, charges, spentSplits, paidForMe, loans, receivedFrom] =
       await Promise.all([
         prisma.transfer.findMany({
           where: {
@@ -119,6 +126,7 @@ export async function GET(
                 paidAt: true,
                 notes: true,
                 transactionId: true,
+                fundedByAdvance: true,
               },
             },
           },
@@ -195,9 +203,51 @@ export async function GET(
             },
           },
         }),
+        // Money received FROM this contact that isn't a transfer, a
+        // settlement or a loan receipt — today that's a gift they gave when
+        // they overpaid a settlement. Without this the cash moves the
+        // account balance but never appears on their statement.
+        prisma.transaction.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            beneficiaryContactId: id,
+            type: "INCOME",
+            transferId: null,
+            memberChargeType: "GIFT",
+          },
+          select: {
+            id: true,
+            amount: true,
+            date: true,
+            description: true,
+            account: { select: { name: true } },
+          },
+        }),
       ]);
 
     const events: BuiltEvent[] = [];
+
+    // ── Gifts received from them (cash in, nothing owed) ────────────────
+    for (const g of receivedFrom) {
+      const amount = Number(g.amount);
+      events.push({
+        id: `gift-in:${g.id}`,
+        ts: g.date.getTime(),
+        date: g.date.toISOString(),
+        type: "GIFT_RECEIVED",
+        group: "CASH",
+        label: "Received · gift",
+        description: g.description,
+        account: g.account?.name ?? null,
+        amount,
+        direction: "IN",
+        cashDelta: amount,
+        runningCash: 0,
+        transactionId: g.id,
+        loanId: null,
+        hint: null,
+      });
+    }
 
     // ── Transfers (cash) ────────────────────────────────────────────────
     for (const t of transfers) {
@@ -294,13 +344,23 @@ export async function GET(
       for (const s of c.settlements) {
         const samt = Number(s.amount);
         const settleIn = owedToUser; // they paid you back
+        // Only a settlement with a transaction behind it moved cash. One
+        // funded from advance credit consumed a balance that was already
+        // banked, and an audit-only settlement never touched an account —
+        // counting either as cash would invent money. Same rule the loan
+        // ledger entries below already follow.
+        const hasCash = s.transactionId != null;
         events.push({
           id: `settlement:${s.id}`,
           ts: s.paidAt.getTime(),
           date: s.paidAt.toISOString(),
           type: settleIn ? "SETTLEMENT_IN" : "SETTLEMENT_OUT",
-          group: "CASH",
-          label: settleIn ? "Settlement received" : "Settlement paid",
+          group: hasCash ? "CASH" : "INFO",
+          label: s.fundedByAdvance
+            ? "Settled from advance credit"
+            : settleIn
+              ? "Settlement received"
+              : "Settlement paid",
           description:
             s.notes ??
             (settleIn
@@ -308,12 +368,16 @@ export async function GET(
               : `You paid ${contact.name}`),
           account: null,
           amount: samt,
-          direction: settleIn ? "IN" : "OUT",
-          cashDelta: settleIn ? samt : -samt,
+          direction: hasCash ? (settleIn ? "IN" : "OUT") : "NEUTRAL",
+          cashDelta: hasCash ? (settleIn ? samt : -samt) : 0,
           runningCash: 0,
           transactionId: s.transactionId ?? null,
           loanId: null,
-          hint: null,
+          hint: hasCash
+            ? null
+            : s.fundedByAdvance
+              ? "drawn from advance credit — no cash moved"
+              : "settled outside any account",
         });
       }
     }
@@ -552,6 +616,13 @@ export async function GET(
         youOweThemPrincipal: round2(borrowedOutstanding),
         interestReceived: round2(interestReceived),
         interestPaid: round2(interestPaid),
+      },
+      // Advance credit is a third standing position, on the same footing as
+      // the loan pair: shown as its own labelled numbers, never netted into
+      // theyOweYou / youOweThem or against each other.
+      advancePositions: {
+        heldFromThem: round2(Number(contact.advanceHeld)),
+        paidToThem: round2(Number(contact.advancePaid)),
       },
       monthly,
       // Newest-first for the statement table.

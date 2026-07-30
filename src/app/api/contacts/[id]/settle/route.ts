@@ -2,12 +2,20 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
-import { canAccessRecord } from "@/lib/permissions";
+import { canAccessRecord, checkRoutePermission } from "@/lib/permissions";
 import { contactBulkSettleSchema } from "@/lib/validators-domain";
 import { sendPaymentConfirmationEmail } from "@/lib/notifications-payment";
+import { createContactTransfer } from "@/lib/contact-transfer";
+import {
+  CHARGE_OVERSETTLE_MESSAGE,
+  CONTACT_ADVANCE_MESSAGE,
+  isChargeOverSettleViolation,
+  isContactAdvanceViolation,
+} from "@/lib/contact-settle-guards";
 import {
   MemberChargeDirection,
   MemberChargeStatus,
+  MemberChargeType,
   TransactionType,
 } from "@/generated/prisma/client";
 
@@ -15,16 +23,48 @@ function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
+  if (isChargeOverSettleViolation(e)) {
+    return NextResponse.json({ error: CHARGE_OVERSETTLE_MESSAGE }, { status: 409 });
+  }
+  if (isContactAdvanceViolation(e)) {
+    return NextResponse.json({ error: CONTACT_ADVANCE_MESSAGE }, { status: 409 });
+  }
   console.error("[contact-bulk-settle]", e);
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+type LeftoverResult = {
+  amount: number;
+  kind: "OBLIGATION" | "GIFT" | "ADVANCE";
+  transferId: string | null;
+  transactionId: string | null;
+  chargeId: string | null;
+};
+
 /**
- * Bulk-settle multiple outstanding charges belonging to a single
- * contact in a single round-trip. All charges must share the same
- * direction (OWED_TO_USER or USER_OWES) so a single cash flow makes
- * sense. Lines can partially settle a charge; the cumulative
- * `settledAmount` advances each charge to PARTIAL / SETTLED.
+ * Bulk-settle multiple outstanding charges belonging to a single contact in
+ * one round-trip, with the money that arrives driving the allocation.
+ *
+ * They owed ₹100 + ₹400 + ₹800 and sent ₹1500: the three charges clear and
+ * the extra ₹200 is classified by the caller as a debt the other way, a
+ * gift, or advance credit. Symmetric when the workspace owner overpays a
+ * contact they owe.
+ *
+ * Three invariants hold the accounting together:
+ *
+ *  1. The settlement Transaction covers the ALLOCATED total only, never the
+ *     received amount. The leftover carries its own record so no rupee is
+ *     counted twice.
+ *  2. The leftover is recorded in whichever shape the existing readers
+ *     already understand — a Transfer (+ MemberCharge) for a debt or an
+ *     advance, a plain EXPENSE/INCOME for a gift. A gift must NOT be a
+ *     Transfer: every P&L and cashflow reader filters `transferId: null`, so
+ *     gifted money would move the balance and appear in no report.
+ *  3. Charges are re-read INSIDE the transaction and advanced with an atomic
+ *     increment. A CHECK constraint fails the loser of a concurrent settle
+ *     rather than letting an over-settle through silently.
  */
 export async function POST(
   request: Request,
@@ -51,82 +91,60 @@ export async function POST(
       return NextResponse.json({ error: "Contact not found" }, { status: 404 });
     }
 
-    // Pull every charge in one go; reject if any belongs to a different
-    // workspace or contact, OR if they mix directions.
     const chargeIds = data.lines.map((l) => l.chargeId);
-    const charges = await prisma.memberCharge.findMany({
-      where: { id: { in: chargeIds } },
-    });
-    if (charges.length !== chargeIds.length) {
+    if (new Set(chargeIds).size !== chargeIds.length) {
       return NextResponse.json(
-        { error: "One or more charges not found" },
-        { status: 404 },
+        { error: "The same charge appears twice" },
+        { status: 400 },
       );
     }
-    for (const c of charges) {
-      if (
-        c.workspaceId !== ctx.workspaceId ||
-        c.beneficiaryContactId !== contactId
-      ) {
+
+    let total = 0;
+    for (const line of data.lines) total += line.amount;
+    total = round2(total);
+
+    // ── Leftover: what's left after the lines are paid ───────────────────
+    // Recomputed here rather than trusted from the client, which only sends
+    // it so we can confirm both sides agree on what the user was shown.
+    const cashMoved = round2(data.receivedAmount ?? total);
+    const leftoverAmount = round2(cashMoved - total);
+    if (data.leftover) {
+      if (Math.abs(leftoverAmount - data.leftover.amount) > 0.01) {
         return NextResponse.json(
-          { error: "Charge does not belong to this contact" },
+          { error: "Leftover doesn't match the amounts entered — please retry" },
           { status: 400 },
         );
       }
-      if (c.status === MemberChargeStatus.SETTLED) {
-        return NextResponse.json(
-          { error: `Charge ${c.id} is already settled` },
-          { status: 400 },
-        );
-      }
-    }
-    const directions = new Set(charges.map((c) => c.direction));
-    if (directions.size > 1) {
+    } else if (leftoverAmount > 0.005 && !data.fundedFromAdvance) {
       return NextResponse.json(
         {
-          error:
-            "Mix of directions — settle 'they owe me' and 'I owe them' charges separately",
+          error: `₹${leftoverAmount.toFixed(
+            2,
+          )} is unaccounted for — say whether it's owed back, a gift, or advance credit`,
         },
         { status: 400 },
       );
     }
-    const direction = charges[0].direction;
-    const isIncoming = direction !== MemberChargeDirection.USER_OWES;
 
-    // Per-line cap: amount must be positive AND must not exceed
-    // remaining on its charge. (The Zod schema already enforces
-    // positive at the type level via `.positive()`, but defensive
-    // validation guards against future schema relaxation.)
-    const byId = new Map(charges.map((c) => [c.id, c]));
-    let total = 0;
-    for (const line of data.lines) {
-      if (line.amount <= 0) {
+    // The leftover writes a row this route's own `members` gate doesn't
+    // cover, so gate it against the feature that actually owns that row.
+    if (data.leftover) {
+      const feature =
+        data.leftover.kind === "GIFT" ? "transactions" : "transfers";
+      if (!checkRoutePermission(session, feature, "write").allowed) {
         return NextResponse.json(
-          { error: "Settlement amount must be positive" },
-          { status: 400 },
+          { error: "You don't have permission to record the extra amount" },
+          { status: 403 },
         );
       }
-      const c = byId.get(line.chargeId)!;
-      const remaining = Number(c.amount) - Number(c.settledAmount);
-      if (line.amount > remaining + 0.005) {
-        return NextResponse.json(
-          {
-            error: `Line for ${c.id} exceeds outstanding (₹${remaining.toFixed(
-              2,
-            )})`,
-          },
-          { status: 400 },
-        );
-      }
-      total += line.amount;
     }
-    total = Math.round(total * 100) / 100;
 
-    // Resolve the cash-flow side. accountId/cardId is required when the
-    // user expects a transaction; if neither is supplied we still record
-    // settlements but skip the txn (audit-only).
+    // ── Resolve the cash-flow side ───────────────────────────────────────
+    // Neither account nor card means audit-only: settlements are recorded
+    // but no transaction moves money.
     let resolvedAccountId: string | null = data.accountId ?? null;
     const resolvedCardId: string | null = data.cardId ?? null;
+    let resolvedAccountKind: string | null = null;
     if (resolvedCardId) {
       const card = await prisma.card.findUnique({
         where: { id: resolvedCardId },
@@ -149,6 +167,7 @@ export async function POST(
         where: { id: resolvedAccountId },
         select: {
           workspaceId: true,
+          kind: true,
           ownerUserId: true,
           sharedWithUserIds: true,
         },
@@ -159,6 +178,30 @@ export async function POST(
       if (!canAccessRecord(session, acc)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      resolvedAccountKind = acc.kind;
+    }
+
+    // A leftover needs somewhere real to land. A card resolves to its
+    // companion CARD-kind account, whose balance runs the other way and
+    // whose inbound transfers get read as bill payments — so a leftover
+    // through a card would be recorded backwards.
+    if (data.leftover) {
+      if (resolvedCardId || resolvedAccountKind === "CARD") {
+        return NextResponse.json(
+          {
+            error: `Pick a bank or cash account to record the extra ₹${leftoverAmount.toFixed(
+              2,
+            )}`,
+          },
+          { status: 400 },
+        );
+      }
+      if (!resolvedAccountId) {
+        return NextResponse.json(
+          { error: "Pick an account to record the extra amount" },
+          { status: 400 },
+        );
+      }
     }
 
     const paidAt = new Date(data.paidAt);
@@ -166,10 +209,83 @@ export async function POST(
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }
 
+    const fundedFromAdvance = data.fundedFromAdvance === true;
+
     const result = await prisma.$transaction(async (tx) => {
-      // One Transaction covers the entire bulk cash flow.
+      // Re-read the charges INSIDE the transaction. Reading them outside
+      // and validating against that snapshot is what let two concurrent
+      // settles both clear the same charge.
+      const charges = await tx.memberCharge.findMany({
+        where: { id: { in: chargeIds } },
+      });
+      if (charges.length !== chargeIds.length) {
+        throw new WorkspaceAccessError(404, "One or more charges not found");
+      }
+      for (const c of charges) {
+        if (
+          c.workspaceId !== ctx.workspaceId ||
+          c.beneficiaryContactId !== contactId
+        ) {
+          throw new WorkspaceAccessError(
+            400,
+            "Charge does not belong to this contact",
+          );
+        }
+        if (c.status === MemberChargeStatus.SETTLED) {
+          throw new WorkspaceAccessError(400, "A charge is already settled");
+        }
+        if (c.status === MemberChargeStatus.WRITTEN_OFF) {
+          throw new WorkspaceAccessError(
+            400,
+            "A charge was written off and can't be settled",
+          );
+        }
+      }
+      const directions = new Set(charges.map((c) => c.direction));
+      if (directions.size > 1) {
+        throw new WorkspaceAccessError(
+          400,
+          "Mix of directions — settle 'they owe me' and 'I owe them' charges separately",
+        );
+      }
+      const direction = charges[0].direction;
+      const isIncoming = direction !== MemberChargeDirection.USER_OWES;
+
+      const byId = new Map(charges.map((c) => [c.id, c]));
+      for (const line of data.lines) {
+        const c = byId.get(line.chargeId)!;
+        const remaining = Number(c.amount) - Number(c.settledAmount);
+        if (line.amount > remaining + 0.005) {
+          throw new WorkspaceAccessError(
+            400,
+            `A line exceeds what's outstanding on its charge (₹${remaining.toFixed(2)})`,
+          );
+        }
+      }
+
+      // ── Advance-funded: no cash, draw the credit down instead ──────────
+      if (fundedFromAdvance) {
+        // Their money sitting with us pays down what they owe us; our money
+        // sitting with them pays down what we owe them.
+        const field = isIncoming ? "advanceHeld" : "advancePaid";
+        const available = Number(
+          isIncoming ? contact.advanceHeld : contact.advancePaid,
+        );
+        if (total > available + 0.005) {
+          throw new WorkspaceAccessError(
+            400,
+            `Only ₹${available.toFixed(2)} of advance credit is available`,
+          );
+        }
+        await tx.contact.update({
+          where: { id: contactId },
+          data: { [field]: { decrement: total } },
+        });
+      }
+
+      // ── One Transaction for the ALLOCATED total, never the received ───
       let txnId: string | null = null;
-      if (resolvedAccountId || resolvedCardId) {
+      if (!fundedFromAdvance && (resolvedAccountId || resolvedCardId)) {
         const txn = await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -191,14 +307,10 @@ export async function POST(
         txnId = txn.id;
       }
 
-      // One settlement row per line; update the charge's running total.
+      // One settlement row per line. The increment is atomic so two
+      // concurrent settles can't lose each other's writes; the CHECK
+      // constraint rejects the one that would over-settle.
       for (const line of data.lines) {
-        const c = byId.get(line.chargeId)!;
-        const newSettled = Number(c.settledAmount) + line.amount;
-        const newStatus =
-          newSettled >= Number(c.amount) - 0.01
-            ? MemberChargeStatus.SETTLED
-            : MemberChargeStatus.PARTIAL;
         await tx.memberChargeSettlement.create({
           data: {
             chargeId: line.chargeId,
@@ -206,18 +318,132 @@ export async function POST(
             paidAt,
             notes: data.notes,
             transactionId: txnId,
+            fundedByAdvance: fundedFromAdvance,
           },
         });
+        const updated = await tx.memberCharge.update({
+          where: { id: line.chargeId },
+          data: {
+            settledAmount: { increment: line.amount },
+            lastSettlementAt: paidAt,
+          },
+          select: { amount: true, settledAmount: true },
+        });
+        // Status comes from the value the database actually landed on, not
+        // from the stale figure we validated against.
+        const isSettled =
+          Number(updated.settledAmount) >= Number(updated.amount) - 0.01;
         await tx.memberCharge.update({
           where: { id: line.chargeId },
           data: {
-            settledAmount: newSettled,
-            status: newStatus,
-            lastSettlementAt: paidAt,
+            status: isSettled
+              ? MemberChargeStatus.SETTLED
+              : MemberChargeStatus.PARTIAL,
           },
         });
       }
-      return { transactionId: txnId, totalSettled: total };
+
+      // ── The leftover ──────────────────────────────────────────────────
+      let leftover: LeftoverResult | null = null;
+      if (data.leftover && resolvedAccountId) {
+        const kind = data.leftover.kind;
+        const amount = leftoverAmount;
+        const leftoverNotes = data.leftover.notes?.trim() || null;
+        // Incoming settle → the surplus arrived with their payment, so the
+        // leftover moves the same way the settlement did.
+        const outgoing = !isIncoming;
+
+        if (kind === "GIFT") {
+          // Deliberately a plain EXPENSE / INCOME, not a Transfer: cashflow,
+          // P&L and the dashboard all filter `transferId: null`, so a
+          // gift-as-transfer would move the balance and show up nowhere.
+          const description =
+            leftoverNotes ??
+            (outgoing ? `Gift to ${contact.name}` : `Gift from ${contact.name}`);
+          const giftTxn = await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: outgoing ? TransactionType.EXPENSE : TransactionType.INCOME,
+              amount,
+              description,
+              date: paidAt,
+              accountId: resolvedAccountId,
+              beneficiaryContactId: contactId,
+              memberChargeType: MemberChargeType.GIFT,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+          if (outgoing) {
+            // Non-recoverable split so the contact's "spent on them" reader
+            // picks it up. Only meaningful on the expense side — an incoming
+            // gift is income, not a shared cost.
+            await tx.transactionSplit.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                transactionId: giftTxn.id,
+                contactId,
+                amount,
+                isRecoverable: false,
+                notes: leftoverNotes,
+              },
+            });
+          }
+          leftover = {
+            amount,
+            kind,
+            transferId: null,
+            transactionId: giftTxn.id,
+            chargeId: null,
+          };
+        } else {
+          // OBLIGATION and ADVANCE both move real cash between an account
+          // and the contact, which is exactly what a Transfer records. They
+          // differ only in what's left owing afterwards: an obligation is an
+          // itemised debt, an advance is a running credit balance.
+          const created = await createContactTransfer(tx, {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            contactId,
+            contactName: contact.name,
+            accountId: resolvedAccountId,
+            amount,
+            date: paidAt,
+            notes:
+              leftoverNotes ??
+              (kind === "ADVANCE"
+                ? `Advance credit · ${contact.name}`
+                : outgoing
+                  ? `Overpaid ${contact.name}`
+                  : `${contact.name} overpaid`),
+            outgoing,
+            obligation: kind === "OBLIGATION",
+            settlementTxnId: txnId,
+          });
+          if (kind === "ADVANCE") {
+            await tx.contact.update({
+              where: { id: contactId },
+              data: outgoing
+                ? { advancePaid: { increment: amount } }
+                : { advanceHeld: { increment: amount } },
+            });
+          }
+          leftover = {
+            amount,
+            kind,
+            transferId: created.transferId,
+            transactionId: created.transactionId,
+            chargeId: created.memberChargeId,
+          };
+        }
+      }
+
+      return {
+        transactionId: txnId,
+        totalSettled: total,
+        isIncoming,
+        leftover,
+      };
     });
 
     void sendPaymentConfirmationEmail({
@@ -228,18 +454,25 @@ export async function POST(
       recipientUserIds: [ctx.userId],
       kind: "SETTLEMENT",
       autopayed: false,
-      amount: total,
-      label: isIncoming
+      amount: result.totalSettled,
+      label: result.isIncoming
         ? `Received from ${contact.name}`
         : `Paid ${contact.name}`,
-      sourceLabel:
-        resolvedCardId || resolvedAccountId
-          ? resolvedCardId ? "Card" : "Account"
+      sourceLabel: fundedFromAdvance
+        ? "advance credit (no cash flow)"
+        : resolvedCardId || resolvedAccountId
+          ? resolvedCardId
+            ? "Card"
+            : "Account"
           : "audit-only (no cash flow)",
       link: `/contacts/${contactId}`,
     }).catch((e) => console.warn("[bulk-settle] email failed", e));
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      transactionId: result.transactionId,
+      totalSettled: result.totalSettled,
+      leftover: result.leftover,
+    });
   } catch (e) {
     return err(e);
   }
