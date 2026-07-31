@@ -17,9 +17,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
+import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
 import {
   splitPayment,
+  calculateEMI,
   cyclesPerYear,
   type LoanFrequency,
 } from "@/lib/loan-math";
@@ -100,20 +101,63 @@ export function LoanPayDialog({
 
   const amt = Number(amount) || (loan?.emiAmount ?? 0);
   const freq: LoanFrequency = loan?.frequency ?? "MONTHLY";
+
+  // Interest accrued between the last settled date and the payment date, from
+  // the server so the preview can't drift from what /pay actually records.
+  // Keyed on the date only — the accrual doesn't depend on how much is being
+  // paid, so typing an amount re-amortizes locally instead of refetching.
+  const { data: accrual } = useSWR<{
+    timeAware: boolean;
+    anchor: string | null;
+    days: number | null;
+    interest: number;
+    gst: number;
+    payoff?: number;
+    remainingCycles: number | null;
+  }>(
+    loan ? `/api/loans/${loan.id}/accrual?asOf=${paidAt}` : null,
+    fetcher,
+  );
+
+  // Falls back to the formula split while the accrual is in flight, and for
+  // card EMIs, where the issuer's per-cycle interest is fixed and the server
+  // returns that same formula split anyway.
   const suggestion =
-    loan && amt > 0
-      ? splitPayment(
-          loan.outstanding,
-          loan.interestRate ?? 0,
-          Math.min(loan.emiAmount ?? amt, amt),
-          freq,
-          loan.gstOnInterest ?? null,
-        )
-      : { interest: 0, principal: 0, gst: 0 };
+    accrual && loan
+      ? { interest: accrual.interest, gst: accrual.gst, principal: 0 }
+      : loan && amt > 0
+        ? splitPayment(
+            loan.outstanding,
+            loan.interestRate ?? 0,
+            Math.min(loan.emiAmount ?? amt, amt),
+            freq,
+            loan.gstOnInterest ?? null,
+          )
+        : { interest: 0, principal: 0, gst: 0 };
   const suggestedPrincipal = Math.max(
     0,
-    Math.round((amt - suggestion.interest - suggestion.gst) * 100) / 100,
+    Math.round(
+      Math.min(
+        loan?.outstanding ?? 0,
+        amt - suggestion.interest - suggestion.gst,
+      ) * 100,
+    ) / 100,
   );
+  const newOutstanding = Math.max(0, (loan?.outstanding ?? 0) - suggestedPrincipal);
+  // Same policy as the server: the tenure stays, the instalment shrinks.
+  const newEmi =
+    accrual?.timeAware && accrual.remainingCycles && newOutstanding > 0
+      ? calculateEMI(
+          newOutstanding,
+          loan?.interestRate ?? 0,
+          accrual.remainingCycles,
+          freq,
+        )
+      : null;
+  const overpaying =
+    accrual?.timeAware === true &&
+    accrual.payoff != null &&
+    amt > accrual.payoff + 1;
 
   async function submit() {
     if (!loan) return;
@@ -154,6 +198,12 @@ export function LoanPayDialog({
         if (body.outstanding === 0) {
           toast.success("Loan closed", {
             description: `You have ${TIMING.loanEmiGraceDays} days to edit or delete this final EMI from the transactions list if needed.`,
+          });
+        } else if (body.emiAmount != null && body.emiAmount !== loan.emiAmount) {
+          // The instalment moved. Say so — otherwise the next dialog opens
+          // pre-filled with a different number and it looks like a bug.
+          toast.success("Payment recorded", {
+            description: `EMI recalculated to ${formatINR(body.emiAmount)} · tenure unchanged.`,
           });
         } else {
           toast.success("EMI paid");
@@ -204,7 +254,11 @@ export function LoanPayDialog({
             {amt > 0 && (
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5">
                 <div className="flex items-center justify-between font-medium text-foreground">
-                  <span>Auto-split (reducing balance)</span>
+                  <span>
+                    {accrual?.timeAware
+                      ? "Auto-split (interest first)"
+                      : "Auto-split (reducing balance)"}
+                  </span>
                   <button
                     type="button"
                     className="text-[11px] font-normal underline text-muted-foreground"
@@ -214,13 +268,12 @@ export function LoanPayDialog({
                   </button>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Principal</span>
-                  <span className="tabular-nums">
-                    {formatINR(suggestedPrincipal)}
+                  <span className="text-muted-foreground">
+                    Interest
+                    {accrual?.timeAware && accrual.days != null
+                      ? ` · ${accrual.days} ${accrual.days === 1 ? "day" : "days"}`
+                      : ""}
                   </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Interest</span>
                   <span className="tabular-nums">
                     {formatINR(suggestion.interest)}
                   </span>
@@ -235,13 +288,40 @@ export function LoanPayDialog({
                     </span>
                   </div>
                 )}
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Principal</span>
+                  <span className="tabular-nums">
+                    {formatINR(suggestedPrincipal)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between border-t border-primary/20 pt-1.5 font-medium text-foreground">
+                  <span>New outstanding</span>
+                  <span className="tabular-nums">
+                    {formatINR(newOutstanding)}
+                  </span>
+                </div>
+                {newEmi != null && newEmi !== Math.round(loan.emiAmount ?? 0) && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">
+                      New EMI · tenure unchanged
+                    </span>
+                    <span className="tabular-nums">{formatINR(newEmi)}</span>
+                  </div>
+                )}
+                {overpaying && accrual?.payoff != null && (
+                  <p className="text-[11px] text-destructive pt-1">
+                    That&apos;s more than this loan owes. Pay{" "}
+                    {formatINR(accrual.payoff)} to close it in full.
+                  </p>
+                )}
                 <p className="text-[10px] text-muted-foreground pt-1">
-                  Interest = outstanding ×{" "}
-                  {((loan.interestRate ?? 0) / cyclesPerYear(freq)).toFixed(3)}%
-                  {suggestion.gst > 0
-                    ? ` + GST ${loan.gstOnInterest}%`
-                    : ""}
-                  . Remaining is principal.
+                  {accrual?.timeAware && accrual.anchor && accrual.days != null
+                    ? `Interest accrued from ${formatDate(accrual.anchor)} to ${formatDate(paidAt)} at ${loan.interestRate ?? 0}% p.a.${
+                        suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""
+                      }. Remaining is principal.`
+                    : `Interest = outstanding × ${((loan.interestRate ?? 0) / cyclesPerYear(freq)).toFixed(3)}%${
+                        suggestion.gst > 0 ? ` + GST ${loan.gstOnInterest}%` : ""
+                      }. Remaining is principal.`}
                 </p>
               </div>
             )}

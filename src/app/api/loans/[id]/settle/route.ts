@@ -22,6 +22,10 @@ function err(e: unknown) {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+function featureForSource(source: string) {
+  return source === "BANK" ? "bank_loans" : source === "CARD_EMI" ? "card_emi" : "hand_loans";
+}
+
 /**
  * Record an ad-hoc settlement on a hand loan: interest actually paid or
  * received as of a date, an optional partial principal reduction, or both.
@@ -50,9 +54,11 @@ export async function POST(
       },
     });
     if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    // Ad-hoc settlement only exists for hand loans, so the feature is fixed —
-    // no featureForSource indirection needed.
-    const ctx = await requireWorkspace("hand_loans", "write");
+    // Bank bullet loans (gold / overdraft) settle through here too, so the
+    // permission feature has to follow the loan's source. Hardcoding
+    // "hand_loans" would let someone with hand-loan rights but no bank-loan
+    // rights settle a gold loan, and lock out the reverse.
+    const ctx = await requireWorkspace(featureForSource(loan.source), "write");
     const session = await auth();
     if (loan.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -60,9 +66,18 @@ export async function POST(
     if (!canModifyRecord(session, loan)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (loan.source !== "HAND_FORMAL") {
+    // Mode, not source, decides which route applies: a bank gold loan in
+    // bullet mode settles exactly like a hand loan, while an EMI loan of any
+    // source belongs to /pay. Mirrors /pay's rejection of AD_HOC.
+    if (loan.repaymentMode !== "AD_HOC") {
       return NextResponse.json(
-        { error: "Bank loans and card EMIs are repaid as EMIs." },
+        { error: "This loan is repaid as EMIs — record an EMI payment instead." },
+        { status: 400 },
+      );
+    }
+    if (loan.source === "CARD_EMI") {
+      return NextResponse.json(
+        { error: "Card EMI plans are repaid as fixed instalments." },
         { status: 400 },
       );
     }

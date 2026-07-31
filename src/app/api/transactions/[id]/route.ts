@@ -14,6 +14,7 @@ import {
   splitPayment,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { applyPaymentBankStyle, recalculatedEmi } from "@/lib/loan-accrual";
 import { classifyLoanTxn } from "@/lib/loan-direction";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
@@ -644,16 +645,49 @@ const body = await request.json();
             Number(full.loan.outstanding) + oldPrincipalAddBack,
           );
 
-          const newSplit = splitPayment(balanceBeforeNew, rate, newAmount, freq, gst);
+          // Re-accrue over the window this payment originally covered, so the
+          // corrected amount is split the same way /pay would have split it on
+          // the day. `splitPayment` would charge a whole cycle's interest
+          // regardless of when the money actually moved — the very bug this
+          // re-split is meant to stay consistent with. Falls back to the
+          // formula for card EMIs (fixed statement interest) and for
+          // pre-ledger rows, which have no period to re-accrue over.
+          const period = loanClass.entry?.periodFrom ?? null;
+          const newSplit =
+            period && full.loan.source !== "CARD_EMI"
+              ? applyPaymentBankStyle({
+                  amount: newAmount,
+                  outstanding: balanceBeforeNew,
+                  annualRate: rate,
+                  frequency: freq,
+                  gstOnInterestPct: gst,
+                  from: period,
+                  to: loanClass.entry?.periodTo ?? full.date,
+                })
+              : splitPayment(balanceBeforeNew, rate, newAmount, freq, gst);
           const finalOutstanding = Math.max(0, balanceBeforeNew - newSplit.principal);
 
           const wasForeclosed =
             !full.loan.active && full.loan.foreclosedAt != null;
           const willClose = finalOutstanding === 0;
+          // The instalment tracks the balance, so a corrected amount has to
+          // re-amortize what's left — otherwise the loan keeps the EMI derived
+          // from the wrong figure.
+          const restoredEmi =
+            full.loan.source !== "CARD_EMI" && full.loan.repaymentMode === "EMI"
+              ? recalculatedEmi({
+                  outstanding: finalOutstanding,
+                  annualRate: rate,
+                  frequency: freq,
+                  maturityAt: full.loan.maturityAt,
+                  asOf: new Date(),
+                })
+              : null;
           await tx.loan.update({
             where: { id: full.loan.id },
             data: {
               outstanding: finalOutstanding,
+              ...(restoredEmi != null ? { emiAmount: restoredEmi } : {}),
               active: !willClose,
               foreclosedAt:
                 willClose && full.loan.active
@@ -1020,10 +1054,24 @@ export async function DELETE(
         );
         const wasForeclosedByThis =
           !t.loan.active && t.loan.foreclosedAt != null;
+        // Undo the EMI recalculation this payment triggered. Restoring the
+        // balance without restoring the instalment would leave the loan quoting
+        // an EMI sized for a principal reduction that no longer exists.
+        const restoredEmi =
+          t.loan.source !== "CARD_EMI" && t.loan.repaymentMode === "EMI"
+            ? recalculatedEmi({
+                outstanding: newOutstanding,
+                annualRate: t.loan.interestRate ? Number(t.loan.interestRate) : 0,
+                frequency: (t.loan.frequency ?? "MONTHLY") as LoanFrequency,
+                maturityAt: t.loan.maturityAt,
+                asOf: new Date(),
+              })
+            : null;
         await tx.loan.update({
           where: { id: t.loan.id },
           data: {
             outstanding: newOutstanding,
+            ...(restoredEmi != null ? { emiAmount: restoredEmi } : {}),
             ...(wasForeclosedByThis && newOutstanding > 0
               ? { active: true, foreclosedAt: null }
               : {}),

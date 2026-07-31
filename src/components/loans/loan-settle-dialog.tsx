@@ -28,6 +28,9 @@ import { fetcher } from "@/lib/swr-fetcher";
 export type LoanForSettlement = {
   id: string;
   counterparty: string;
+  // Bank bullet loans (gold, overdraft) settle through this dialog too, and
+  // unlike private lending they always move through an account.
+  source: "BANK" | "HAND_FORMAL" | "CARD_EMI";
   direction: "BORROWED" | "LENT";
   outstanding: number;
   principal: number;
@@ -95,6 +98,9 @@ export function LoanSettleDialog({
   const [showPeriod, setShowPeriod] = useState(false);
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
+  // Cash-in-hand is a private-lending affordance; a bank settlement always
+  // debits an account, so it starts unset there and must be picked.
+  const cashAllowed = loan?.source !== "BANK";
   const [accountId, setAccountId] = useState(CASH_IN_HAND);
   const [closeLoan, setCloseLoan] = useState(false);
   const [notes, setNotes] = useState("");
@@ -111,7 +117,7 @@ export function LoanSettleDialog({
     setShowPeriod(false);
     setPeriodFrom("");
     setPeriodTo("");
-    setAccountId(CASH_IN_HAND);
+    setAccountId(cashAllowed ? CASH_IN_HAND : "");
     setCloseLoan(false);
     setNotes("");
     setError(null);
@@ -164,6 +170,10 @@ export function LoanSettleDialog({
     }
     if (overPrincipal) {
       setError(`Principal exceeds the outstanding (${formatINR(loan.outstanding)})`);
+      return;
+    }
+    if (!cashAllowed && (!accountId || accountId === CASH_IN_HAND)) {
+      setError("Pick an account");
       return;
     }
     setSubmitting(true);
@@ -315,12 +325,18 @@ export function LoanSettleDialog({
                     // account would either block the entry or push the movement
                     // through a bank balance that never saw it. Its own group
                     // because NativeSelect takes flat OR grouped, not a mix.
-                    {
-                      label: "Off-account",
-                      options: [
-                        { value: CASH_IN_HAND, label: "Cash in hand (no account)" },
-                      ],
-                    },
+                    // A bank settlement always clears through an account, so
+                    // the option isn't offered there.
+                    ...(cashAllowed
+                      ? [
+                          {
+                            label: "Off-account",
+                            options: [
+                              { value: CASH_IN_HAND, label: "Cash in hand (no account)" },
+                            ],
+                          },
+                        ]
+                      : []),
                     // Only an outgoing settlement can overdraw an account, so
                     // the affordability hint uses the gross only when paying.
                     ...groupAccountOptions(accounts, isLent ? 0 : gross),

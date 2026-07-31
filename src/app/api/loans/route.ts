@@ -257,9 +257,13 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    if (isAdHoc && data.source !== "HAND_FORMAL") {
+    // Hand loans settle as you go, and so do bank bullet products (gold loans,
+    // overdrafts) — interest accrues on the balance and principal comes back
+    // whenever, with no instalment schedule. A card EMI plan is an instalment
+    // schedule by definition, so it stays excluded.
+    if (isAdHoc && data.source === "CARD_EMI") {
       return NextResponse.json(
-        { error: "Only hand loans can be settled as you go" },
+        { error: "Card EMI plans are repaid as fixed instalments" },
         { status: 400 },
       );
     }
@@ -436,9 +440,11 @@ export async function POST(request: Request) {
     // If the client supplied a per-line breakdown, sum it; otherwise fall
     // back to the explicit `charges` total. This is the amount that banks
     // deduct upfront — processing fee, GST, stamp duty, insurance, etc. Never
-    // applies to an ad-hoc hand loan.
-    const breakdown = isAdHoc ? [] : (data.chargeBreakdown ?? []);
-    const chargesTotal = isAdHoc
+    // applies to private lending; a bank bullet loan (gold, overdraft) is
+    // still a bank loan and does carry them.
+    const stripCharges = isAdHoc && data.source !== "BANK";
+    const breakdown = stripCharges ? [] : (data.chargeBreakdown ?? []);
+    const chargesTotal = stripCharges
       ? 0
       : breakdown.length
         ? Math.round(breakdown.reduce((s, c) => s + (c.amount || 0), 0) * 100) / 100

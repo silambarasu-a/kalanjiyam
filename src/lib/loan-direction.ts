@@ -58,6 +58,14 @@ export type LoanLedgerSplit = {
   principalAmount: Prisma.Decimal;
   interestAmount: Prisma.Decimal;
   gstAmount: Prisma.Decimal;
+  /**
+   * The interest period this entry covered. Carried here so that editing the
+   * payment's amount can re-accrue over the SAME window the original payment
+   * did, instead of re-deriving a fresh one from a formula that has no notion
+   * of when the money moved.
+   */
+  periodFrom: Date | null;
+  periodTo: Date | null;
 };
 
 export type LoanTxnClass = {
@@ -95,6 +103,8 @@ export async function classifyLoanTxn(
       principalAmount: true,
       interestAmount: true,
       gstAmount: true,
+      periodFrom: true,
+      periodTo: true,
     },
   });
   if (entry) {

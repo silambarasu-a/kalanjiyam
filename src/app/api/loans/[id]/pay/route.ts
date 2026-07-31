@@ -5,6 +5,11 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canAccessRecord } from "@/lib/permissions";
 import { loanPaymentSchema } from "@/lib/validators-domain";
 import { splitPayment, advanceByCycle, type LoanFrequency } from "@/lib/loan-math";
+import {
+  accrualAnchor,
+  applyPaymentBankStyle,
+  recalculatedEmi,
+} from "@/lib/loan-accrual";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import {
   TransactionType,
@@ -37,7 +42,15 @@ export async function POST(
     const { id } = await context.params;
     const loan = await prisma.loan.findUnique({
       where: { id },
-      include: { lenderContact: { select: { name: true } } },
+      include: {
+        lenderContact: { select: { name: true } },
+        // Needed to resolve the accrual anchor — the date interest is already
+        // settled up to. Only repayments move that mark.
+        ledgerEntries: {
+          where: { kind: LoanLedgerKind.REPAYMENT },
+          select: { paidAt: true, periodTo: true, interestAmount: true },
+        },
+      },
     });
     if (!loan) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const ctx = await requireWorkspace(featureForSource(loan.source), "write");
@@ -51,6 +64,17 @@ export async function POST(
     if (loan.direction === "LENT") {
       return NextResponse.json(
         { error: "This is money you lent — record a settlement instead." },
+        { status: 400 },
+      );
+    }
+    // A bullet loan has no instalment to split against — /settle takes the
+    // user-entered interest instead. Mirrors /settle's rejection of EMI loans,
+    // so a mis-wired client can never force the amortization formula onto a
+    // loan whose parties never agreed to one. Reachable since bullet mode
+    // opened up to BANK loans (gold / overdraft), not just hand loans.
+    if (loan.repaymentMode === "AD_HOC") {
+      return NextResponse.json(
+        { error: "This loan has no EMI — record a settlement instead." },
         { status: 400 },
       );
     }
@@ -77,32 +101,99 @@ export async function POST(
     }
 
     // Auto-split when the client didn't supply principal/interest portions.
-    // Standard reducing-balance: interest = outstanding · periodicRate. GST
-    // (card EMI) sits on top of interest. Whatever remains of `amount` is
-    // principal, clamped at outstanding so the loan can't go negative.
+    //
+    // Interest is charged for the days that actually elapsed since the last
+    // settled date, pro-rated over the cycle — the way a bank does it. The old
+    // formula-only split (`outstanding · periodicRate`, no date input) billed a
+    // whole cycle no matter when the payment landed, so a YEARLY gold loan paid
+    // a month in was charged a full year of interest and almost nothing reached
+    // the principal.
+    //
+    // CARD_EMI deliberately keeps the formula split: the issuer bills a fixed
+    // instalment and a fixed interest charge per statement cycle, and paying
+    // early doesn't reduce either. Recomputing it here would make the app
+    // disagree with the statement it's supposed to mirror.
     const annualRate = loan.interestRate ? Number(loan.interestRate) : 0;
     const gstPct = loan.gstOnInterest ? Number(loan.gstOnInterest) : null;
     const emiHint = loan.emiAmount ? Number(loan.emiAmount) : data.amount;
     const frequency = (loan.frequency ?? "MONTHLY") as LoanFrequency;
+    const outstandingNow = Number(loan.outstanding);
+    const isCardEmi = loan.source === "CARD_EMI";
+    const paidAtDate = new Date(data.paidAt);
 
-    const suggested = splitPayment(
-      Number(loan.outstanding),
-      annualRate,
-      Math.min(emiHint, data.amount),
-      frequency,
-      gstPct
-    );
+    const anchor = isCardEmi
+      ? null
+      : accrualAnchor({
+          startedAt: loan.startedAt,
+          nextDueDate: loan.nextDueDate,
+          frequency,
+          entries: loan.ledgerEntries.map((e) => ({
+            paidAt: e.paidAt,
+            periodTo: e.periodTo,
+            interestAmount: Number(e.interestAmount),
+          })),
+        });
+
+    const accrued = anchor
+      ? applyPaymentBankStyle({
+          amount: data.amount,
+          outstanding: outstandingNow,
+          annualRate,
+          frequency,
+          gstOnInterestPct: gstPct,
+          from: anchor,
+          to: paidAtDate,
+        })
+      : null;
+
+    const suggested = accrued
+      ? { interest: accrued.interest, gst: accrued.gst, principal: accrued.principal }
+      : // Untouched formula split — CARD_EMI must keep splitting exactly as it
+        // did, including the principal figure the due-date roll below tests
+        // against.
+        splitPayment(
+          outstandingNow,
+          annualRate,
+          Math.min(emiHint, data.amount),
+          frequency,
+          gstPct
+        );
+
+    // You can't overpay a loan. The old code clamped principal at the
+    // outstanding and let the surplus vanish into a larger EXPENSE row, leaving
+    // the account balance short with nothing to show for it. Only checked on
+    // the auto-split path — an explicit override is the user telling us exactly
+    // where the money went. Rupee tolerance absorbs rounding on a final EMI.
+    const usingAutoSplit =
+      data.principalPortion == null &&
+      data.interestPortion == null &&
+      data.gstPortion == null;
+    if (accrued && usingAutoSplit && accrued.excess > 1) {
+      const payoff = outstandingNow + accrued.interest + accrued.gst;
+      return NextResponse.json(
+        {
+          error: `That's ₹${accrued.excess.toFixed(2)} more than this loan owes. Pay ₹${payoff.toFixed(2)} to close it in full.`,
+        },
+        { status: 400 },
+      );
+    }
 
     const interestPortion =
       data.interestPortion != null ? data.interestPortion : suggested.interest;
     const gstPortion =
       data.gstPortion != null ? data.gstPortion : suggested.gst;
-    const principalDrop =
+    // Clamped at the outstanding so the stored split can never claim more
+    // principal than the loan had left — the ledger entry is what a later
+    // delete or edit reverses, so an inflated figure here would over-restore
+    // the balance.
+    const principalDrop = Math.min(
+      outstandingNow,
       data.principalPortion != null
         ? data.principalPortion
-        : Math.max(0, data.amount - interestPortion - gstPortion);
+        : Math.max(0, data.amount - interestPortion - gstPortion),
+    );
 
-    const newOutstanding = Math.max(0, Number(loan.outstanding) - principalDrop);
+    const newOutstanding = Math.max(0, outstandingNow - principalDrop);
 
     // Advance nextDueDate by one cycle when the principal portion covers
     // (close to) one full EMI principal. Heuristic, but matches what banks
@@ -137,8 +228,21 @@ export async function POST(
     const nextDue = (() => {
       if (!loan.nextDueDate) return loan.nextDueDate;
       if (newOutstanding <= 0) return null;
-      // Treat anything within 1% of the suggested principal as a full EMI.
-      const fullEmiPaid = principalDrop >= suggested.principal * 0.99;
+      // Did this payment actually retire a scheduled instalment?
+      //
+      // The old test — principal covered ~all of the formula's principal
+      // portion — is meaningless once the split is time-aware: an early
+      // part-payment accrues little interest and so lands a large principal
+      // portion, which would have rolled the due date forward for a payment
+      // that settled nothing. Now it takes both a full instalment's worth of
+      // cash AND a full cycle of elapsed time. A part-prepayment leaves the due
+      // date where it is, which is what banks do.
+      //
+      // CARD_EMI has no accrual (fixed statement instalment), so it keeps the
+      // original principal-based test.
+      const fullEmiPaid = accrued
+        ? data.amount >= emiHint * 0.99 && accrued.fraction >= 0.99
+        : principalDrop >= suggested.principal * 0.99;
       if (!fullEmiPaid) return loan.nextDueDate;
       if (
         loan.kind === "CREDIT_CARD_LOAN" &&
@@ -154,6 +258,24 @@ export async function POST(
       }
       return advanceByCycle(new Date(loan.nextDueDate), frequency, 1);
     })();
+
+    // Re-amortize what's left over the cycles remaining to maturity, so the
+    // instalment reflects the balance the borrower actually carries. A
+    // part-prepayment keeps the tenure and lowers the EMI (the chosen policy);
+    // `tenure` and `maturityAt` are never touched here.
+    //
+    // Skipped for CARD_EMI — the issuer's instalment is contractual, and
+    // rewriting it would misreport the statement.
+    const newEmi =
+      !isCardEmi && newOutstanding > 0
+        ? recalculatedEmi({
+            outstanding: newOutstanding,
+            annualRate,
+            frequency,
+            maturityAt: loan.maturityAt,
+            asOf: paidAtDate,
+          })
+        : null;
 
     const created = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
@@ -189,7 +311,11 @@ export async function POST(
           interestAmount: interestPortion,
           gstAmount: gstPortion,
           amount: data.amount,
-          paidAt: new Date(data.paidAt),
+          paidAt: paidAtDate,
+          // The period this payment's interest covers. Without it the next
+          // payment has no anchor and would re-accrue from the loan's start.
+          periodFrom: anchor,
+          periodTo: anchor ? paidAtDate : null,
           transactionId: txn.id,
           notes: data.notes ?? null,
           createdByUserId: ctx.userId,
@@ -200,6 +326,7 @@ export async function POST(
         data: {
           outstanding: newOutstanding,
           nextDueDate: nextDue,
+          ...(newEmi != null ? { emiAmount: newEmi } : {}),
           active: newOutstanding > 0 ? loan.active : false,
           foreclosedAt:
             newOutstanding === 0 && loan.active ? new Date() : loan.foreclosedAt,
@@ -217,6 +344,14 @@ export async function POST(
         interest: interestPortion,
         gst: gstPortion,
       },
+      accrual: accrued
+        ? {
+            anchor: anchor!.toISOString(),
+            days: Math.round(accrued.days),
+            fraction: accrued.fraction,
+          }
+        : null,
+      emiAmount: newEmi,
     });
   } catch (e) {
     return err(e);

@@ -7,12 +7,16 @@ import { formatINR, formatDate } from "@/lib/utils";
 import {
   amortizationSchedule,
   calculateEMI,
-  countPaidEmis,
   loanTotals,
   splitPayment,
   advanceByCycle,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import {
+  accrualAnchor,
+  accrueCycleInterest,
+  remainingCycles,
+} from "@/lib/loan-accrual";
 import {
   LoanBalanceChart,
   type BalancePoint,
@@ -198,25 +202,79 @@ export default async function LoanDetailPage({
   // foreclosure-savings callout — all of which would otherwise render a
   // schedule the two parties never agreed to.
   const hasSchedule = !isAdHoc && rate > 0 && tenure > 0 && emi > 0;
-  const fullSchedule = hasSchedule
-    ? amortizationSchedule(principal, rate, tenure, freq, gstPct)
-    : [];
+
+  // How far through the term we are, read off the calendar rather than
+  // back-derived from the balance. `countPaidEmis` walks the ORIGINAL
+  // schedule looking for the cycle whose projected balance is nearest the
+  // current outstanding, which stops meaning anything the moment an
+  // off-schedule payment lands: a part-prepayment drops the balance to a point
+  // the schedule only reaches several cycles later, and the loan then claims
+  // those cycles are "paid". Maturity is the fixed point under the
+  // recalculate-EMI-keep-tenure policy, so cycles-to-maturity is the honest
+  // count. (countPaidEmis still earns its keep in the create/PATCH routes,
+  // where it seeds nextDueDate for a loan entered mid-life.)
+  const cyclesRemaining = !hasSchedule
+    ? 0
+    : loan.maturityAt
+      ? Math.min(tenure, remainingCycles(new Date(), loan.maturityAt, freq))
+      : tenure;
+  const cyclesPaid = Math.max(0, tenure - cyclesRemaining);
+
+  // Re-based on the CURRENT outstanding over the cycles that are left, not on
+  // the original principal over the full tenure. Without this the table keeps
+  // projecting from the opening balance and a prepayment leaves no trace.
+  const fullSchedule =
+    hasSchedule && outstanding > 0
+      ? amortizationSchedule(outstanding, rate, cyclesRemaining, freq, gstPct)
+      : [];
+  // The contract as originally written — what the loan was quoted to cost.
   const lifetime = hasSchedule
     ? loanTotals(principal, rate, tenure, freq, gstPct)
     : null;
-  const cyclesPaid = hasSchedule
-    ? countPaidEmis(principal, rate, emi, tenure, freq, outstanding)
-    : 0;
-  const cyclesRemaining = hasSchedule ? Math.max(0, tenure - cyclesPaid) : 0;
-  const interestPaidEst = fullSchedule
-    .slice(0, cyclesPaid)
-    .reduce((s, r) => s + r.interest + r.gst, 0);
-  const interestRemainingEst = lifetime
-    ? Math.max(0, lifetime.totalInterest + lifetime.totalGst - interestPaidEst)
-    : 0;
+  // Recorded, not projected: what actually left the account as interest. The
+  // old figure summed the first N rows of a schedule that assumed every
+  // payment landed exactly on its due date for exactly the formula amount.
+  const interestPaidEst = interestSettled;
+  const interestRemainingEst = fullSchedule.reduce(
+    (s, r) => s + r.interest + r.gst,
+    0,
+  );
 
-  // Forward schedule with projected due dates from startedAt — used in the
-  // "Upcoming EMIs" preview. Cap at 12 rows; show a "+ N more" hint below.
+  // What you'd owe in interest if you paid today — the same accrual /pay will
+  // apply. Mirrors the ad-hoc loans' `interestEstimate` tile.
+  const emiAccrual =
+    hasSchedule && loan.active && outstanding > 0 && loan.source !== "CARD_EMI"
+      ? (() => {
+          const anchor = accrualAnchor({
+            startedAt: loan.startedAt,
+            nextDueDate: loan.nextDueDate,
+            frequency: freq,
+            entries: repaymentEntries.map((e) => ({
+              paidAt: e.paidAt,
+              periodTo: e.periodTo,
+              interestAmount: Number(e.interestAmount),
+            })),
+          });
+          return {
+            anchor,
+            ...accrueCycleInterest({
+              outstanding,
+              annualRate: rate,
+              frequency: freq,
+              from: anchor,
+              to: new Date(),
+            }),
+          };
+        })()
+      : null;
+
+  // Projected due dates for the "Upcoming EMIs" preview. Cap at 12 rows; show
+  // a "+ N more" hint below.
+  //
+  // Anchored on the loan's actual `nextDueDate`, not on `startedAt`: the
+  // schedule above is re-based on the current outstanding, so its rows number
+  // from 1 again and chaining off the start date would label the next payment
+  // with a date long past.
   //
   // CREDIT_CARD_LOAN dates follow the linked card's statement+grace cycle
   // (or the loan's own override) instead of a fixed monthly anniversary,
@@ -231,31 +289,32 @@ export default async function LoanDetailPage({
       : 0;
   const useStatementCycle =
     loan.kind === "CREDIT_CARD_LOAN" && effectiveSd != null;
-  // Pre-compute due dates by chaining from startedAt up through the last
-  // cycle we'll display. Cycle 1 is the next statement due on/after the loan
-  // start; each later cycle advances one statement cycle (prev due + 1 day
-  // so the on-or-after lookup lands on the next due, not the same one).
+  // Row 1 falls on the loan's next due date; each later row advances one cycle
+  // (one statement cycle for a card loan — prev due + 1 day, so the on-or-after
+  // lookup lands on the next due rather than returning the same one).
+  const scheduleStart = loan.nextDueDate ?? advanceByCycle(loan.startedAt, freq, 1);
   const statementDueByCycle: Date[] = [];
   if (useStatementCycle && fullSchedule.length > 0) {
-    const lastCycleNeeded = Math.min(
-      fullSchedule.length,
-      cyclesPaid + 12,
-    );
+    const lastCycleNeeded = Math.min(fullSchedule.length, 12);
     let prev: Date | null = null;
     for (let i = 0; i < lastCycleNeeded; i++) {
       const anchor = prev
         ? new Date(prev.getTime() + 24 * 60 * 60 * 1000)
-        : new Date(loan.startedAt);
+        : new Date(scheduleStart);
       const next = nextStatementDueDate(anchor, effectiveSd!, effectiveGrace);
       statementDueByCycle.push(next);
       prev = next;
     }
   }
-  const upcomingPreview = fullSchedule.slice(cyclesPaid, cyclesPaid + 12).map((r) => ({
+  const upcomingPreview = fullSchedule.slice(0, 12).map((r) => ({
     ...r,
+    // Keep the loan-wide numbering ("cycle 3 of 12") even though the re-based
+    // schedule counts from 1.
+    cycle: cyclesPaid + r.cycle,
     dueDate: useStatementCycle
-      ? statementDueByCycle[r.cycle - 1] ?? advanceByCycle(loan.startedAt, freq, r.cycle)
-      : advanceByCycle(loan.startedAt, freq, r.cycle),
+      ? statementDueByCycle[r.cycle - 1] ??
+        advanceByCycle(scheduleStart, freq, r.cycle - 1)
+      : advanceByCycle(scheduleStart, freq, r.cycle - 1),
   }));
   const moreCycles = Math.max(0, cyclesRemaining - upcomingPreview.length);
 
@@ -423,6 +482,7 @@ export default async function LoanDetailPage({
               loan={{
                 id: loan.id,
                 counterparty,
+                source: loan.source,
                 direction: loan.direction,
                 outstanding,
                 principal,
@@ -514,7 +574,7 @@ export default async function LoanDetailPage({
               </div>
               {hasSchedule && (
                 <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                  {cyclesPaid} of {tenure} EMIs paid
+                  Cycle {Math.min(tenure, cyclesPaid + 1)} of {tenure}
                   {cyclesRemaining > 0 ? ` · ${cyclesRemaining} left` : ""}
                 </div>
               )}
@@ -625,14 +685,18 @@ export default async function LoanDetailPage({
             hint={
               lifetime.totalGst > 0
                 ? `incl. ₹${Math.round(lifetime.totalGst)} GST`
-                : `${rate}% p.a.`
+                : "As originally scheduled"
             }
             tone="loss"
           />
           <KpiTile
             label="Interest paid"
             value={formatINR(interestPaidEst)}
-            hint={cyclesPaid > 0 ? `${cyclesPaid} EMI${cyclesPaid === 1 ? "" : "s"} done` : "No EMIs yet"}
+            hint={
+              repaymentEntries.length > 0
+                ? `${repaymentEntries.length} payment${repaymentEntries.length === 1 ? "" : "s"} recorded`
+                : "No payments yet"
+            }
             tone="loss"
           />
           <KpiTile
@@ -645,6 +709,27 @@ export default async function LoanDetailPage({
             }
             tone={cyclesRemaining > 0 ? "muted" : "gain"}
           />
+        </section>
+      )}
+
+      {/* What paying today would cost in interest — the same accrual /pay
+          applies, so the dialog can't surprise the user with a bigger number. */}
+      {emiAccrual && emiAccrual.interest > 0 && (
+        <section className="rounded-lg border bg-card px-5 py-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold">Interest accrued so far</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {Math.round(emiAccrual.days)} day
+                {Math.round(emiAccrual.days) === 1 ? "" : "s"} since{" "}
+                {formatDate(emiAccrual.anchor)} · {rate}% p.a. on{" "}
+                {formatINR(outstanding)}
+              </p>
+            </div>
+            <span className="text-lg font-semibold tabular-nums">
+              {formatINR(emiAccrual.interest)}
+            </span>
+          </div>
         </section>
       )}
 
@@ -856,8 +941,9 @@ export default async function LoanDetailPage({
           <header className="px-5 py-3 border-b">
             <h2 className="text-sm font-semibold">Upcoming EMIs</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Reducing-balance schedule from the current outstanding · cycle{" "}
-              {cyclesPaid + 1} of {tenure}
+              Reducing-balance schedule re-amortized from {formatINR(outstanding)}{" "}
+              over the {cyclesRemaining} cycle
+              {cyclesRemaining === 1 ? "" : "s"} to maturity
             </p>
           </header>
           <div className="overflow-x-auto">

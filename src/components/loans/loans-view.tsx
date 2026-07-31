@@ -18,11 +18,8 @@ import { LoanPayDialog } from "@/components/loans/loan-pay-dialog";
 import { LoanSettleDialog } from "@/components/loans/loan-settle-dialog";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { formatINR, formatDate } from "@/lib/utils";
-import {
-  countPaidEmis,
-  monthsPerCycle,
-  type LoanFrequency,
-} from "@/lib/loan-math";
+import { monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
+import { remainingCycles } from "@/lib/loan-accrual";
 import {
   formatInterestCadence,
   type LoanInterestCadence,
@@ -59,6 +56,7 @@ type Loan = {
   frequency: LoanFrequency | null;
   interestCadence: LoanInterestCadence | null;
   startedAt: string;
+  maturityAt: string | null;
   nextDueDate: string | null;
   active: boolean;
   card: { id: string; name: string } | null;
@@ -84,22 +82,22 @@ function computeEmiProgress(
     | "interestRate"
     | "frequency"
     | "repaymentMode"
+    | "maturityAt"
   >,
 ): { paid: number; total: number; left: number } | null {
   // An ad-hoc loan has no instalments to count. Rendering "3 of 12 paid" from
   // a fabricated EMI would describe a schedule that doesn't exist.
   if (l.repaymentMode === "AD_HOC") return null;
   if (!l.tenure || !l.emiAmount || l.emiAmount <= 0) return null;
-  const rate = l.interestRate ?? 0;
   const freq = l.frequency ?? "MONTHLY";
-  const paid =
-    rate > 0
-      ? countPaidEmis(l.principal, rate, l.emiAmount, l.tenure, freq, l.outstanding)
-      : Math.min(
-          l.tenure,
-          Math.max(0, Math.floor((l.principal - l.outstanding) / l.emiAmount)),
-        );
-  return { paid, total: l.tenure, left: Math.max(0, l.tenure - paid) };
+  // Counted off the calendar, same as the loan detail page — the two must
+  // agree. Back-deriving the count from the balance (countPaidEmis) breaks as
+  // soon as a part-prepayment drops the outstanding to a level the original
+  // schedule only reaches several cycles later.
+  const left = l.maturityAt
+    ? Math.min(l.tenure, remainingCycles(new Date(), new Date(l.maturityAt), freq))
+    : l.tenure;
+  return { paid: Math.max(0, l.tenure - left), total: l.tenure, left };
 }
 
 const SOURCE_META = {

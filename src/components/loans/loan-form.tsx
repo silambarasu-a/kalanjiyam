@@ -468,8 +468,13 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             : null,
         isExisting,
         startedAt,
-        chargeBreakdown: adHoc ? null : breakdown.length ? breakdown : null,
-        charges: adHoc ? null : breakdown.length ? chargesTotal : null,
+        // Upfront charges are a bank construct — but a bank bullet loan is
+        // still a bank loan, and gold loans do carry processing and valuation
+        // fees. Only private lending gets them stripped.
+        chargeBreakdown:
+          adHoc && source !== "BANK" ? null : breakdown.length ? breakdown : null,
+        charges:
+          adHoc && source !== "BANK" ? null : breakdown.length ? chargesTotal : null,
         notes: notes.trim() || undefined,
         goldItems:
           kind === "GOLD"
@@ -659,7 +664,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
           lend is always ad-hoc, and bank / card-EMI loans always have a fixed
           instalment, so neither shows this. Locked in edit mode — switching it
           after cash has moved would strand the existing entries. */}
-      {source === "HAND_FORMAL" && !isLent && (
+      {(source === "HAND_FORMAL" || source === "BANK") && !isLent && (
         <fieldset className="rounded-lg border p-3">
           <legend className="px-1 text-xs font-medium">Repayment</legend>
           <div className="space-y-2">
@@ -672,8 +677,14 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                 },
                 {
                   value: "AD_HOC" as const,
-                  label: "Interest + principal as it goes",
-                  hint: "Pay whatever interest is agreed on each due date, and reduce the principal whenever you can.",
+                  label:
+                    source === "BANK"
+                      ? "Bullet — interest only, principal anytime"
+                      : "Interest + principal as it goes",
+                  hint:
+                    source === "BANK"
+                      ? "Gold loans and overdrafts: interest accrues on the balance and is settled on a cadence, and you repay principal whenever you like."
+                      : "Pay whatever interest is agreed on each due date, and reduce the principal whenever you can.",
                 },
               ]
             ).map((opt) => (

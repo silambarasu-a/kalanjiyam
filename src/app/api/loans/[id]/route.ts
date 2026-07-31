@@ -236,6 +236,9 @@ export async function PATCH(
     }
     const isLent = loan.direction === "LENT";
     const isAdHoc = loan.repaymentMode === "AD_HOC";
+    // Upfront charges are stripped from private lending only — a bank bullet
+    // loan (gold, overdraft) still carries processing and valuation fees.
+    const stripCharges = isAdHoc && loan.source !== "BANK";
     // CARD_EMI is always isExisting=true — the underlying purchase already
     // posted as a card expense, so toggling makes no sense for that source.
     // For BANK and HAND* loans we let it flip and reconcile the auto
@@ -543,7 +546,7 @@ export async function PATCH(
           tenure: data.tenure !== undefined ? data.tenure : loan.tenure,
           frequency: newFrequency,
           interestCadence: newInterestCadence,
-          charges: isAdHoc
+          charges: stripCharges
             ? null
             : breakdownProvided
               ? newChargesTotal && newChargesTotal > 0
@@ -552,7 +555,7 @@ export async function PATCH(
               : data.charges !== undefined
                 ? data.charges
                 : loan.charges,
-          chargeBreakdown: isAdHoc
+          chargeBreakdown: stripCharges
             ? Prisma.DbNull
             : breakdownProvided
               ? breakdown && breakdown.length > 0

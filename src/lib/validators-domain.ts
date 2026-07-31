@@ -1009,24 +1009,46 @@ export const loanCreateSchema = loanFieldsSchema
     path: ["repaymentMode"],
   })
   // ── Ad-hoc mode ───────────────────────────────────────────────────────
-  // Only hand loans settle ad-hoc; a bank would not let you pay whatever you
-  // felt like each month.
-  .refine((d) => d.repaymentMode !== "AD_HOC" || d.source === "HAND_FORMAL", {
-    message: "Only hand loans can be settled as you go",
-    path: ["repaymentMode"],
-  })
+  // Hand loans settle as you go, and so do bank bullet products — a gold loan
+  // or an overdraft accrues interest on the daily balance and lets you repay
+  // principal whenever, with no instalment schedule at all. CARD_EMI is
+  // excluded because a card EMI plan IS an instalment schedule by definition.
+  .refine(
+    (d) =>
+      d.repaymentMode !== "AD_HOC" ||
+      d.source === "HAND_FORMAL" ||
+      d.source === "BANK",
+    {
+      message: "Card EMI plans are repaid as fixed instalments",
+      path: ["repaymentMode"],
+    },
+  )
   .refine((d) => d.repaymentMode !== "AD_HOC" || d.emiAmount == null, {
     message: "Ad-hoc loans have no fixed EMI",
     path: ["emiAmount"],
   })
-  .refine((d) => d.repaymentMode !== "AD_HOC" || d.gstOnInterest == null, {
-    message: "GST on interest doesn't apply to private lending",
-    path: ["gstOnInterest"],
-  })
-  .refine((d) => d.repaymentMode !== "AD_HOC" || !d.chargeBreakdown?.length, {
-    message: "Upfront charges are a bank construct",
-    path: ["chargeBreakdown"],
-  })
+  .refine(
+    (d) =>
+      d.repaymentMode !== "AD_HOC" ||
+      d.source === "BANK" ||
+      d.gstOnInterest == null,
+    {
+      message: "GST on interest doesn't apply to private lending",
+      path: ["gstOnInterest"],
+    },
+  )
+  // Upfront charges stay a bank construct — but a bank bullet loan is still a
+  // bank loan, and gold loans do carry processing and valuation fees.
+  .refine(
+    (d) =>
+      d.repaymentMode !== "AD_HOC" ||
+      d.source === "BANK" ||
+      !d.chargeBreakdown?.length,
+    {
+      message: "Upfront charges are a bank construct",
+      path: ["chargeBreakdown"],
+    },
+  )
   .refine((d) => d.repaymentMode === "AD_HOC" || d.interestCadence == null, {
     message: "Interest cadence only applies to loans settled as you go",
     path: ["interestCadence"],
