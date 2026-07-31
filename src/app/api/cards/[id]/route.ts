@@ -10,6 +10,7 @@ import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { cardUpdateSchema } from "@/lib/validators-domain";
 import { nextStatementDueDate } from "@/lib/statement-period";
+import { materializeStatementsFor } from "@/lib/card-statement-service";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -157,6 +158,13 @@ export async function PATCH(
     const sdChanged = parsed.data.statementDate !== undefined;
     const graceChanged = parsed.data.gracePeriod !== undefined;
     if ((sdChanged || graceChanged) && existing.accountId) {
+      // Re-anchor the already-materialised statements onto the new billing
+      // cycle right away — it re-dates the existing bills rather than
+      // generating a second set alongside them. Never fatal: the card
+      // itself is already saved, and the card page re-runs this on load.
+      await materializeStatementsFor(existing.accountId).catch((e) =>
+        console.error("[cards/patch] statement re-materialisation failed", e),
+      );
       const refreshed = await prisma.account.findUnique({
         where: { id: existing.accountId },
         select: { statementDate: true, gracePeriod: true },

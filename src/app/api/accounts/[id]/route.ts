@@ -10,6 +10,7 @@ import { canAccessRecord, canModifyRecord } from "@/lib/permissions";
 import { auth } from "@/lib/auth";
 import { accountUpdateSchema } from "@/lib/validators-domain";
 import { computeAccountBalance } from "@/lib/account-balance";
+import { materializeStatementsFor } from "@/lib/card-statement-service";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -97,6 +98,18 @@ export async function PATCH(
         active: parsed.data.active ?? existing.active,
       },
     });
+    // Moving a card's billing cycle re-dates the statements already
+    // materialised for it instead of leaving a second, stale set behind.
+    const cycleChanged =
+      (parsed.data.statementDate !== undefined &&
+        parsed.data.statementDate !== existing.statementDate) ||
+      (parsed.data.gracePeriod !== undefined &&
+        parsed.data.gracePeriod !== existing.gracePeriod);
+    if (account.kind === "CARD" && cycleChanged) {
+      await materializeStatementsFor(account.id).catch((e) =>
+        console.error("[accounts/patch] statement re-materialisation failed", e),
+      );
+    }
     return NextResponse.json({ id: account.id });
   } catch (err) {
     return error(err);
