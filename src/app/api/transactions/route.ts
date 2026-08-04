@@ -470,6 +470,16 @@ export async function POST(request: Request) {
       }
     }
 
+    if (data.vehicleId) {
+      const vehicle = await prisma.vehicle.findUnique({
+        where: { id: data.vehicleId },
+        select: { workspaceId: true },
+      });
+      if (!vehicle || vehicle.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Vehicle not found" }, { status: 404 });
+      }
+    }
+
     let investmentForUpdate: {
       id: string;
       kind: string;

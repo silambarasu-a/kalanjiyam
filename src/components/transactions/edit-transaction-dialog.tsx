@@ -20,6 +20,7 @@ import {
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { fetcher } from "@/lib/swr-fetcher";
+import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import {
   TransactionSplitEditor,
   recalcEqual,
@@ -135,16 +136,14 @@ export function EditTransactionDialog({
   // Detect vehicle / fuel category by the selected categoryId so the
   // dialog surfaces the right pickers when the user changes category
   // mid-edit (e.g. re-classifying a generic expense as "Fuel"). Same
-  // match table as the new-transaction dialog.
-  const VEHICLE_CATEGORY_NAMES = new Set([
-    "vehicle purchase",
-    "vehicle service",
-    "fuel",
-  ]);
+  // tree-walk as the new-transaction dialog.
   const selectedCategory = categories.find((c) => c.id === categoryId);
+  // EXPENSE-only, matching the new-transaction dialog — an income
+  // category named "Vehicle" (e.g. rental income) must not arm the
+  // expense-oriented vehicle picker. Already-tagged rows still render
+  // it via the transaction.vehicleId escape hatch.
   const isVehicleCategory =
-    !!selectedCategory?.name &&
-    VEHICLE_CATEGORY_NAMES.has(selectedCategory.name.toLowerCase());
+    txType === "EXPENSE" && inVehicleCategoryTree(selectedCategory, categories);
   const isFuelCategory =
     selectedCategory?.name?.toLowerCase() === "fuel";
   // Vehicles list — fetched when the row is already tagged OR when the
@@ -287,7 +286,10 @@ export function EditTransactionDialog({
           categoryId: categoryId || null,
           // Only echo vehicleId back if it was originally set — same
           // reason as fuel fields. Don't silently tag an untagged row.
-          ...(transaction.vehicleId !== undefined
+          // A vehicle actively picked in this dialog is always sent:
+          // some callers (loan payment history) hydrate without a
+          // vehicleId key, and omitting it would drop the pick.
+          ...(transaction.vehicleId !== undefined || vehicleId
             ? { vehicleId: vehicleId || null }
             : {}),
           eventId: eventId || null,

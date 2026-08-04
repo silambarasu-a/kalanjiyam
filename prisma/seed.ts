@@ -20,6 +20,7 @@ const TREE: Record<TransactionType, Record<string, string[]>> = {
       "Fuel",
       "Vehicle Insurance Premium",
       "Road Tax / FC / PUC",
+      "Traffic Challan / Fine",
       "Toll / Parking",
       "Toll",
       "Parking",
@@ -140,12 +141,17 @@ async function seedDefaultCategories() {
         console.log(`  + parent: ${parentName} (${type})`);
       }
       for (const childName of childNames) {
+        // Match only flat (unparented) rows or rows already under THIS
+        // parent — the same child name can exist under two parents
+        // (e.g. "Other" under both Insurance Premium and Tax), and
+        // matching by name alone would skip creating the second one.
         const existing = await prisma.category.findFirst({
           where: {
             name: childName,
             isDefault: true,
             workspaceId: null,
             types: { has: type },
+            OR: [{ parentCategoryId: null }, { parentCategoryId: parent.id }],
           },
         });
         if (existing) {

@@ -68,6 +68,7 @@ import {
   type SplitUnit,
 } from "@/components/transactions/split-rows";
 import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
+import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
 import { PREMIUM_FREQUENCY_OPTIONS } from "@/lib/reminder-schedule";
@@ -467,11 +468,14 @@ function IncomeExpenseForm({
   // on a bare "Forbidden" with no way to save.
   const isWageMode =
     farmOn && type === "EXPENSE" && selectedCategory?.name?.toLowerCase() === "wage";
-  const VEHICLE_CATEGORIES = new Set(["vehicle purchase", "vehicle service", "fuel"]);
+  // Wage mode wins over vehicle mode: a workspace child named "Wage"
+  // under Vehicle would otherwise render both panels, and the wage
+  // submit path posts to /api/wage-payments without a vehicleId — the
+  // picked vehicle would be silently dropped.
   const isVehicleMode =
     type === "EXPENSE" &&
-    !!selectedCategory?.name &&
-    VEHICLE_CATEGORIES.has(selectedCategory.name.toLowerCase());
+    !isWageMode &&
+    inVehicleCategoryTree(selectedCategory, categories);
   // Sub-mode: when the Vehicle category is specifically "fuel" we
   // surface quantity + odometer inputs so mileage can be tracked.
   const isFuelMode =

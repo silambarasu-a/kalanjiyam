@@ -29,6 +29,7 @@ const TREE: Tree = {
       "Fuel",
       "Vehicle Insurance Premium",
       "Road Tax / FC / PUC",
+      "Traffic Challan / Fine",
       "Toll / Parking",
       "Toll",
       "Parking",
@@ -48,6 +49,7 @@ const TREE: Tree = {
       "Internet / Broadband",
       "Mobile / Phone",
       "DTH / Cable",
+      "Gas",
     ],
     Education: ["Fees", "Books / Stationery", "Coaching / Tuition", "Online courses"],
     "Food & Dining": ["Restaurant", "Takeaway / Delivery", "Cafe / Snacks"],
@@ -156,12 +158,17 @@ async function main() {
 
       // Step 2 — for each child: re-parent existing OR insert new
       for (const childName of childNames) {
+        // Match only flat (unparented) rows or rows already under THIS
+        // parent — the same child name can exist under two parents
+        // (e.g. "Other" under both Insurance Premium and Tax), and
+        // matching by name alone would skip creating the second one.
         const existing = await prisma.category.findFirst({
           where: {
             name: childName,
             isDefault: true,
             workspaceId: null,
             types: { has: type },
+            OR: [{ parentCategoryId: null }, { parentCategoryId: parent.id }],
           },
         });
         if (existing) {
