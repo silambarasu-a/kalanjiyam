@@ -31,6 +31,7 @@ import {
 import { GoldBreakdown } from "@/components/investments/gold-breakdown";
 import { HoldingPicker } from "@/components/investments/holding-picker";
 import { SymbolSearch } from "@/components/investments/symbol-search";
+import { MfSearch } from "@/components/investments/mf-search";
 import { InsurancePremiumBreakdown } from "@/components/investments/insurance-premium-breakdown";
 import { BankPicker } from "@/components/ui/bank-picker";
 import { InsurerPicker } from "@/components/ui/insurer-picker";
@@ -2859,6 +2860,9 @@ function InvestmentForm({
   const [newName, setNewName] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
   const [newExchange, setNewExchange] = useState("");
+  // MUTUAL_FUND-specific: AMFI scheme code of the picked fund. Cleared the
+  // moment the user free-types over the picked name (no longer canonical).
+  const [newMfSchemeCode, setNewMfSchemeCode] = useState("");
   // FD-specific
   const [newInstitution, setNewInstitution] = useState("");
   const [newInterestRate, setNewInterestRate] = useState("");
@@ -3282,6 +3286,11 @@ function InvestmentForm({
     setNewNextDueDate(inv.nextDueDate ? inv.nextDueDate.slice(0, 10) : "");
     setNewNominee(inv.nominee ?? "");
     setNewSumAssured(inv.sumAssured != null ? String(inv.sumAssured) : "");
+    setNewMfSchemeCode(
+      inv.kind === "MUTUAL_FUND" && inv.metadata
+        ? String(inv.metadata.amfiSchemeCode ?? "")
+        : "",
+    );
 
     if (inv.kind === "GOLD" && inv.metadata) {
       const m = inv.metadata as Record<string, unknown>;
@@ -3676,7 +3685,15 @@ function InvestmentForm({
                       roundOff: roundOff || null,
                     };
                   })()
-                : undefined,
+                : newKind === "MUTUAL_FUND"
+                  ? // Persist the AMFI scheme code so the holding stays
+                    // linkable to its official scheme (future NAV lookups).
+                    // Null (not undefined) on PATCH clears a stale code when
+                    // the user renamed the fund to free text.
+                    newMfSchemeCode
+                    ? { amfiSchemeCode: newMfSchemeCode }
+                    : null
+                  : undefined,
             currency: investmentCurrency,
             amount: amt,
             quantity: quantity ? Number(quantity) : undefined,
@@ -3929,6 +3946,7 @@ function InvestmentForm({
                 setNewName("");
                 setNewSymbol("");
                 setNewExchange("");
+                setNewMfSchemeCode("");
                 setNewInstitution("");
                 setNewInterestRate("");
                 setNewMaturityAt("");
@@ -3952,6 +3970,26 @@ function InvestmentForm({
                     setNewSymbol(sym);
                     setNewName(n);
                     setNewExchange(ex);
+                  }}
+                />
+              </div>
+            </label>
+          ) : newKind === "MUTUAL_FUND" ? (
+            <label className="block">
+              <span className="text-xs font-medium">Search fund</span>
+              <div className="mt-1">
+                <MfSearch
+                  value={newName}
+                  schemeCode={newMfSchemeCode || null}
+                  autoFocus
+                  onChange={(fundName, scheme) => {
+                    setNewName(fundName);
+                    if (scheme) {
+                      setNewMfSchemeCode(scheme.schemeCode);
+                      if (scheme.fundHouse) setNewInstitution(scheme.fundHouse);
+                    } else {
+                      setNewMfSchemeCode("");
+                    }
                   }}
                 />
               </div>
@@ -4002,13 +4040,11 @@ function InvestmentForm({
                     ? "e.g. SBI 1Y FD"
                     : newKind === "RD"
                       ? "e.g. HDFC 12-mo RD"
-                      : newKind === "MUTUAL_FUND"
-                        ? "e.g. HDFC Top 100"
-                        : newKind === "SIP"
-                          ? "e.g. Axis Bluechip SIP"
-                          : newKind === "GOLD"
-                            ? "e.g. 24K Gold coin / Sovereign Gold Bond"
-                            : "Holding name"
+                      : newKind === "SIP"
+                        ? "e.g. Axis Bluechip SIP"
+                        : newKind === "GOLD"
+                          ? "e.g. 24K Gold coin / Sovereign Gold Bond"
+                          : "Holding name"
                 }
                 autoFocus
               />
