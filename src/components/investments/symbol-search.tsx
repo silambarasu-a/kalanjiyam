@@ -44,6 +44,9 @@ export function SymbolSearch({
   const [results, setResults] = useState<SymbolSearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  // True once a response for the CURRENT text has landed — gates the
+  // "No matches." claim so it never shows before a search ran.
+  const [searched, setSearched] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const [menuRect, setMenuRect] = useState<{ top: number; left: number; width: number } | null>(
     null,
@@ -52,6 +55,10 @@ export function SymbolSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic id per keystroke: a response only applies if it's still the
+  // newest request, so an older/slower Yahoo response can't overwrite
+  // results for newer text.
+  const seqRef = useRef(0);
 
   // Mirror externally driven value so editing dialogs work.
   useEffect(() => {
@@ -94,28 +101,45 @@ export function SymbolSearch({
     setQuery(upper);
     setHighlighted(0);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Invalidate any in-flight request — its response must not repopulate
+    // state for text the user has since changed.
+    const seq = ++seqRef.current;
 
     if (upper.length < 1) {
       setResults([]);
       setOpen(false);
+      // A superseded in-flight request skips its own cleanup (seq guard),
+      // so stop the spinner here or it spins forever.
+      setLoading(false);
       return;
     }
+    setSearched(false);
     setOpen(true);
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
         const res = await fetch(`/api/market/search?q=${encodeURIComponent(upper)}`);
         const data = (await res.json()) as SymbolSearchResult[] | { error: string };
+        if (seq !== seqRef.current) return;
         setResults(Array.isArray(data) ? data : []);
+        setSearched(true);
       } catch {
-        setResults([]);
+        if (seq === seqRef.current) {
+          setResults([]);
+          setSearched(true);
+        }
       } finally {
-        setLoading(false);
+        if (seq === seqRef.current) setLoading(false);
       }
     }, 250);
   }
 
   function select(r: SymbolSearchResult) {
+    // Invalidate any pending debounce/request — a response for the
+    // pre-selection text must not repopulate the dropdown or spinner.
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    seqRef.current++;
+    setLoading(false);
     setQuery(r.symbol);
     setOpen(false);
     setResults([]);
@@ -137,6 +161,12 @@ export function SymbolSearch({
         select(pick);
       }
     } else if (e.key === "Escape") {
+      // Consume the key: Escape with the dropdown open should only close
+      // the dropdown, not bubble to the dialog's document-level dismiss
+      // listener and take the whole form down with it. (When the dropdown
+      // is closed, the early return above lets Escape reach the dialog.)
+      e.preventDefault();
+      e.stopPropagation();
       setOpen(false);
     }
   }
@@ -191,7 +221,7 @@ export function SymbolSearch({
               }}
               className="z-50 max-h-72 overflow-y-auto rounded-lg border bg-popover shadow-(--shadow-popover)"
             >
-              {loading && results.length === 0 ? (
+              {(loading || !searched) && results.length === 0 ? (
                 <p className="px-3 py-3 text-xs text-muted-foreground inline-flex items-center gap-2">
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Searching…
                 </p>

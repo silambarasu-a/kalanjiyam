@@ -97,6 +97,13 @@ export function BankPicker({
         setOpen(false);
       }
     } else if (e.key === "Escape") {
+      if (open) {
+        // Consume the key: Escape with the dropdown open should only close
+        // the dropdown, not bubble to a surrounding dialog's dismiss
+        // listener and take the whole form down with it.
+        e.preventDefault();
+        e.stopPropagation();
+      }
       setOpen(false);
       setHighlighted(-1);
     }

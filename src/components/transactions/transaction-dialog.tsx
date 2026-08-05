@@ -338,7 +338,7 @@ function DialogBody({
               onClick={() => !tab.disabled && setType(tab.value as TransactionDefault)}
               className={cn(
                 "flex-1 min-w-0 flex flex-col items-center gap-0.5 rounded px-2 py-1.5 text-[11px] transition-colors",
-                active ? "bg-white shadow text-foreground" : "text-muted-foreground",
+                active ? "bg-card shadow text-foreground" : "text-muted-foreground",
                 tab.disabled && "opacity-40 cursor-not-allowed"
               )}
               title={tab.disabled ? "Coming in a later milestone" : undefined}
@@ -2860,9 +2860,16 @@ function InvestmentForm({
   const [newName, setNewName] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
   const [newExchange, setNewExchange] = useState("");
-  // MUTUAL_FUND-specific: AMFI scheme code of the picked fund. Cleared the
-  // moment the user free-types over the picked name (no longer canonical).
-  const [newMfSchemeCode, setNewMfSchemeCode] = useState("");
+  // MUTUAL_FUND-specific: the picked AMFI scheme, remembered as code +
+  // the name it was picked under. The link only counts while newName still
+  // matches that name — any rename through any input (including a kind-chip
+  // round trip through SIP/FD's plain name field) unlinks it, and undoing
+  // the rename relinks. Derived in linkedMfSchemeCode below.
+  const [newMfPick, setNewMfPick] = useState<{ code: string; name: string } | null>(
+    null,
+  );
+  const linkedMfSchemeCode =
+    newMfPick && newName === newMfPick.name ? newMfPick.code : "";
   // FD-specific
   const [newInstitution, setNewInstitution] = useState("");
   const [newInterestRate, setNewInterestRate] = useState("");
@@ -3286,10 +3293,10 @@ function InvestmentForm({
     setNewNextDueDate(inv.nextDueDate ? inv.nextDueDate.slice(0, 10) : "");
     setNewNominee(inv.nominee ?? "");
     setNewSumAssured(inv.sumAssured != null ? String(inv.sumAssured) : "");
-    setNewMfSchemeCode(
-      inv.kind === "MUTUAL_FUND" && inv.metadata
-        ? String(inv.metadata.amfiSchemeCode ?? "")
-        : "",
+    setNewMfPick(
+      inv.kind === "MUTUAL_FUND" && inv.metadata?.amfiSchemeCode
+        ? { code: String(inv.metadata.amfiSchemeCode), name: inv.name }
+        : null,
     );
 
     if (inv.kind === "GOLD" && inv.metadata) {
@@ -3555,6 +3562,14 @@ function InvestmentForm({
           newKind === "INSURANCE" && !isEditing
             ? buildInsuranceExtraPayload(insuranceExtras, newPolicyType)
             : {};
+        // PATCH ignores `kind`, so when editing, metadata must be keyed to
+        // the record's real kind — not the currently active chip. Otherwise
+        // clicking "Mutual fund" while editing a GOLD holding would send
+        // metadata:null and wipe its gold breakdown (and the GOLD chip on a
+        // non-gold holding would overwrite metadata with empty gold fields).
+        const metadataKind = isEditing
+          ? (editingData?.investment.kind ?? null)
+          : newKind;
         const res = await fetch(
           isEditing ? `/api/investments/${editingInvestmentId}` : "/api/investments",
           {
@@ -3614,7 +3629,7 @@ function InvestmentForm({
                 ? newNextDueDate
                 : undefined,
             metadata:
-              newKind === "GOLD"
+              metadataKind === "GOLD"
                 ? (() => {
                     const w = parseFloat(quantity) || 0;
                     const r = parseFloat(price) || 0;
@@ -3685,13 +3700,13 @@ function InvestmentForm({
                       roundOff: roundOff || null,
                     };
                   })()
-                : newKind === "MUTUAL_FUND"
+                : metadataKind === "MUTUAL_FUND"
                   ? // Persist the AMFI scheme code so the holding stays
                     // linkable to its official scheme (future NAV lookups).
                     // Null (not undefined) on PATCH clears a stale code when
                     // the user renamed the fund to free text.
-                    newMfSchemeCode
-                    ? { amfiSchemeCode: newMfSchemeCode }
+                    linkedMfSchemeCode
+                    ? { amfiSchemeCode: linkedMfSchemeCode }
                     : null
                   : undefined,
             currency: investmentCurrency,
@@ -3946,7 +3961,7 @@ function InvestmentForm({
                 setNewName("");
                 setNewSymbol("");
                 setNewExchange("");
-                setNewMfSchemeCode("");
+                setNewMfPick(null);
                 setNewInstitution("");
                 setNewInterestRate("");
                 setNewMaturityAt("");
@@ -3980,15 +3995,13 @@ function InvestmentForm({
               <div className="mt-1">
                 <MfSearch
                   value={newName}
-                  schemeCode={newMfSchemeCode || null}
+                  schemeCode={linkedMfSchemeCode || null}
                   autoFocus
                   onChange={(fundName, scheme) => {
                     setNewName(fundName);
                     if (scheme) {
-                      setNewMfSchemeCode(scheme.schemeCode);
+                      setNewMfPick({ code: scheme.schemeCode, name: fundName });
                       if (scheme.fundHouse) setNewInstitution(scheme.fundHouse);
-                    } else {
-                      setNewMfSchemeCode("");
                     }
                   }}
                 />

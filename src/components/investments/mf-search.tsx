@@ -42,6 +42,9 @@ export function MfSearch({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  // True once a response for the CURRENT text has landed — gates the
+  // "No matching funds" claim so it never shows before a search ran.
+  const [searched, setSearched] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const [menuRect, setMenuRect] = useState<{ top: number; left: number; width: number } | null>(
     null,
@@ -50,6 +53,10 @@ export function MfSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic id per keystroke: a response only applies if it's still the
+  // newest request. The first search can take seconds (cold AMFI download
+  // server-side), so out-of-order arrivals are a real possibility.
+  const seqRef = useRef(0);
 
   // Outside-click close (works for both wrap + portaled menu).
   useEffect(() => {
@@ -84,31 +91,48 @@ export function MfSearch({
     onChange(raw);
     setHighlighted(0);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Invalidate any in-flight request — its response must not repopulate
+    // state for text the user has since changed.
+    const seq = ++seqRef.current;
 
     const q = raw.trim();
     if (q.length < 2) {
       setResults([]);
       setOpen(false);
+      // A superseded in-flight request skips its own cleanup (seq guard),
+      // so stop the spinner here or it spins forever.
+      setLoading(false);
       return;
     }
+    setSearched(false);
     setOpen(true);
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
         const res = await fetch(`/api/market/mf-search?q=${encodeURIComponent(q)}`);
         const data = (await res.json()) as MfSearchResult[] | { error: string };
+        if (seq !== seqRef.current) return;
         setResults(Array.isArray(data) ? data : []);
         setFailed(!Array.isArray(data));
+        setSearched(true);
       } catch {
-        setResults([]);
-        setFailed(true);
+        if (seq === seqRef.current) {
+          setResults([]);
+          setFailed(true);
+          setSearched(true);
+        }
       } finally {
-        setLoading(false);
+        if (seq === seqRef.current) setLoading(false);
       }
     }, 300);
   }
 
   function select(r: MfSearchResult) {
+    // Invalidate any pending debounce/request — a response for the
+    // pre-selection text must not repopulate the dropdown or spinner.
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    seqRef.current++;
+    setLoading(false);
     setOpen(false);
     setResults([]);
     // Snap to the official name, capped to the investment name limit (120).
@@ -130,6 +154,12 @@ export function MfSearch({
         select(pick);
       }
     } else if (e.key === "Escape") {
+      // Consume the key: Escape with the dropdown open should only close
+      // the dropdown, not bubble to the dialog's document-level dismiss
+      // listener and take the whole form down with it. (When the dropdown
+      // is closed, the early return above lets Escape reach the dialog.)
+      e.preventDefault();
+      e.stopPropagation();
       setOpen(false);
     }
   }
@@ -182,7 +212,7 @@ export function MfSearch({
               }}
               className="z-50 max-h-72 overflow-y-auto rounded-lg border bg-popover shadow-(--shadow-popover)"
             >
-              {loading && results.length === 0 ? (
+              {(loading || !searched) && results.length === 0 ? (
                 <p className="px-3 py-3 text-xs text-muted-foreground inline-flex items-center gap-2">
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Searching…
                 </p>

@@ -28,6 +28,10 @@ const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 let cache: { schemes: Scheme[]; fetchedAt: number } | null = null;
 // Deduplicate concurrent cold-cache fetches (two users typing at once).
 let inflight: Promise<Scheme[]> | null = null;
+// After a failed refresh, don't retry for a bit — otherwise a hanging AMFI
+// makes every keystroke block on a fresh 20s attempt.
+let lastFailureAt = 0;
+const FAILURE_COOLDOWN_MS = 60_000;
 
 /**
  * NAVAll.txt line grammar:
@@ -63,10 +67,7 @@ function parseNavAll(text: string): Scheme[] {
   return schemes;
 }
 
-async function loadSchemes(): Promise<Scheme[]> {
-  if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.schemes;
-  }
+function refresh(): Promise<Scheme[]> {
   if (!inflight) {
     inflight = (async () => {
       try {
@@ -78,8 +79,10 @@ async function loadSchemes(): Promise<Scheme[]> {
         const schemes = parseNavAll(await res.text());
         if (schemes.length === 0) throw new Error("AMFI feed parsed to zero schemes");
         cache = { schemes, fetchedAt: Date.now() };
+        lastFailureAt = 0;
         return schemes;
       } catch (e) {
+        lastFailureAt = Date.now();
         // Serve a stale list over an empty dropdown — fund names barely churn.
         if (cache) return cache.schemes;
         throw e;
@@ -89,6 +92,26 @@ async function loadSchemes(): Promise<Scheme[]> {
     })();
   }
   return inflight;
+}
+
+async function loadSchemes(): Promise<Scheme[]> {
+  if (cache) {
+    // Stale-while-revalidate: a lapsed TTL kicks off a background refresh
+    // but never blocks the search on AMFI's latency.
+    if (
+      Date.now() - cache.fetchedAt >= CACHE_TTL_MS &&
+      Date.now() - lastFailureAt >= FAILURE_COOLDOWN_MS
+    ) {
+      refresh().catch(() => {});
+    }
+    return cache.schemes;
+  }
+  // Cold cache: nothing to serve, so this request has to wait — but honour
+  // the cooldown so repeated keystrokes don't each hang for the timeout.
+  if (Date.now() - lastFailureAt < FAILURE_COOLDOWN_MS) {
+    throw new Error("AMFI fetch failed recently; cooling down");
+  }
+  return refresh();
 }
 
 export async function GET(request: Request) {
