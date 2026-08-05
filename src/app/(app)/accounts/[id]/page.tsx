@@ -89,16 +89,22 @@ export default async function AccountDetailPage({
 
   // Whether a row moves money INTO this account or OUT of it. `type`
   // alone can't answer that: transfer legs are all type TRANSFER (the
-  // Transfer row's from/to decides the side) and an investment SELL is
-  // money in. null = direction unknown; rendered unsigned and uncolored.
+  // Transfer row's from/to decides the side), a negative EXPENSE is a
+  // contra-entry (money coming back), and investment rows only move the
+  // balance on BUY. null = no balance movement; rendered unsigned.
   const flowOf = (t: (typeof transactions)[number]): "in" | "out" | null => {
     switch (t.type) {
       case "INCOME":
         return "in";
       case "EXPENSE":
-        return "out";
+        // Contra-entries (e.g. a wage advance returned) post as EXPENSE
+        // with a negative amount — same inflow rule as /transactions.
+        return Number(t.amount) < 0 ? "in" : "out";
       case "INVESTMENT":
-        return t.investmentAction === "SELL" ? "in" : "out";
+        // computeAccountBalance counts only BUY against the balance and
+        // ignores SELL, so a SELL row must stay unsigned here — a green
+        // "+" would contradict the Balance figure in the hero above.
+        return t.investmentAction === "BUY" ? "out" : null;
       case "TRANSFER":
         if (t.transfer?.toAccountId === account.id) return "in";
         if (t.transfer?.fromAccountId === account.id) return "out";
@@ -118,13 +124,14 @@ export default async function AccountDetailPage({
   );
   const periodNet = periodIncome - periodExpense;
   // All money in/out for the table header, transfers included — must
-  // agree with the +/− signs on the rows below it.
+  // agree with the +/− signs on the rows below it (abs, because a
+  // contra-entry's stored amount is negative but renders as "+").
   const periodIn = transactions.reduce(
-    (s, t) => s + (flowOf(t) === "in" ? Number(t.amount) : 0),
+    (s, t) => s + (flowOf(t) === "in" ? Math.abs(Number(t.amount)) : 0),
     0,
   );
   const periodOut = transactions.reduce(
-    (s, t) => s + (flowOf(t) === "out" ? Number(t.amount) : 0),
+    (s, t) => s + (flowOf(t) === "out" ? Math.abs(Number(t.amount)) : 0),
     0,
   );
 
@@ -358,7 +365,7 @@ export default async function AccountDetailPage({
                       }`}
                     >
                       {flow === "in" ? "+" : flow === "out" ? "−" : ""}
-                      {formatINR(Number(t.amount))}
+                      {formatINR(Math.abs(Number(t.amount)))}
                     </td>
                   </tr>
                 );

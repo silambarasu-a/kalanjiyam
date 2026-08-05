@@ -23,22 +23,25 @@ const IDENTITY_COLORS = [
   "var(--chart-7)",
 ];
 const OTHER_COLOR = "var(--chart-other)";
-const OTHER_NAME = "Other";
+// Distinct from any plausible real category name ("Other" is a seeded
+// child), so the fold can't collide with a user's own category.
+const FOLD_NAME = "Other categories";
 
 function foldSlices(data: CategorySlice[]): CategorySlice[] {
-  if (data.length <= IDENTITY_COLORS.length + 1) return data;
+  if (data.length <= IDENTITY_COLORS.length) return data;
   const kept = data.slice(0, IDENTITY_COLORS.length);
   const rest = data.slice(IDENTITY_COLORS.length);
   return [
     ...kept,
-    { name: OTHER_NAME, amount: rest.reduce((s, d) => s + d.amount, 0) },
+    { name: FOLD_NAME, amount: rest.reduce((s, d) => s + d.amount, 0) },
   ];
 }
 
-const sliceColor = (slice: CategorySlice, i: number) =>
-  i >= IDENTITY_COLORS.length || slice.name === OTHER_NAME
-    ? OTHER_COLOR
-    : IDENTITY_COLORS[i];
+// Purely positional: after folding, only the fold slice can sit past the
+// identity slots — so gray means "rollup" and nothing else, even for a
+// real category that happens to be named "Other".
+const sliceColor = (i: number) =>
+  i >= IDENTITY_COLORS.length ? OTHER_COLOR : IDENTITY_COLORS[i];
 
 export function CategoryBreakdown({ data }: { data: CategorySlice[] }) {
   const [mounted, setMounted] = useState(false);
@@ -70,8 +73,8 @@ export function CategoryBreakdown({ data }: { data: CategorySlice[] }) {
             stroke="var(--color-card)"
             strokeWidth={2}
           >
-            {slices.map((d, i) => (
-              <Cell key={i} fill={sliceColor(d, i)} />
+            {slices.map((_, i) => (
+              <Cell key={i} fill={sliceColor(i)} />
             ))}
           </Pie>
           <Tooltip
@@ -97,10 +100,10 @@ export function CategoryBreakdown({ data }: { data: CategorySlice[] }) {
         {slices.map((d, i) => {
           const pct = total > 0 ? (d.amount / total) * 100 : 0;
           return (
-            <li key={d.name} className="flex items-center gap-2">
+            <li key={`${i}-${d.name}`} className="flex items-center gap-2">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm shrink-0"
-                style={{ background: sliceColor(d, i) }}
+                style={{ background: sliceColor(i) }}
               />
               <span className="flex-1 truncate">{d.name}</span>
               <span className="tabular-nums text-muted-foreground">

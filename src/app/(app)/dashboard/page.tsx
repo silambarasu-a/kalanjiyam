@@ -224,11 +224,18 @@ export default function DashboardPage() {
   const activeId = search.get("period") ?? periods[0]?.id ?? "";
   const queryString = search.toString();
 
+  // The user's LOCAL calendar day, for the Today tile — the server can't
+  // know the client timezone, and its UTC "today" is yesterday for an
+  // IST user until 05:30. Recomputed every render, so the SWR key (and
+  // the tile) rolls over on the first render after local midnight.
+  const d = new Date();
+  const localToday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
   // Two parallel SWRs so each section loads independently. Stats is a
   // fast balance-sheet snapshot (top tiles + outstanding side cards);
   // cashflow is heavier (upcoming dues + settled list + monthly totals).
   const { data: stats } = useSWR<Stats>(
-    `/api/dashboard/stats${queryString ? `?${queryString}` : ""}`,
+    `/api/dashboard/stats?${queryString ? `${queryString}&` : ""}today=${localToday}`,
     fetcher,
   );
   const { data: cashflow } = useSWR<Cashflow>(

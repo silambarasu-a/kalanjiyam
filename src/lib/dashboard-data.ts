@@ -76,10 +76,12 @@ export type MaturingPolicy = {
 
 export type DashboardStats = {
   period: { start: string; end: string; income: number; expense: number; net: number };
-  /** Today's money in / money out (UTC day, matching how transaction
-   *  dates are stored). Same semantics as `period`: INCOME vs EXPENSE
-   *  with transfer legs excluded, so the two tiles never disagree.
-   *  Independent of the selected period filter. */
+  /** Today's money in / money out. "Today" is the CLIENT's local
+   *  calendar day (passed up by the dashboard; server UTC day as the
+   *  fallback) — transaction dates store as UTC midnight of the picked
+   *  date string, so that window captures exactly the rows dated with
+   *  the user's today. Same semantics as `period`: INCOME vs EXPENSE
+   *  with transfer legs excluded. Independent of the period filter. */
   today: { credit: number; debit: number; net: number };
   netWorth: number;
   liquid: number;
@@ -156,14 +158,20 @@ export async function getDashboardStats(args: {
   periodStart: Date;
   periodEnd: Date;
   periodFilter: { gte: Date; lt: Date };
+  /** UTC midnight of the CLIENT's local calendar day. Without it the
+   *  window falls back to the server's UTC day, which shows an IST user
+   *  yesterday's rows between local 00:00 and 05:30. */
+  todayStart?: Date;
 }): Promise<DashboardStats> {
   const { workspaceId, periodStart, periodEnd, periodFilter } = args;
 
-  // Today = the current UTC day. Transaction dates are stored as UTC
-  // midnight (the date-picker string is parsed as UTC), so this matches
-  // exactly the rows the user entered under today's date.
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
+  const todayStart =
+    args.todayStart ??
+    (() => {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      return d;
+    })();
   const todayFilter = {
     gte: todayStart,
     lt: new Date(todayStart.getTime() + 86400000),

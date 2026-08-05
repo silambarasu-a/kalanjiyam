@@ -48,11 +48,22 @@ export async function GET(request: Request) {
     }
     const periodFilter = rangeToPrismaFilter({ start: periodStart, end: periodEnd });
 
+    // The client's local calendar day for the "Today" tile — transaction
+    // dates store as UTC midnight of the picked string, so windowing on
+    // this date captures exactly the rows the user dated today.
+    const todayParam = url.searchParams.get("today");
+    let todayStart: Date | undefined;
+    if (todayParam && /^\d{4}-\d{2}-\d{2}$/.test(todayParam)) {
+      const t = new Date(`${todayParam}T00:00:00Z`);
+      if (!isNaN(t.getTime())) todayStart = t;
+    }
+
     const stats = await getDashboardStats({
       workspaceId: ctx.workspaceId,
       periodStart,
       periodEnd,
       periodFilter,
+      todayStart,
     });
     return NextResponse.json(stats);
   } catch (e) {

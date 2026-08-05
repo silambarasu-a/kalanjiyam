@@ -379,9 +379,13 @@ export function ContactStatement({
             <ContactFlowChart data={monthly} />
           </div>
           <div className="rounded-xl border bg-card p-4 sm:p-5 min-w-0">
-            <h4 className="text-sm font-semibold">Spent on them, by category</h4>
+            {/* Deliberately NOT titled "Spent on them" — on this page that
+                phrase means strictly non-recoverable spend (header stat +
+                tab). This pie is broader: it also counts recoverable
+                expenses you laid out ("Paid for them" rows). */}
+            <h4 className="text-sm font-semibold">Spend by category</h4>
             <p className="text-xs text-muted-foreground">
-              What you spent on or for {contactName} in this period ·{" "}
+              Everything you paid for or spent on {contactName} in this period ·{" "}
               {formatINR(spendByCategory.reduce((s, d) => s + d.amount, 0))}
             </p>
             <div className="mt-3 min-w-0">
