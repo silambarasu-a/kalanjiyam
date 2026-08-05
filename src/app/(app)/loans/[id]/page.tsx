@@ -589,7 +589,7 @@ export default async function LoanDetailPage({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
             {isAdHoc ? (
               <SubStat
                 label="Interest settled"

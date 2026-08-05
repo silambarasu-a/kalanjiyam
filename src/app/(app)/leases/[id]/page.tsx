@@ -171,7 +171,7 @@ export default function LeaseDetailPage() {
                   ? "text-muted-foreground"
                   : "text-foreground";
             return (
-              <div key={s.id} className="flex items-center gap-3 px-5 py-3">
+              <div key={s.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
                 <Icon className={`h-4 w-4 shrink-0 ${tone}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">{formatDate(s.dueDate)}</div>

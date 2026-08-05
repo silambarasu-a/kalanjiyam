@@ -1066,7 +1066,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
             {goldItems.map((row, i) => (
               <div key={i} className="grid grid-cols-12 gap-1.5">
                 <Input
-                  className="col-span-4"
+                  className="col-span-12 sm:col-span-4"
                   value={row.name}
                   onChange={(e) =>
                     setGoldItems((rows) =>
@@ -1077,7 +1077,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   maxLength={80}
                 />
                 <Input
-                  className="col-span-2"
+                  className="col-span-3 sm:col-span-2"
                   type="number"
                   min={1}
                   value={row.quantity}
@@ -1089,7 +1089,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   placeholder="Qty"
                   aria-label="Quantity"
                 />
-                <div className="col-span-3">
+                <div className="col-span-4 sm:col-span-3">
                   {/* Grams — a weight, not a currency: no ₹ prefix, no
                       lakh/crore grouping, and up to 3 decimals (jewellers
                       quote to the milligram). */}
@@ -1127,7 +1127,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   </div>
                 </div>
                 <Input
-                  className="col-span-2"
+                  className="col-span-3 sm:col-span-2"
                   type="number"
                   min={1}
                   max={24}
@@ -1145,7 +1145,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="col-span-1"
+                    className="col-span-2 sm:col-span-1"
                     onClick={() =>
                       setGoldItems((rows) => rows.filter((_, j) => j !== i))
                     }
@@ -1154,7 +1154,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 ) : (
-                  <div className="col-span-1" />
+                  <div className="col-span-2 sm:col-span-1" />
                 )}
               </div>
             ))}
@@ -1198,9 +1198,9 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                     }
                     placeholder="e.g. Insurance premium"
                     maxLength={60}
-                    className="flex-1"
+                    className="flex-1 min-w-0"
                   />
-                  <div className="w-44">
+                  <div className="w-32 sm:w-44">
                     <AmountInput
                       value={row.amount}
                       onChange={(next) =>

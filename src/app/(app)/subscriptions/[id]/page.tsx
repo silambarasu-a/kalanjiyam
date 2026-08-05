@@ -491,8 +491,8 @@ function PaymentsTable({
     );
   }
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <table className="w-full whitespace-nowrap text-sm">
         <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-3 py-2 text-left font-medium">Cycle</th>
@@ -540,14 +540,14 @@ function PaymentsTable({
 
 function ScheduleTable({ schedules }: { schedules: Schedule[] }) {
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <table className="w-full whitespace-nowrap text-sm">
         <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-3 py-2 text-left font-medium">Due</th>
             <th className="px-3 py-2 text-right font-medium">Amount</th>
             <th className="px-3 py-2 text-left font-medium">Status</th>
-            <th className="px-3 py-2 text-left font-medium">Note</th>
+            <th className="px-3 py-2 text-left font-medium hidden sm:table-cell">Note</th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -576,7 +576,7 @@ function ScheduleTable({ schedules }: { schedules: Schedule[] }) {
                   {s.status}
                 </span>
               </td>
-              <td className="px-3 py-2 text-xs text-muted-foreground">
+              <td className="px-3 py-2 text-xs text-muted-foreground hidden sm:table-cell whitespace-normal max-w-96">
                 {s.skippedReason ?? "—"}
               </td>
             </tr>

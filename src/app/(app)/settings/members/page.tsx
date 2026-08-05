@@ -70,7 +70,7 @@ export default function MembersPage() {
         <h2 className="text-sm font-semibold mb-2">Members</h2>
         <div className="rounded-lg border bg-card divide-y">
           {(data?.members ?? []).map((m) => (
-            <div key={m.id} className="flex items-center gap-3 px-5 py-3">
+            <div key={m.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
               <div className="flex-1 min-w-0">
                 <div className="font-medium truncate">{m.name}</div>
                 <div className="text-xs text-muted-foreground truncate">{m.email}</div>

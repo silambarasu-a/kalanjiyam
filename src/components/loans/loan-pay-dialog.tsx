@@ -327,7 +327,7 @@ export function LoanPayDialog({
             )}
 
             {overrideSplit && (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <label className="block">
                   <span className="text-xs font-medium">Principal</span>
                   <AmountInput

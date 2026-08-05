@@ -938,8 +938,8 @@ function BillsTable({
           </button>
         ))}
       </div>
-      <div className="overflow-hidden rounded-lg border bg-card">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border bg-card">
+        <table className="w-full whitespace-nowrap text-sm">
           <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-medium">Bill date</th>
@@ -1152,7 +1152,7 @@ function RechargeHistoryTable({
     );
   }
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-sm">
         <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
@@ -1225,7 +1225,7 @@ function AdvancesTable({
     );
   }
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-sm">
         <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
           <tr>

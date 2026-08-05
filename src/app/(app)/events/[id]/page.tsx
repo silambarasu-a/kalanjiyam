@@ -338,7 +338,7 @@ export default function EventDetailPage({
       </section>
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList>
+        <TabsList className="flex w-full overflow-x-auto sm:w-fit sm:max-w-full">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transactions">
             Transactions ({transactions.length})
@@ -530,7 +530,7 @@ export default function EventDetailPage({
                 : "No transactions match the current filter."
             } />
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>
@@ -582,7 +582,7 @@ export default function EventDetailPage({
           {memberSplits.length === 0 ? (
             <Empty msg="No splits tracked. Mark a split as 'Recoverable' on a transaction to track who owes back." />
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="overflow-x-auto rounded-xl border bg-card">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>

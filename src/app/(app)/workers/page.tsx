@@ -53,7 +53,7 @@ export default function WorkersPage() {
   return (
     <div className="space-y-6">
       <FarmSubNav />
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>
           <p className="mt-1 text-sm text-muted-foreground">

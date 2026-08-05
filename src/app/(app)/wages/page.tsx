@@ -397,6 +397,7 @@ export default function WagesPage() {
             No active workers.
           </p>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b">
@@ -428,6 +429,7 @@ export default function WagesPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
 

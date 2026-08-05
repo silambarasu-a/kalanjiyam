@@ -86,7 +86,7 @@ function PatientRow({ p }: { p: PatientSummary }) {
       <div className="flex items-start gap-3">
         <Stethoscope className="mt-0.5 h-4 w-4 text-muted-foreground" />
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{p.contact.name}</span>
             {p.contact.relationship && (
               <span className="text-xs text-muted-foreground">

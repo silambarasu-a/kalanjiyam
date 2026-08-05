@@ -96,7 +96,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -215,7 +215,7 @@ export default function NotificationsPage() {
                     <div
                       key={`${it.id}|${it.dueDate}`}
                       className={cn(
-                        "flex items-center gap-3 px-5 py-3",
+                        "flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3 sm:px-5",
                         dismissed && "opacity-60",
                       )}
                     >
@@ -258,62 +258,64 @@ export default function NotificationsPage() {
                             )}
                         </div>
                       </div>
-                      {it.amount != null && (
-                        <div className="text-sm font-semibold tabular-nums shrink-0">
-                          {formatINR(it.amount)}
-                        </div>
-                      )}
-                      {(it.amount ?? 0) === 0 &&
-                      it.total != null &&
-                      it.paid != null &&
-                      it.paid >= it.total ? (
-                        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle2 className="h-3 w-3" /> Paid
-                        </span>
-                      ) : (
-                        it.payHref &&
-                        (it.amount ?? 0) > 0 && (
-                          <Link
-                            href={it.payHref}
-                            onClick={() => {
-                              if (!dismissed) dismiss(it.id, it.dueDate);
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-3">
+                        {it.amount != null && (
+                          <div className="text-sm font-semibold tabular-nums shrink-0">
+                            {formatINR(it.amount)}
+                          </div>
+                        )}
+                        {(it.amount ?? 0) === 0 &&
+                        it.total != null &&
+                        it.paid != null &&
+                        it.paid >= it.total ? (
+                          <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle2 className="h-3 w-3" /> Paid
+                          </span>
+                        ) : (
+                          it.payHref &&
+                          (it.amount ?? 0) > 0 && (
+                            <Link
+                              href={it.payHref}
+                              onClick={() => {
+                                if (!dismissed) dismiss(it.id, it.dueDate);
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                            >
+                              <Wallet className="h-3 w-3" /> Pay
+                            </Link>
+                          )
+                        )}
+                        <Link
+                          href={it.href}
+                          onClick={() => {
+                            if (!dismissed) dismiss(it.id, it.dueDate);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                        >
+                          Open <ExternalLink className="h-3 w-3" />
+                        </Link>
+                        {dismissed ? (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="Restore"
+                            title="Restore"
+                            onClick={() => undismiss(it.id, it.dueDate)}
                           >
-                            <Wallet className="h-3 w-3" /> Pay
-                          </Link>
-                        )
-                      )}
-                      <Link
-                        href={it.href}
-                        onClick={() => {
-                          if (!dismissed) dismiss(it.id, it.dueDate);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                      >
-                        Open <ExternalLink className="h-3 w-3" />
-                      </Link>
-                      {dismissed ? (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label="Restore"
-                          title="Restore"
-                          onClick={() => undismiss(it.id, it.dueDate)}
-                        >
-                          <Undo2 className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label="Mark as read"
-                          title="Mark as read"
-                          onClick={() => dismiss(it.id, it.dueDate)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="Mark as read"
+                            title="Mark as read"
+                            onClick={() => dismiss(it.id, it.dueDate)}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

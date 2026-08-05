@@ -294,7 +294,7 @@ export default function InsuranceDetailPage({
           </div>
         )}
 
-      <div className="flex gap-2 border-b">
+      <div className="flex w-full gap-2 overflow-x-auto border-b">
         {[
           {
             v: "members" as const,
@@ -306,7 +306,7 @@ export default function InsuranceDetailPage({
           <button
             key={t.v}
             onClick={() => setTab(t.v)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${
+            className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm ${
               tab === t.v
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -1053,7 +1053,7 @@ function ClaimDialog({
               </select>
             </label>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-xs font-medium">Incident date</span>
               <DateInput
@@ -1066,7 +1066,7 @@ function ClaimDialog({
               <DateInput value={filedAt} onChange={(e) => setFiledAt(e.target.value)} />
             </label>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label className="block">
               <span className="text-xs font-medium">Claimed</span>
               <AmountInput value={claimedAmount} onChange={setClaimedAmount} placeholder="0" />
@@ -1502,7 +1502,7 @@ function EditPolicyDialog({
               </div>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-xs font-medium">Next due</span>
               <DateInput
@@ -1665,7 +1665,7 @@ function RenewDialog({
                 : "Creates a new policy row linked back to this one. Old policy is marked Renewed and excluded from active counts."}
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-xs font-medium">Next due (after renewal)</span>
               <DateInput

@@ -197,7 +197,7 @@ export function EditBatchDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1">
               <Label className="text-xs">Start date</Label>
               <DateInput
@@ -226,7 +226,7 @@ export function EditBatchDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1">
               <Label className="text-xs">Arrival wt (kg/bird)</Label>
               <Input

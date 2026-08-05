@@ -10,7 +10,13 @@ const globalForPrisma = globalThis as unknown as {
   prisma: InstanceType<typeof PrismaClient> | undefined;
 };
 
-function createPrismaClient() {
+// The two branches instantiate PrismaClient with different option generics;
+// without the explicit return type the result is a union of two client
+// types, and method resolution on that union intermittently blows TS's
+// instantiation depth (TS2321 "excessive stack depth") at arbitrary query
+// sites. Collapsing to the default-args instance type here fixes all of
+// them at once.
+function createPrismaClient(): InstanceType<typeof PrismaClient> {
   const connectionString = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
 
   if (connectionString?.startsWith("prisma+postgres://")) {

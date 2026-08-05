@@ -127,7 +127,7 @@ function CustomRange({
   onChange: (next: PeriodValue) => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <DateInput
         value={value.from}
         onChange={(e) => onChange({ ...value, from: e.target.value })}

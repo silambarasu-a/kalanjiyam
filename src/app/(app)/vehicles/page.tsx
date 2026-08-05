@@ -321,7 +321,7 @@ function VehicleDialog({
               autoFocus
             />
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <label className="block">
               <span className="text-xs font-medium">Make</span>
               <Input value={make} onChange={(e) => setMake(e.target.value)} maxLength={60} />

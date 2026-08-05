@@ -391,7 +391,7 @@ export function InsurancePolicyExtrasFields({
               return (
                 <li
                   key={idx}
-                  className={`grid grid-cols-[1fr_140px_auto] items-end gap-2 ${
+                  className={`grid grid-cols-[minmax(0,1fr)_6rem_auto] items-end gap-2 sm:grid-cols-[1fr_140px_auto] ${
                     isIncomplete ? "rounded-md border border-destructive/60 p-1" : ""
                   }`}
                 >

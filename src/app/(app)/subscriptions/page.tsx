@@ -222,15 +222,15 @@ export default function SubscriptionsPage() {
           </Button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border bg-card">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-lg border bg-card">
+          <table className="w-full whitespace-nowrap text-sm">
             <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Service</th>
-                <th className="px-3 py-2 text-left font-medium">Cycle</th>
+                <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Cycle</th>
                 <th className="px-3 py-2 text-right font-medium">Amount</th>
                 <th className="px-3 py-2 text-left font-medium">Next billing</th>
-                <th className="px-3 py-2 text-left font-medium">Source</th>
+                <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Source</th>
                 <th className="px-3 py-2 text-left font-medium">Status</th>
                 <th className="px-3 py-2 text-right font-medium">Actions</th>
               </tr>
@@ -253,7 +253,7 @@ export default function SubscriptionsPage() {
                         </Badge>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                    <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">
                       {cycleLabel(s.cycle)}
                     </td>
                     <td className="px-3 py-2 text-right font-medium tabular-nums">
@@ -281,7 +281,7 @@ export default function SubscriptionsPage() {
                             : `in ${days}d`}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                    <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">
                       {s.account?.name ?? s.card?.name ?? "—"}
                     </td>
                     <td className="px-3 py-2">

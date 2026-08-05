@@ -158,7 +158,7 @@ function RecordRow({ r }: { r: MedicalRecordRow }) {
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 h-4 w-4 text-muted-foreground" />
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{r.facilityName}</span>
             <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {KIND_LABEL[r.kind]}

@@ -162,7 +162,7 @@ export function VehicleCoverageEditor({
         ) : (
           <ul className="mt-2 space-y-2">
             {value.addOns.map((a, idx) => (
-              <li key={idx} className="grid grid-cols-[1fr_140px_auto] items-end gap-2">
+              <li key={idx} className="grid grid-cols-[minmax(0,1fr)_6rem_auto] sm:grid-cols-[1fr_140px_auto] items-end gap-2">
                 <Input
                   placeholder="Add-on name"
                   value={a.name}

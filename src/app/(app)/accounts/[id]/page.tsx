@@ -246,7 +246,7 @@ export default async function AccountDetailPage({
             )}
           </div>
 
-          <div className="grid grid-cols-3 gap-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
             <SubStat
               label="Period income"
               value={formatINR(periodIncome)}
@@ -395,11 +395,13 @@ function SubStat({
         ? "text-destructive"
         : "";
   return (
-    <div className="rounded-lg border bg-background/60 p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+    <div className="rounded-lg border bg-background/60 p-2.5 sm:p-3 min-w-0">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground truncate">
         {label}
       </div>
-      <div className={`mt-1 text-lg font-semibold tabular-nums ${valueClass}`}>{value}</div>
+      <div className={`mt-1 text-base sm:text-lg font-semibold tabular-nums truncate ${valueClass}`}>
+        {value}
+      </div>
     </div>
   );
 }

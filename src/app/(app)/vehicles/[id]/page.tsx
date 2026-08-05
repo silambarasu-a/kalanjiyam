@@ -291,7 +291,7 @@ export default function VehicleDetailPage({
       </div>
 
       <Tabs defaultValue="overview" className="gap-4">
-        <TabsList variant="line" className="overflow-x-auto">
+        <TabsList variant="line" className="flex w-full overflow-x-auto sm:w-fit sm:max-w-full">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="fuel">Fuel &amp; Mileage</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -715,7 +715,7 @@ function CostMixCard({
           tagged to this vehicle to populate this chart.
         </p>
       ) : (
-        <div className="mt-3 grid grid-cols-[160px_1fr] gap-4 items-center">
+        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-[160px_1fr] items-center">
           <div className="h-[160px]">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -1007,7 +1007,7 @@ function EditVehicleDialog({
               maxLength={80}
             />
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <label className="block">
               <span className="text-xs font-medium">Make</span>
               <Input value={make} onChange={(e) => setMake(e.target.value)} maxLength={60} />

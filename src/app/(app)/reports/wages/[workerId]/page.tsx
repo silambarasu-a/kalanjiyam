@@ -145,7 +145,12 @@ export default function WorkerWagesReportPage() {
       ),
     },
     { key: "mode", label: "Rate basis" },
-    { key: "tagged", label: "Tagged to" },
+    {
+      key: "tagged",
+      label: "Tagged to",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
     {
       key: "earned",
       label: "Earned",
@@ -153,7 +158,12 @@ export default function WorkerWagesReportPage() {
       render: (r) => (r.present ? formatINR(r.earned) : "—"),
       sortValue: (r) => r.earned,
     },
-    { key: "notes", label: "Notes" },
+    {
+      key: "notes",
+      label: "Notes",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
   ];
 
   const paymentCols: Column<PaymentRow>[] = [
@@ -187,8 +197,18 @@ export default function WorkerWagesReportPage() {
       render: (r) => formatINR(r.amount),
       sortValue: (r) => r.amount,
     },
-    { key: "paidBy", label: "Paid by" },
-    { key: "notes", label: "Notes" },
+    {
+      key: "paidBy",
+      label: "Paid by",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
+    {
+      key: "notes",
+      label: "Notes",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
   ];
 
   const repaymentCols: Column<RepaymentRow>[] = [
@@ -219,8 +239,18 @@ export default function WorkerWagesReportPage() {
           <span className="text-primary">Active</span>
         ),
     },
-    { key: "receivedBy", label: "Received by" },
-    { key: "notes", label: "Notes" },
+    {
+      key: "receivedBy",
+      label: "Received by",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
+    {
+      key: "notes",
+      label: "Notes",
+      className: "hidden md:table-cell",
+      thClassName: "hidden md:table-cell",
+    },
   ];
 
   const settlementCols: Column<SettlementRow>[] = [

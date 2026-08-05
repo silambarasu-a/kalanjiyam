@@ -127,7 +127,7 @@ export default function TransfersPage() {
         {(data?.transfers ?? []).map((t) => (
           <div key={t.id} className="flex items-center gap-3 px-5 py-3">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 font-medium">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">
                 <PartyLabel account={t.fromAccount} member={t.fromContact} />
                 <ArrowRight className="h-3 w-3 text-muted-foreground" />
                 <PartyLabel account={t.toAccount} member={t.toContact} />

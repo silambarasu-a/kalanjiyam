@@ -549,7 +549,7 @@ function ExpectedInflows({ inflows }: { inflows: ExpectedInflow[] | null }) {
             <div className="min-w-0 flex-1">
               <Link
                 href={i.href}
-                className="truncate font-medium hover:underline"
+                className="block truncate font-medium hover:underline"
               >
                 {i.label}
               </Link>

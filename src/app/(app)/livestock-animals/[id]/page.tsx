@@ -400,7 +400,7 @@ function DataTable({
 }) {
   const isRight = (i: number) => rightAlignCols.includes(i);
   return (
-    <div className="overflow-hidden rounded-xl border bg-card">
+    <div className="overflow-x-auto rounded-xl border bg-card">
       <table className="w-full text-sm">
         <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
           <tr>

@@ -127,7 +127,7 @@ export function ReportKpi({
         {label}
       </div>
       <div
-        className={`mt-1 ${highlight ? "text-2xl" : "text-lg"} font-semibold ${valueColor}`}
+        className={`mt-1 ${highlight ? "text-xl sm:text-2xl" : "text-lg"} font-semibold tabular-nums truncate ${valueColor}`}
       >
         {value}
       </div>

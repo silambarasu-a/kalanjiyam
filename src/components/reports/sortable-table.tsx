@@ -172,6 +172,10 @@ export function SortableTable<T extends Record<string, unknown>>({
                       : c.align === "center"
                         ? "text-center"
                         : "",
+                    // Must mirror the th/td column classes — a column hidden
+                    // responsively (hidden md:table-cell) would otherwise
+                    // leave its totals cell visible and misalign the row.
+                    c.className,
                   )}
                 >
                   {totals?.[c.key] ?? ""}

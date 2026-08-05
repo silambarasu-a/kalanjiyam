@@ -72,10 +72,14 @@ export function PeriodFilter({ periods, activeId, customFrom, customTo }: Props)
       </div>
 
       {isCustom && (
-        <div className="flex items-center gap-2">
-          <DateInput value={from} onChange={(e) => setFrom(e.target.value)} />
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <div className="min-w-0 flex-1 basis-28 sm:flex-initial sm:basis-auto">
+            <DateInput value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
           <span className="text-xs text-muted-foreground">to</span>
-          <DateInput value={to} onChange={(e) => setTo(e.target.value)} />
+          <div className="min-w-0 flex-1 basis-28 sm:flex-initial sm:basis-auto">
+            <DateInput value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
           <Button
             type="button"
             size="sm"

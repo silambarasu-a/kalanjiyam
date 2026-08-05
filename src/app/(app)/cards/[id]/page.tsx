@@ -559,7 +559,7 @@ export default async function CardDetailPage({
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
               <SubStat label="Credit limit" value={formatINR(effectiveLimit)} />
               <SubStat
                 label="Current statement"
@@ -622,7 +622,7 @@ export default async function CardDetailPage({
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
               <SubStat
                 label="Period spend"
                 value={formatINR(Math.max(0, periodSpend))}
@@ -745,7 +745,7 @@ export default async function CardDetailPage({
                             : ""}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
                       <div className="text-right">
                         <div
                           className={`text-base font-semibold tabular-nums ${
