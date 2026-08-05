@@ -75,6 +75,8 @@ export default async function AccountDetailPage({
           amount: true,
           description: true,
           date: true,
+          investmentAction: true,
+          transfer: { select: { fromAccountId: true, toAccountId: true } },
           category: {
             select: {
               name: true,
@@ -85,6 +87,27 @@ export default async function AccountDetailPage({
       })
     : [];
 
+  // Whether a row moves money INTO this account or OUT of it. `type`
+  // alone can't answer that: transfer legs are all type TRANSFER (the
+  // Transfer row's from/to decides the side) and an investment SELL is
+  // money in. null = direction unknown; rendered unsigned and uncolored.
+  const flowOf = (t: (typeof transactions)[number]): "in" | "out" | null => {
+    switch (t.type) {
+      case "INCOME":
+        return "in";
+      case "EXPENSE":
+        return "out";
+      case "INVESTMENT":
+        return t.investmentAction === "SELL" ? "in" : "out";
+      case "TRANSFER":
+        if (t.transfer?.toAccountId === account.id) return "in";
+        if (t.transfer?.fromAccountId === account.id) return "out";
+        return null;
+      default:
+        return null;
+    }
+  };
+
   const periodIncome = transactions.reduce(
     (s, t) => s + (t.type === "INCOME" ? Number(t.amount) : 0),
     0,
@@ -94,6 +117,16 @@ export default async function AccountDetailPage({
     0,
   );
   const periodNet = periodIncome - periodExpense;
+  // All money in/out for the table header, transfers included — must
+  // agree with the +/− signs on the rows below it.
+  const periodIn = transactions.reduce(
+    (s, t) => s + (flowOf(t) === "in" ? Number(t.amount) : 0),
+    0,
+  );
+  const periodOut = transactions.reduce(
+    (s, t) => s + (flowOf(t) === "out" ? Number(t.amount) : 0),
+    0,
+  );
 
   // ── Cash-flow trend over the last 6 months ────────────────────────────
   const trendPeriods = periods.slice(0, 6);
@@ -256,7 +289,7 @@ export default async function AccountDetailPage({
             {activeRange && (
               <p className="text-xs text-muted-foreground mt-0.5">
                 {transactions.length} txn{transactions.length === 1 ? "" : "s"} · in{" "}
-                {formatINR(periodIncome)} · out {formatINR(periodExpense)}
+                {formatINR(periodIn)} · out {formatINR(periodOut)}
               </p>
             )}
           </div>
@@ -284,7 +317,7 @@ export default async function AccountDetailPage({
             </thead>
             <tbody>
               {transactions.map((t) => {
-                const isIncome = t.type === "INCOME";
+                const flow = flowOf(t);
                 return (
                   <tr key={t.id} className="border-b last:border-0 hover:bg-muted/20">
                     <td className="px-5 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
@@ -307,18 +340,24 @@ export default async function AccountDetailPage({
                             t.category.name
                           )}
                         </span>
+                      ) : t.type === "TRANSFER" ? (
+                        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          Transfer
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
                     <td
                       className={`px-5 py-2.5 text-right font-semibold tabular-nums ${
-                        isIncome
+                        flow === "in"
                           ? "text-emerald-700 dark:text-emerald-400"
-                          : "text-destructive"
+                          : flow === "out"
+                            ? "text-destructive"
+                            : "text-foreground"
                       }`}
                     >
-                      {isIncome ? "+" : "−"}
+                      {flow === "in" ? "+" : flow === "out" ? "−" : ""}
                       {formatINR(Number(t.amount))}
                     </td>
                   </tr>

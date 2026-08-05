@@ -63,6 +63,7 @@ type Stats = {
     expense: number;
     net: number;
   };
+  today: { credit: number; debit: number; net: number };
   netWorth: number;
   liquid: number;
   investedAmount: number;
@@ -423,6 +424,7 @@ export default function DashboardPage() {
         </div>
 
         <section className="space-y-3">
+          <TodayCard today={stats?.today ?? null} />
           <SmallCard
             title="Card outstanding"
             value={stats ? formatINR(stats.cardOutstanding) : "—"}
@@ -1250,6 +1252,43 @@ function BigStat({
         </div>
       )}
       {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
+    </div>
+  );
+}
+
+function TodayCard({ today }: { today: Stats["today"] | null }) {
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+        Today
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-3">
+        <div className="flex items-center gap-2">
+          <ArrowDownLeft className="h-4 w-4 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <div className="text-[10px] text-muted-foreground">Credits</div>
+            <div className="truncate text-base font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+              {today ? `+${formatINR(today.credit)}` : "—"}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <ArrowUpRight className="h-4 w-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <div className="text-[10px] text-muted-foreground">Debits</div>
+            <div className="truncate text-base font-semibold tabular-nums text-destructive">
+              {today ? `−${formatINR(today.debit)}` : "—"}
+            </div>
+          </div>
+        </div>
+      </div>
+      {today && (
+        <div className="mt-1.5 text-[10px] text-muted-foreground tabular-nums">
+          Net {today.net >= 0 ? "+" : "−"}
+          {formatINR(Math.abs(today.net))} · transfers between your accounts
+          excluded
+        </div>
+      )}
     </div>
   );
 }

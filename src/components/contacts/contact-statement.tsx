@@ -32,6 +32,7 @@ import {
   type ExportColumn,
 } from "@/lib/report-export";
 import { ContactFlowChart, type FlowBucket } from "@/components/contacts/contact-flow-chart";
+import { CategoryBreakdown } from "@/components/cards/category-breakdown";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -81,6 +82,9 @@ type Statement = {
     interestPaid: number;
   };
   monthly: FlowBucket[];
+  /** Optional so a stale SWR cache entry from before this field existed
+   *  can't crash the tab. */
+  spendByCategory?: { name: string; amount: number }[];
   events: StatementEvent[];
 };
 
@@ -129,6 +133,7 @@ export function ContactStatement({
   const lp = data?.loanPositions;
   const events = data?.events ?? [];
   const monthly = data?.monthly ?? [];
+  const spendByCategory = data?.spendByCategory ?? [];
 
   const theyOweYou = s?.theyOweYou ?? 0;
   const youOweThem = s?.youOweThem ?? 0;
@@ -365,12 +370,24 @@ export function ContactStatement({
           />
         </div>
 
-        {/* Chart. */}
-        <div className="rounded-xl border bg-card p-4 sm:p-5">
-          <h4 className="mb-2 text-sm font-semibold">
-            Money in &amp; out with {contactName}, by month
-          </h4>
-          <ContactFlowChart data={monthly} />
+        {/* Charts. */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border bg-card p-4 sm:p-5 min-w-0">
+            <h4 className="mb-2 text-sm font-semibold">
+              Money in &amp; out with {contactName}, by month
+            </h4>
+            <ContactFlowChart data={monthly} />
+          </div>
+          <div className="rounded-xl border bg-card p-4 sm:p-5 min-w-0">
+            <h4 className="text-sm font-semibold">Spent on them, by category</h4>
+            <p className="text-xs text-muted-foreground">
+              What you spent on or for {contactName} in this period ·{" "}
+              {formatINR(spendByCategory.reduce((s, d) => s + d.amount, 0))}
+            </p>
+            <div className="mt-3 min-w-0">
+              <CategoryBreakdown data={spendByCategory} />
+            </div>
+          </div>
         </div>
 
         {/* Statement table. */}

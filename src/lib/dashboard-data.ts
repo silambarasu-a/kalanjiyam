@@ -76,6 +76,11 @@ export type MaturingPolicy = {
 
 export type DashboardStats = {
   period: { start: string; end: string; income: number; expense: number; net: number };
+  /** Today's money in / money out (UTC day, matching how transaction
+   *  dates are stored). Same semantics as `period`: INCOME vs EXPENSE
+   *  with transfer legs excluded, so the two tiles never disagree.
+   *  Independent of the selected period filter. */
+  today: { credit: number; debit: number; net: number };
   netWorth: number;
   liquid: number;
   /**
@@ -154,6 +159,16 @@ export async function getDashboardStats(args: {
 }): Promise<DashboardStats> {
   const { workspaceId, periodStart, periodEnd, periodFilter } = args;
 
+  // Today = the current UTC day. Transaction dates are stored as UTC
+  // midnight (the date-picker string is parsed as UTC), so this matches
+  // exactly the rows the user entered under today's date.
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const todayFilter = {
+    gte: todayStart,
+    lt: new Date(todayStart.getTime() + 86400000),
+  };
+
   const [
     accounts,
     activeLoans,
@@ -161,6 +176,8 @@ export async function getDashboardStats(args: {
     outstandingCharges,
     monthIncomeAgg,
     monthExpenseAgg,
+    todayIncomeAgg,
+    todayExpenseAgg,
     advanceAgg,
   ] = await Promise.all([
     prisma.account.findMany({
@@ -201,6 +218,24 @@ export async function getDashboardStats(args: {
         workspaceId,
         type: "EXPENSE",
         date: periodFilter,
+        transferId: null,
+      },
+      _sum: { amount: true },
+    }),
+    prisma.transaction.aggregate({
+      where: {
+        workspaceId,
+        type: "INCOME",
+        date: todayFilter,
+        transferId: null,
+      },
+      _sum: { amount: true },
+    }),
+    prisma.transaction.aggregate({
+      where: {
+        workspaceId,
+        type: "EXPENSE",
+        date: todayFilter,
         transferId: null,
       },
       _sum: { amount: true },
@@ -281,6 +316,8 @@ export async function getDashboardStats(args: {
     advanceHeld;
   const income = Number(monthIncomeAgg._sum.amount ?? 0);
   const expense = Number(monthExpenseAgg._sum.amount ?? 0);
+  const todayCredit = Number(todayIncomeAgg._sum.amount ?? 0);
+  const todayDebit = Number(todayExpenseAgg._sum.amount ?? 0);
 
   return {
     period: {
@@ -289,6 +326,11 @@ export async function getDashboardStats(args: {
       income,
       expense,
       net: income - expense,
+    },
+    today: {
+      credit: todayCredit,
+      debit: todayDebit,
+      net: todayCredit - todayDebit,
     },
     netWorth,
     liquid,

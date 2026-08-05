@@ -66,7 +66,15 @@ type BuiltEvent = {
   /** Secondary line shown for rows with no cash column (obligations,
    *  informational). Null for cash rows. */
   hint: string | null;
+  /** "Parent › Child" category label — only set on the two spend event
+   *  types (PAID_FOR_THEM / SPENT_ON_THEM) that feed spendByCategory. */
+  categoryLabel?: string | null;
 };
+
+const categoryLabelOf = (
+  c: { name: string; parent: { name: string } | null } | null | undefined,
+): string =>
+  c ? (c.parent?.name ? `${c.parent.name} › ${c.name}` : c.name) : "Uncategorized";
 
 export async function GET(
   request: Request,
@@ -115,7 +123,15 @@ export async function GET(
             originSplit: {
               select: {
                 transaction: {
-                  select: { id: true, description: true, date: true, type: true },
+                  select: {
+                    id: true,
+                    description: true,
+                    date: true,
+                    type: true,
+                    category: {
+                      select: { name: true, parent: { select: { name: true } } },
+                    },
+                  },
                 },
               },
             },
@@ -151,6 +167,9 @@ export async function GET(
                 memberChargeType: true,
                 account: { select: { name: true } },
                 card: { select: { name: true } },
+                category: {
+                  select: { name: true, parent: { select: { name: true } } },
+                },
               },
             },
           },
@@ -311,6 +330,7 @@ export async function GET(
           transactionId: originTxn?.id ?? null,
           loanId: null,
           hint: null,
+          categoryLabel: categoryLabelOf(originTxn?.category),
         });
       } else {
         // Obligation only — no owner cash moved on this row.
@@ -405,6 +425,7 @@ export async function GET(
         transactionId: txn.id,
         loanId: null,
         hint: null,
+        categoryLabel: categoryLabelOf(txn.category),
       });
     }
 
@@ -584,6 +605,23 @@ export async function GET(
       else theyOweYou += remaining;
     }
 
+    // ── Spend on/for them by category ───────────────────────────────────
+    // Sums the two spend event types over the SAME filtered window the
+    // table shows, so the pie always agrees with the visible rows. Covers
+    // PAID_FOR_THEM (recoverable expenses you laid out, written-off ones
+    // included — the cash still left) + SPENT_ON_THEM (non-recoverable
+    // shares). Transfers, settlements and loans carry no category and are
+    // deliberately absent.
+    const spendByCategoryMap = new Map<string, number>();
+    for (const e of rangeEvents) {
+      if (e.type !== "PAID_FOR_THEM" && e.type !== "SPENT_ON_THEM") continue;
+      const label = e.categoryLabel ?? "Uncategorized";
+      spendByCategoryMap.set(label, (spendByCategoryMap.get(label) ?? 0) + e.amount);
+    }
+    const spendByCategory = Array.from(spendByCategoryMap.entries())
+      .map(([name, amount]) => ({ name, amount: round2(amount) }))
+      .sort((a, b) => b.amount - a.amount);
+
     // ── Monthly buckets for the chart ───────────────────────────────────
     const monthly = buildMonthly(rangeEvents, openingNetCash, from, to);
 
@@ -625,6 +663,7 @@ export async function GET(
         paidToThem: round2(Number(contact.advancePaid)),
       },
       monthly,
+      spendByCategory,
       // Newest-first for the statement table.
       events: rangeEvents
         .slice()
