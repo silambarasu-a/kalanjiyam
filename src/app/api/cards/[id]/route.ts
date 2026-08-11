@@ -105,8 +105,17 @@ export async function PATCH(
         parentAccountId: parsed.data.parentAccountId ?? existing.parentAccountId,
         parentCardId: nextLimitMode === "SHARED" ? nextParentCardId : null,
         limitMode: nextLimitMode,
-        ownerUserId: parsed.data.ownerUserId ?? existing.ownerUserId,
-        ownerContactId: parsed.data.ownerContactId ?? existing.ownerContactId,
+        // `?? existing` would make an explicit null a no-op, so clearing the
+        // owner would silently keep the old one. Only an absent key means
+        // "leave it alone" — same rule the accounts route uses.
+        ownerUserId:
+          parsed.data.ownerUserId === undefined
+            ? existing.ownerUserId
+            : parsed.data.ownerUserId,
+        ownerContactId:
+          parsed.data.ownerContactId === undefined
+            ? existing.ownerContactId
+            : parsed.data.ownerContactId,
         sharedWithUserIds: parsed.data.sharedWithUserIds ?? existing.sharedWithUserIds,
         active: parsed.data.active ?? existing.active,
       },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,9 +26,17 @@ export type CardSnapshot = {
   gracePeriod: number | null;
   nextBillDue: string | null;
   nextBillAmount: number | null;
+  ownerContact?: { id: string; name: string } | null;
 };
 
 type BankAccountRow = { id: string; name: string; kind: string };
+
+type FamilyMember = {
+  id: string;
+  name: string;
+  relationship: string | null;
+  active: boolean;
+};
 
 type CardRow = {
   id: string;
@@ -83,8 +91,29 @@ export function CardForm({
   const [nextBillDue, setNextBillDue] = useState("");
   const [nextBillAmount, setNextBillAmount] = useState("");
   const [limitMode, setLimitMode] = useState<"SOLO" | "SHARED">("SOLO");
+  const [ownerContactId, setOwnerContactId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Family members, so a card can be attributed to whoever actually carries
+  // it — that attribution is what colour-codes it in every picker.
+  const { data: contactsData } = useSWR<{ members: FamilyMember[] }>(
+    "/api/contacts",
+    fetcher,
+  );
+  const ownerOptions = useMemo(
+    () => [
+      { value: "", label: "Unassigned" },
+      ...(contactsData?.members ?? [])
+        .filter((m) => m.active)
+        .map((m) => ({
+          value: m.id,
+          label: m.name,
+          hint: m.relationship ?? undefined,
+        })),
+    ],
+    [contactsData],
+  );
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- reset on card change */
@@ -115,6 +144,7 @@ export function CardForm({
     setNextBillDue(card?.nextBillDue ? card.nextBillDue.slice(0, 10) : "");
     setNextBillAmount(card?.nextBillAmount != null ? String(card.nextBillAmount) : "");
     setLimitMode(card?.limitMode ?? "SOLO");
+    setOwnerContactId(card?.ownerContact?.id ?? "");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [card]);
@@ -153,6 +183,8 @@ export function CardForm({
         parentAccountId: kind === "DEBIT" ? parentAccountId || null : null,
         parentCardId: isSharedChild ? parentCardId || null : null,
         limitMode,
+        // Explicit null so clearing the owner actually clears it.
+        ownerContactId: ownerContactId || null,
       };
       if (kind === "CREDIT") {
         // SHARED sub-cards inherit the limit from their parent — don't send
@@ -257,6 +289,24 @@ export function CardForm({
           <span className="text-sm">Supports UPI</span>
         </label>
       )}
+      <label className="block">
+        <span className="text-xs font-medium">
+          Belongs to{" "}
+          <span className="font-normal text-muted-foreground">
+            (optional — colour-codes this card in every picker)
+          </span>
+        </span>
+        <div className="mt-1">
+          <NativeSelect
+            value={ownerContactId}
+            onChange={setOwnerContactId}
+            options={ownerOptions}
+            placeholder="Unassigned"
+            searchable
+            searchPlaceholder="Search family members…"
+          />
+        </div>
+      </label>
       {kind === "DEBIT" ? (
         <label className="block">
           <span className="text-xs font-medium">Linked bank account</span>

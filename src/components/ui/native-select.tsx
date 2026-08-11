@@ -10,6 +10,13 @@ export type NativeSelectOption = {
   label: string;
   /** Optional secondary text shown right-aligned and muted (e.g. balance, kind tag). */
   hint?: string;
+  /**
+   * Colour swatch rendered as a dot before the label — a Tailwind background
+   * class. Used to colour-code the workspace member who owns the row.
+   */
+  dotClassName?: string;
+  /** Small muted text right after the label (e.g. the owning member's name). */
+  meta?: string;
   disabled?: boolean;
 };
 
@@ -74,7 +81,8 @@ export function NativeSelect({
     const q = query.trim().toLowerCase();
     const match = (o: NativeSelectOption) =>
       o.label.toLowerCase().includes(q) ||
-      (o.hint?.toLowerCase().includes(q) ?? false);
+      (o.hint?.toLowerCase().includes(q) ?? false) ||
+      (o.meta?.toLowerCase().includes(q) ?? false);
     if (isGrouped(options)) {
       return options
         .map((g) => ({ ...g, options: g.options.filter(match) }))
@@ -195,7 +203,16 @@ export function NativeSelect({
             !o.disabled && (highlighted === i ? "bg-accent text-accent-foreground" : "hover:bg-accent/50")
           )}
         >
-          <span className="flex-1 whitespace-nowrap">{o.label}</span>
+          {o.dotClassName && (
+            <span
+              aria-hidden
+              className={cn("h-2 w-2 shrink-0 rounded-full", o.dotClassName)}
+            />
+          )}
+          <span className="flex-1 whitespace-nowrap">
+            {o.label}
+            {o.meta && <span className="ml-1.5 text-muted-foreground">· {o.meta}</span>}
+          </span>
           {o.hint && (
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
               {o.hint}
@@ -222,6 +239,12 @@ export function NativeSelect({
           onKeyDown={onKeyDown}
           className="flex h-9 w-full items-center rounded-lg border border-input bg-transparent pl-3 pr-9 py-1 text-sm text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
         >
+          {!loading && selected?.dotClassName && (
+            <span
+              aria-hidden
+              className={cn("mr-2 h-2 w-2 shrink-0 rounded-full", selected.dotClassName)}
+            />
+          )}
           <span
             className={cn(
               "flex-1 truncate",
@@ -229,6 +252,9 @@ export function NativeSelect({
             )}
           >
             {loading ? loadingMessage : display || placeholder}
+            {!loading && display && selected?.meta && (
+              <span className="ml-1.5 text-muted-foreground">· {selected.meta}</span>
+            )}
           </span>
         </button>
         <span

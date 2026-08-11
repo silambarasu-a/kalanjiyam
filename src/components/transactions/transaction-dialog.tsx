@@ -69,6 +69,12 @@ import {
   type SplitUnit,
 } from "@/components/transactions/split-rows";
 import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
+import {
+  memberColorsFor,
+  rowOwner,
+  shortMemberName,
+  type OwnedRow,
+} from "@/lib/member-colors";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -85,6 +91,8 @@ type Account = {
   kind: "BANK" | "CASH" | "CARD" | "WALLET";
   balance: number;
   availableLimit: number | null;
+  ownerContact: { id: string; name: string } | null;
+  ownerUser: { id: string; name: string | null } | null;
 };
 type Card = {
   id: string;
@@ -93,6 +101,8 @@ type Card = {
   accountId: string | null;
   availableLimit: number | null;
   last4: string | null;
+  ownerContact: { id: string; name: string } | null;
+  ownerUser: { id: string; name: string | null } | null;
 };
 type Category = {
   id: string;
@@ -651,7 +661,24 @@ function IncomeExpenseForm({
   // category (Bank → Wallet → Cash → Debit Card → Credit Card) rather
   // than a flat alphabetical list.
   const sources = useMemo(() => {
-    type Item = { value: string; label: string; sub: string; disabled: boolean };
+    // Colour-code by owning member so two members' identically-named
+    // accounts are tellable apart. Derived from the full account list (which
+    // includes the companion CARD rows), so cards and accounts agree.
+    const ownerColors = memberColorsFor(accounts);
+    const decorate = (row: OwnedRow) => {
+      const owner = rowOwner(row);
+      const color = owner ? ownerColors?.get(owner.id) : undefined;
+      if (!owner || !color) return {};
+      return { dotClassName: color.dot, meta: shortMemberName(owner.name) || undefined };
+    };
+    type Item = {
+      value: string;
+      label: string;
+      sub: string;
+      disabled: boolean;
+      dotClassName?: string;
+      meta?: string;
+    };
     const buckets: Record<
       "BANK" | "WALLET" | "CASH" | "DEBIT" | "CREDIT" | "CONTACT",
       Item[]
@@ -672,6 +699,7 @@ function IncomeExpenseForm({
         label: formatAccountLabel(a.name, a.kind),
         sub: formatINR(a.balance),
         disabled: insufficient,
+        ...decorate(a),
       });
     }
     if (type === "EXPENSE") {
@@ -686,6 +714,7 @@ function IncomeExpenseForm({
             label,
             sub: `${avail != null ? formatINR(avail) : "—"} avail`,
             disabled: insufficient,
+            ...decorate(c),
           });
         } else {
           // Debit cards draw on a linked bank account; spendable is the
@@ -697,6 +726,7 @@ function IncomeExpenseForm({
             label,
             sub: avail != null ? formatINR(avail) : "—",
             disabled: insufficient,
+            ...decorate(c),
           });
         }
       }
@@ -731,6 +761,8 @@ function IncomeExpenseForm({
           value: it.value,
           label: it.label,
           hint: it.sub,
+          dotClassName: it.dotClassName,
+          meta: it.meta,
           disabled: it.disabled,
         })),
       }));
@@ -2125,6 +2157,9 @@ function ContactRepaymentToggle({
 
 function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Derived from the unfiltered list so the "To" picker (which drops the
+  // already-picked "From" account) keeps every member on the same colour.
+  const ownerColors = useMemo(() => memberColorsFor(accounts), [accounts]);
   const [destinationKind, setDestinationKind] = useState<"ACCOUNT" | "MEMBER">(
     "ACCOUNT",
   );
@@ -2292,7 +2327,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
               <NativeSelect
                 value={fromId}
                 onChange={setFromId}
-                options={groupAccountOptions(accounts, amtNum)}
+                options={groupAccountOptions(accounts, amtNum, ownerColors)}
               />
             </div>
           </label>
@@ -2310,6 +2345,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
                 options={groupAccountOptions(
                   accounts.filter((a) => a.id !== fromId),
                   0,
+                  ownerColors,
                 )}
               />
             </div>
@@ -2364,6 +2400,7 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
                 options={groupAccountOptions(
                   accounts,
                   direction === "SENT" ? amtNum : 0,
+                  ownerColors,
                 )}
               />
             </div>
@@ -2593,6 +2630,9 @@ function LoanEmiForm({
   }, [loanId]);
 
   const payable = accounts.filter((a) => a.kind !== "CARD");
+  // Colours come from the full list, not `payable`, so dropping the card
+  // rows can't shuffle who owns which colour.
+  const ownerColors = useMemo(() => memberColorsFor(accounts), [accounts]);
 
   async function submit() {
     setError(null);
@@ -2704,7 +2744,7 @@ function LoanEmiForm({
           <NativeSelect
             value={accountId}
             onChange={setAccountId}
-            options={groupAccountOptions(payable, Number(amount) || 0)}
+            options={groupAccountOptions(payable, Number(amount) || 0, ownerColors)}
           />
         </div>
       </label>

@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { CardForm, type CardSnapshot } from "@/components/cards/card-form";
 import { PayBillButton } from "@/components/cards/card-bill-payer";
-import { formatINR } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
+import { memberColorsFor, rowOwner, type MemberColor } from "@/lib/member-colors";
 import { MoneyValue } from "@/components/ui/money-tone";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -35,6 +36,7 @@ type Card = CardSnapshot & {
 export default function CardsPage() {
   const { data, isLoading } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const [editOpen, setEditOpen] = useState<Card | "new" | null>(null);
+  const cardOwnerColors = memberColorsFor(data?.cards ?? []);
 
   return (
     <div className="space-y-6">
@@ -99,9 +101,17 @@ export default function CardsPage() {
       })()}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {(data?.cards ?? []).map((c) => (
-          <CardRow key={c.id} card={c} onEdit={() => setEditOpen(c)} />
-        ))}
+        {(data?.cards ?? []).map((c) => {
+          const owner = rowOwner(c);
+          return (
+            <CardRow
+              key={c.id}
+              card={c}
+              ownerColor={owner ? cardOwnerColors?.get(owner.id) : undefined}
+              onEdit={() => setEditOpen(c)}
+            />
+          );
+        })}
         {(data?.cards ?? []).length === 0 && !isLoading && (
           <div className="col-span-full rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
             No cards yet. Add your debit or credit cards for UPI payments and EMI tracking.
@@ -157,9 +167,18 @@ function SummaryStat({
   );
 }
 
-function CardRow({ card: c, onEdit }: { card: Card; onEdit: () => void }) {
+function CardRow({
+  card: c,
+  ownerColor,
+  onEdit,
+}: {
+  card: Card;
+  ownerColor?: MemberColor;
+  onEdit: () => void;
+}) {
   const router = useRouter();
   const [navigating, setNavigating] = useState(false);
+  const owner = rowOwner(c);
   const href = `/cards/${c.id}`;
   const go = () => {
     if (navigating) return;
@@ -187,13 +206,31 @@ function CardRow({ card: c, onEdit }: { card: Card; onEdit: () => void }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            {ownerColor && (
+              <span
+                aria-hidden
+                className={cn("h-2 w-2 shrink-0 rounded-full", ownerColor.dot)}
+              />
+            )}
             <CreditCard className="h-4 w-4 text-muted-foreground" />
             <h3 className="truncate font-semibold">{c.name}</h3>
           </div>
-          <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
-            {c.kind} · {c.network}
-            {c.supportsUpi ? " · UPI" : ""}
-            {c.last4 ? ` · ••${c.last4}` : ""}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+            <span>
+              {c.kind} · {c.network}
+              {c.supportsUpi ? " · UPI" : ""}
+              {c.last4 ? ` · ••${c.last4}` : ""}
+            </span>
+            {owner && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal",
+                  ownerColor ? ownerColor.chip : "bg-muted",
+                )}
+              >
+                {owner.name}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-1" onClick={stop}>

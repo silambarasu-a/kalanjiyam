@@ -97,10 +97,18 @@ export const { handlers, signIn, signOut, auth, unstable_update } = NextAuth({
         const ctx = await loadWorkspaceContext(user.id, user.activeWorkspaceId);
         const previousLogin = user.lastLoginAt;
 
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { lastLoginAt: new Date() },
-        });
+        // Bookkeeping only. Anything thrown out of `authorize` becomes a
+        // CallbackRouteError, which NextAuth reports to the browser as a
+        // generic failure — so a dropped connection on this one write would
+        // cost the user a login they had already passed. Log it and move on.
+        await prisma.user
+          .update({
+            where: { id: user.id },
+            data: { lastLoginAt: new Date() },
+          })
+          .catch((err) => {
+            console.error("[auth] lastLoginAt update failed", err);
+          });
 
         return {
           id: user.id,

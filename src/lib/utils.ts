@@ -1,5 +1,11 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import {
+  memberColorsFor,
+  rowOwner,
+  shortMemberName,
+  type MemberColor,
+} from "@/lib/member-colors";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -95,9 +101,22 @@ export function buildAccountOption(
      *  label as " ••1234" so the picker is unambiguous when multiple
      *  cards share an issuer. */
     last4?: string | null;
+    /** Family member the account belongs to, when the API supplies it. */
+    ownerContact?: { id: string; name: string } | null;
+    /** Workspace member the account belongs to, when the API supplies it. */
+    ownerUser?: { id: string; name?: string | null } | null;
   },
   amount: number,
-): { value: string; label: string; hint?: string; disabled?: boolean } {
+  /** Member colours, from `memberColorsFor`. Omit for a single-owner list. */
+  ownerColors?: Map<string, MemberColor>,
+): {
+  value: string;
+  label: string;
+  hint?: string;
+  dotClassName?: string;
+  meta?: string;
+  disabled?: boolean;
+} {
   const spendable = accountSpendable(a);
   const insufficient = spendable != null && amount > 0 && amount > spendable;
   const hint =
@@ -107,10 +126,14 @@ export function buildAccountOption(
   const baseLabel = formatAccountLabel(a.name, a.kind);
   const label =
     a.kind === "CARD" && a.last4 ? `${baseLabel} ••${a.last4}` : baseLabel;
+  const owner = rowOwner(a);
+  const color = owner ? ownerColors?.get(owner.id) : undefined;
   return {
     value: a.id,
     label,
     hint,
+    dotClassName: color?.dot,
+    meta: color ? shortMemberName(owner?.name) || undefined : undefined,
     disabled: insufficient,
   };
 }
@@ -123,14 +146,22 @@ export function buildAccountOption(
  *
  * Drop-in replacement for `accounts.map((a) => buildAccountOption(a, X))`
  * — feed the result straight to <NativeSelect options={...} />.
+ *
+ * When the list spans more than one owning member, each row gets that
+ * member's colour dot and first name so two same-named accounts are
+ * distinguishable. Pass `ownerColors` (from `memberColorsFor(allAccounts)`)
+ * when the list handed in here is a *filtered* subset, so a member keeps the
+ * same colour across every picker.
  */
 export function groupAccountOptions(
   accounts: Array<Parameters<typeof buildAccountOption>[0]>,
   amount: number,
+  ownerColors?: Map<string, MemberColor>,
 ): Array<{
   label: string;
-  options: Array<{ value: string; label: string; hint?: string; disabled?: boolean }>;
+  options: ReturnType<typeof buildAccountOption>[];
 }> {
+  const colors = ownerColors ?? memberColorsFor(accounts);
   const buckets: Record<"BANK" | "WALLET" | "CASH" | "CARD", ReturnType<typeof buildAccountOption>[]> = {
     BANK: [],
     WALLET: [],
@@ -139,7 +170,7 @@ export function groupAccountOptions(
   };
   for (const a of accounts) {
     const k = a.kind as keyof typeof buckets;
-    if (k in buckets) buckets[k].push(buildAccountOption(a, amount));
+    if (k in buckets) buckets[k].push(buildAccountOption(a, amount, colors));
   }
   const order: { key: keyof typeof buckets; label: string }[] = [
     { key: "BANK", label: "Bank" },

@@ -1,7 +1,7 @@
 "use client";
 import { toast } from "sonner";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { BankPicker } from "@/components/ui/bank-picker";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +19,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CardForm } from "@/components/cards/card-form";
-import { formatINR } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
+import { memberColorsFor, rowOwner, type MemberColor } from "@/lib/member-colors";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Account = {
@@ -38,6 +40,13 @@ type Account = {
   upcomingBillAmount: number | null;
   nextBillDue: string | null;
   linkedCardId: string | null;
+};
+
+type FamilyMember = {
+  id: string;
+  name: string;
+  relationship: string | null;
+  active: boolean;
 };
 
 const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
@@ -145,9 +154,36 @@ export default function AccountsPage() {
           kind,
           items: accounts.filter((a) => a.kind === kind),
         })).filter((g) => g.items.length > 0);
+        // Same map the account pickers use, so a member's colour here is
+        // the colour they carry in every dropdown.
+        const ownerColors = memberColorsFor(accounts);
+        const legend = [
+          ...new Map(
+            accounts
+              .map((a) => rowOwner(a))
+              .filter((o): o is { id: string; name: string } => !!o)
+              .map((o) => [o.id, o]),
+          ).values(),
+        ];
 
         return (
           <div className="space-y-6">
+            {ownerColors && legend.length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+                <span className="text-[10px] uppercase tracking-widest">Owners</span>
+                {legend.map((o) => (
+                  <span key={o.id} className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden
+                      className={cn("h-2 w-2 rounded-full", ownerColors.get(o.id)?.dot)}
+                    />
+                    <span className={cn("font-medium", ownerColors.get(o.id)?.text)}>
+                      {o.name}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
             {grouped.map(({ kind, items }) => {
               const { label, Icon } = KIND_META[kind];
               return (
@@ -164,6 +200,10 @@ export default function AccountsPage() {
                       <AccountCard
                         key={a.id}
                         account={a}
+                        ownerColor={(() => {
+                          const o = rowOwner(a);
+                          return o ? ownerColors?.get(o.id) : undefined;
+                        })()}
                         onEdit={() => setDialog({ kind: "edit", account: a })}
                       />
                     ))}
@@ -201,8 +241,29 @@ function AccountDialog({
   const [bankTag, setBankTag] = useState(""); // optional suffix, e.g. "Savings"
   const [kind, setKind] = useState<"BANK" | "CASH" | "WALLET">("BANK");
   const [opening, setOpening] = useState("0");
+  const [ownerContactId, setOwnerContactId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Family members, for attributing the account to whoever it really belongs
+  // to. Only fetched while the dialog is open.
+  const { data: contactsData } = useSWR<{ members: FamilyMember[] }>(
+    mode ? "/api/contacts" : null,
+    fetcher,
+  );
+  const ownerOptions = useMemo(
+    () => [
+      { value: "", label: "Unassigned" },
+      ...(contactsData?.members ?? [])
+        .filter((m) => m.active)
+        .map((m) => ({
+          value: m.id,
+          label: m.name,
+          hint: m.relationship ?? undefined,
+        })),
+    ],
+    [contactsData],
+  );
 
   useEffect(() => {
     if (!mode) return;
@@ -227,6 +288,7 @@ function AccountDialog({
       setBankTag("");
     }
     setOpening(String(account?.openingBalance ?? 0));
+    setOwnerContactId(account?.ownerContact?.id ?? "");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [mode, account]);
@@ -247,6 +309,9 @@ function AccountDialog({
         name: assembledName,
         kind,
         openingBalance: Number(opening) || 0,
+        // Explicit null, not undefined — the PATCH route only clears the
+        // owner when the key is present.
+        ownerContactId: ownerContactId || null,
       };
       const res = await fetch(account ? `/api/accounts/${account.id}` : "/api/accounts", {
         method: account ? "PATCH" : "POST",
@@ -347,6 +412,24 @@ function AccountDialog({
                 <AmountInput value={opening} onChange={setOpening}
                 />
               </label>
+              <label className="block">
+                <span className="text-xs font-medium">
+                  Belongs to{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (optional — colour-codes this account in every picker)
+                  </span>
+                </span>
+                <div className="mt-1">
+                  <NativeSelect
+                    value={ownerContactId}
+                    onChange={setOwnerContactId}
+                    options={ownerOptions}
+                    placeholder="Unassigned"
+                    searchable
+                    searchPlaceholder="Search family members…"
+                  />
+                </div>
+              </label>
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
             <DialogFooter>
@@ -398,14 +481,17 @@ function SummaryStat({
 
 function AccountCard({
   account: a,
+  ownerColor,
   onEdit,
 }: {
   account: Account;
+  ownerColor?: MemberColor;
   onEdit: () => void;
 }) {
   const router = useRouter();
   const [navigating, setNavigating] = useState(false);
   const { Icon, label } = KIND_META[a.kind];
+  const owner = rowOwner(a);
   const isCard = a.kind === "CARD";
   const showLimit = isCard && a.creditLimit != null;
   const avail = a.availableLimit ?? a.creditLimit ?? 0;
@@ -440,12 +526,27 @@ function AccountCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            {ownerColor && (
+              <span
+                aria-hidden
+                className={cn("h-2 w-2 shrink-0 rounded-full", ownerColor.dot)}
+              />
+            )}
             <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
             <h3 className="truncate font-semibold">{a.name}</h3>
           </div>
-          <div className="mt-0.5 text-xs uppercase tracking-wider text-muted-foreground">
-            {label}
-            {a.ownerContact ? ` · ${a.ownerContact.name}` : ""}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+            <span>{label}</span>
+            {owner && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal",
+                  ownerColor ? ownerColor.chip : "bg-muted",
+                )}
+              >
+                {owner.name}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-1">

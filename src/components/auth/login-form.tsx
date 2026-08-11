@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 export function LoginForm() {
   return (
@@ -22,7 +22,6 @@ function safeCallbackUrl(raw: string | null): string {
 }
 
 function LoginFormInner() {
-  const router = useRouter();
   const params = useSearchParams();
   const callbackUrl = safeCallbackUrl(params.get("callbackUrl"));
 
@@ -47,17 +46,32 @@ function LoginFormInner() {
         redirect: false,
       });
       if (res?.error) {
-        const check = await fetch("/api/auth/check-unverified", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        });
-        const cdata = await check.json();
-        if (cdata?.unverified) {
-          setUnverified(true);
-          setError("Please verify your email before logging in.");
+        // NextAuth only forwards a short allow-list of error types to the
+        // browser. Anything else — a Prisma query that timed out waking a
+        // serverless database, a misconfigured AUTH_SECRET — arrives as
+        // "Configuration". Reporting those as bad credentials is what taught
+        // users to just press Sign in again: the retry hit a warm connection
+        // and worked, so the password looked fine after all. Name the real
+        // failure instead, and don't re-send the password to
+        // /api/auth/check-unverified when the server never got as far as
+        // checking it.
+        if (res.error !== "CredentialsSignin") {
+          setError("Couldn't reach the sign-in service. Please try again in a moment.");
+        } else if (res.code === "too_many_attempts") {
+          setError("Too many sign-in attempts. Please wait a few minutes and try again.");
         } else {
-          setError("Invalid email or password.");
+          const check = await fetch("/api/auth/check-unverified", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          const cdata = await check.json();
+          if (cdata?.unverified) {
+            setUnverified(true);
+            setError("Please verify your email before logging in.");
+          } else {
+            setError("Invalid email or password.");
+          }
         }
       } else {
         // Per-tab session gate: this flag lives in sessionStorage (which
@@ -69,14 +83,23 @@ function LoginFormInner() {
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem("kalanjiyam:tab-session", "1");
         }
-        router.push(callbackUrl);
-        router.refresh();
+        // Full-document navigation, not router.push(). The session cookie was
+        // only just set by the credentials callback, and every gate that
+        // decides whether /dashboard renders reads it on the server — the
+        // proxy, the (app) layout's auth(). A client-side push hands the new
+        // page to a router (and a client session context) that were built for
+        // a signed-out visitor, and any one of them bouncing us back to /login
+        // is what made the user click "Sign in" a second time. A hard nav
+        // re-renders the whole tree against the cookie that now exists.
+        // `submitting` is deliberately left on — the button stays disabled
+        // until the browser leaves the page.
+        window.location.assign(callbackUrl);
+        return;
       }
     } catch {
       setError("Network error. Please try again.");
-    } finally {
-      setSubmitting(false);
     }
+    setSubmitting(false);
   }
 
   async function handleResend() {
