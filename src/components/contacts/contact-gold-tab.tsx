@@ -14,7 +14,7 @@ export type ContactGoldRow = {
   lineTotal: number;
   costBasis: number;
   declaredValue: number | null;
-  status: "HELD" | "SOLD" | "GIFTED_OUT";
+  status: "HELD" | "SOLD" | "GIFTED_OUT" | "EXCHANGED";
   disposedAt: string | null;
   disposalKind: string | null;
   disposalAmount: number | null;
@@ -139,7 +139,11 @@ export function ContactGoldTab({
                       {r.status !== "HELD" &&
                         section.relation !== "GIVEN_TO_THEM" && (
                           <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                            {r.status === "SOLD" ? "Sold" : "Gifted away"}
+                            {r.status === "SOLD"
+                              ? "Sold"
+                              : r.status === "EXCHANGED"
+                                ? "Exchanged"
+                                : "Gifted away"}
                           </span>
                         )}
                     </div>

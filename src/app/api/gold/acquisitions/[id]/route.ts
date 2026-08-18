@@ -22,14 +22,30 @@ import {
   loadFundingSources,
   ornamentInclude,
   serializeOrnament,
+  validateExchangeOrnaments,
   type OrnamentInput,
 } from "@/lib/gold-service";
 import {
+  GoldDisposalKind,
   GoldForm,
+  GoldOrnamentStatus,
   InvestmentAction,
   Prisma,
   TransactionType,
 } from "@/generated/prisma/client";
+
+/**
+ * Put a traded-in ornament back where it was. Used when a bill that
+ * consumed it is edited or deleted — otherwise the piece would stay
+ * disposed with nothing recording why.
+ */
+const restoreExchanged = {
+  status: GoldOrnamentStatus.HELD,
+  disposedAt: null,
+  disposalKind: null,
+  disposalAmount: null,
+  realisedGain: null,
+} as const;
 
 export const maxDuration = 30;
 
@@ -58,6 +74,10 @@ export async function GET(
         ornaments: {
           orderBy: { sortOrder: "asc" },
           include: ornamentInclude,
+        },
+        exchanges: {
+          orderBy: { sortOrder: "asc" },
+          include: { ornament: { select: { id: true, name: true } } },
         },
       },
     });
@@ -117,6 +137,20 @@ export async function GET(
           : null,
       },
       ornaments: acq.ornaments.map(serializeOrnament),
+      exchanges: acq.exchanges.map((e) => ({
+        id: e.id,
+        ornamentId: e.ornamentId,
+        ornamentName: e.ornament?.name ?? null,
+        name: e.name,
+        grossWeightGrams: Number(e.grossWeightGrams),
+        purity: e.purity,
+        ratePerGram: Number(e.ratePerGram),
+        deductionPercent:
+          e.deductionPercent == null ? null : Number(e.deductionPercent),
+        creditAmount: Number(e.creditAmount),
+        assumedCostBasis: Number(e.assumedCostBasis),
+        notes: e.notes,
+      })),
       transactions: transactions.map((t) => ({
         id: t.id,
         type: t.type,
@@ -153,7 +187,10 @@ export async function PATCH(
 
     const acq = await prisma.goldAcquisition.findUnique({
       where: { id },
-      include: { ornaments: { include: ornamentInclude } },
+      include: {
+        ornaments: { include: ornamentInclude },
+        exchanges: true,
+      },
     });
     if (!acq || acq.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -238,26 +275,53 @@ export async function PATCH(
     // .partial() drops the create schema's refinements, so the sum checks
     // are re-run here by hand — same arrangement as investmentUpdate.
     const splits = data.splits ?? [];
+    // Omitting `exchanges` on a PATCH means "no trade-ins", same as
+    // omitting `splits` means "no payments" — both are replaced wholesale.
+    const exchanges = data.exchanges ?? [];
     const ownTotal = round2(
       ornaments.reduce(
         (a, o, i) => (o.boughtForContactId ? a : a + lines[i].lineTotal),
         0,
       ),
     );
+    const exchangeCredit = round2(
+      exchanges.reduce((a, e) => a + e.creditAmount, 0),
+    );
     if (kind === "PURCHASE") {
       const tender = round2(splits.reduce((a, s) => a + s.amount, 0));
-      if (Math.abs(tender - ownTotal) > 0.01) {
+      if (Math.abs(tender + exchangeCredit - ownTotal) > 0.01) {
         return NextResponse.json(
           {
-            error: `Payment rows total ₹${tender.toFixed(2)} but the ornaments you're keeping come to ₹${ownTotal.toFixed(2)}.`,
+            error:
+              `Payments (₹${tender.toFixed(2)}) plus the old-gold credit ` +
+              `(₹${exchangeCredit.toFixed(2)}) come to ₹${(tender + exchangeCredit).toFixed(2)}, ` +
+              `but the ornaments you're keeping total ₹${ownTotal.toFixed(2)}.`,
           },
           { status: 400 },
         );
       }
-    } else if (splits.length > 0) {
+    } else if (splits.length > 0 || exchanges.length > 0) {
       return NextResponse.json(
-        { error: "Gifts and opening stock have no payment" },
+        { error: "Gifts and opening stock have no payment or trade-in" },
         { status: 400 },
+      );
+    }
+
+    const tradedIn = await validateExchangeOrnaments(
+      ctx.workspaceId,
+      exchanges
+        .map((e) => e.ornamentId)
+        .filter(
+          (oid): oid is string =>
+            // A piece this same bill already consumed is legitimately not
+            // HELD right now; it's released below before being re-taken.
+            !!oid && !acq.exchanges.some((x) => x.ornamentId === oid),
+        ),
+    );
+    if ("error" in tradedIn) {
+      return NextResponse.json(
+        { error: tradedIn.error.message },
+        { status: tradedIn.error.status },
       );
     }
 
@@ -534,7 +598,75 @@ export async function PATCH(
         });
       }
 
+      // Trade-ins are replaced wholesale: release every piece this bill
+      // had taken, drop the rows, then re-take what the payload lists.
+      // Safe to do bluntly here — exchange rows carry no attachments and
+      // no receivables, unlike ornaments.
+      const touchedAcquisitions = new Set<string>();
+      const releasedIds = acq.exchanges
+        .map((e) => e.ornamentId)
+        .filter(Boolean) as string[];
+      if (releasedIds.length) {
+        const released = await tx.goldOrnament.findMany({
+          where: { id: { in: releasedIds } },
+          select: { id: true, acquisitionId: true },
+        });
+        released.forEach((r) => touchedAcquisitions.add(r.acquisitionId));
+        await tx.goldOrnament.updateMany({
+          where: { id: { in: releasedIds } },
+          data: restoreExchanged,
+        });
+      }
+      await tx.goldExchangeItem.deleteMany({ where: { acquisitionId: id } });
+
+      for (let i = 0; i < exchanges.length; i++) {
+        const e = exchanges[i];
+        const tracked = e.ornamentId
+          ? await tx.goldOrnament.findUnique({
+              where: { id: e.ornamentId },
+              select: { costBasis: true, acquisitionId: true },
+            })
+          : null;
+
+        await tx.goldExchangeItem.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            acquisitionId: id,
+            ornamentId: e.ornamentId ?? null,
+            name: e.name,
+            grossWeightGrams: e.grossWeightGrams,
+            purity: e.purity ?? null,
+            ratePerGram: e.ratePerGram,
+            deductionPercent: e.deductionPercent ?? null,
+            creditAmount: e.creditAmount,
+            assumedCostBasis: tracked ? 0 : (e.assumedCostBasis ?? 0),
+            notes: e.notes ?? null,
+            sortOrder: i,
+          },
+        });
+
+        if (e.ornamentId && tracked) {
+          await tx.goldOrnament.update({
+            where: { id: e.ornamentId },
+            data: {
+              status: GoldOrnamentStatus.EXCHANGED,
+              disposedAt: acquiredAt,
+              disposalKind: GoldDisposalKind.EXCHANGED,
+              disposalAmount: e.creditAmount,
+              disposalContactId: null,
+              realisedGain: round2(
+                e.creditAmount - Number(tracked.costBasis),
+              ),
+            },
+          });
+          touchedAcquisitions.add(tracked.acquisitionId);
+        }
+      }
+
       await recomputeGoldInvestment(tx, id);
+      for (const other of touchedAcquisitions) {
+        if (other !== id) await recomputeGoldInvestment(tx, other);
+      }
     });
 
     return NextResponse.json({ id });
@@ -555,7 +687,10 @@ export async function DELETE(
 
     const acq = await prisma.goldAcquisition.findUnique({
       where: { id },
-      include: { ornaments: { include: ornamentInclude } },
+      include: {
+        ornaments: { include: ornamentInclude },
+        exchanges: true,
+      },
     });
     if (!acq || acq.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -584,6 +719,24 @@ export async function DELETE(
     }
 
     await prisma.$transaction(async (tx) => {
+      // Give back anything this bill took in exchange — otherwise those
+      // pieces stay disposed with no record of what consumed them.
+      const releasedIds = acq.exchanges
+        .map((e) => e.ornamentId)
+        .filter(Boolean) as string[];
+      const releasedAcquisitions = new Set<string>();
+      if (releasedIds.length) {
+        const released = await tx.goldOrnament.findMany({
+          where: { id: { in: releasedIds } },
+          select: { id: true, acquisitionId: true },
+        });
+        released.forEach((r) => releasedAcquisitions.add(r.acquisitionId));
+        await tx.goldOrnament.updateMany({
+          where: { id: { in: releasedIds } },
+          data: restoreExchanged,
+        });
+      }
+
       await archiveAttachmentsForOwners({
         workspaceId: ctx.workspaceId,
         ownerKind: "GOLD_ORNAMENT",
@@ -626,10 +779,14 @@ export async function DELETE(
           where: { investmentId: acq.investmentId },
         });
       }
-      // Ornaments cascade with the acquisition.
+      // Ornaments and exchange rows cascade with the acquisition.
       await tx.goldAcquisition.delete({ where: { id } });
       if (acq.investmentId) {
         await tx.investment.delete({ where: { id: acq.investmentId } });
+      }
+      // The bills those released pieces came in on just got them back.
+      for (const other of releasedAcquisitions) {
+        if (other !== id) await recomputeGoldInvestment(tx, other);
       }
     });
 

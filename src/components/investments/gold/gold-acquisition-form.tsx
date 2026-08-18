@@ -26,6 +26,10 @@ import {
   GoldTenderSplits,
   type TenderRow,
 } from "@/components/investments/gold/gold-tender-splits";
+import {
+  GoldExchangeRepeater,
+  type ExchangeRow,
+} from "@/components/investments/gold/gold-exchange-repeater";
 import { fetcher } from "@/lib/swr-fetcher";
 import { formatINR } from "@/lib/utils";
 import { round2 } from "@/lib/gold";
@@ -71,6 +75,7 @@ export function GoldAcquisitionForm() {
   const [splits, setSplits] = useState<TenderRow[]>([
     { source: "", amount: "" },
   ]);
+  const [exchanges, setExchanges] = useState<ExchangeRow[]>([]);
   const [saving, setSaving] = useState(false);
 
   const { data: contactData } = useSWR<{ members: Contact[] }>(
@@ -118,6 +123,13 @@ export function GoldAcquisitionForm() {
     ),
   );
   const grandTotal = round2(ownTotal + theirTotal);
+  const exchangeCredit = round2(
+    exchanges.reduce((a, e) => a + (parseFloat(e.creditAmount) || 0), 0),
+  );
+  // What still has to be paid in cash or card for the pieces you're
+  // keeping. The credit is tender, not a discount — the ornaments above
+  // keep their full value.
+  const cashDue = round2(ownTotal - exchangeCredit);
 
   function splitSource(v: string): { accountId?: string; cardId?: string } {
     if (v.startsWith("account:")) return { accountId: v.slice(8) };
@@ -194,6 +206,27 @@ export function GoldAcquisitionForm() {
                   .map((s) => ({
                     ...splitSource(s.source),
                     amount: Number(s.amount),
+                  }))
+              : [],
+          exchanges:
+            kind === "PURCHASE"
+              ? exchanges
+                  .filter((e) => parseFloat(e.creditAmount) > 0)
+                  .map((e) => ({
+                    ornamentId: e.ornamentId || null,
+                    name: e.name.trim() || "Old gold",
+                    grossWeightGrams: Number(e.grossWeightGrams) || 0,
+                    purity: e.purity || null,
+                    ratePerGram: Number(e.ratePerGram) || 0,
+                    deductionPercent: e.deductionPercent
+                      ? Number(e.deductionPercent)
+                      : null,
+                    creditAmount: Number(e.creditAmount),
+                    assumedCostBasis:
+                      !e.ornamentId && e.assumedCostBasis
+                        ? Number(e.assumedCostBasis)
+                        : null,
+                    notes: e.notes.trim() || null,
                   }))
               : [],
         }),
@@ -349,6 +382,20 @@ export function GoldAcquisitionForm() {
           <span>Bill total</span>
           <span className="tabular-nums">{formatINR(grandTotal)}</span>
         </div>
+        {exchangeCredit > 0 && (
+          <>
+            <div className="flex items-center justify-between text-violet-700 dark:text-violet-400">
+              <span>Less old gold exchanged</span>
+              <span className="tabular-nums">−{formatINR(exchangeCredit)}</span>
+            </div>
+            <div className="flex items-center justify-between border-t pt-2 font-semibold">
+              <span>To pay now</span>
+              <span className="tabular-nums">
+                {formatINR(round2(cashDue + theirTotal))}
+              </span>
+            </div>
+          </>
+        )}
         {billTotal && Math.abs(Number(billTotal) - grandTotal) > 1 && (
           <p className="text-xs text-amber-700 dark:text-amber-400">
             The printed bill says {formatINR(Number(billTotal))} — the lines
@@ -357,12 +404,16 @@ export function GoldAcquisitionForm() {
         )}
       </div>
 
+      {kind === "PURCHASE" && (
+        <GoldExchangeRepeater exchanges={exchanges} onChange={setExchanges} />
+      )}
+
       {kind === "PURCHASE" && ownTotal > 0 && (
         <GoldTenderSplits
           splits={splits}
           onChange={setSplits}
           sources={sources}
-          target={ownTotal}
+          target={cashDue}
         />
       )}
 

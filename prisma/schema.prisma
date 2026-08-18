@@ -279,11 +279,14 @@ enum GoldOrnamentStatus {
   HELD
   SOLD
   GIFTED_OUT
+  // Handed to a jeweller as part-payment for a new bill.
+  EXCHANGED
 }
 
 enum GoldDisposalKind {
   SOLD
   GIFTED
+  EXCHANGED
 }
 
 enum NotificationKind {
@@ -598,6 +601,7 @@ model Workspace {
   investments         Investment[]
   goldAcquisitions    GoldAcquisition[]
   goldOrnaments       GoldOrnament[]
+  goldExchangeItems   GoldExchangeItem[]
   investmentReminders InvestmentReminder[]
   insuredMembers      InsuredMember[]
   insuranceClaims     InsuranceClaim[]
@@ -2089,6 +2093,7 @@ model GoldAcquisition {
   updatedAt DateTime @updatedAt
 
   ornaments GoldOrnament[]
+  exchanges GoldExchangeItem[]
 
   @@index([workspaceId, kind, acquiredAt])
   @@index([workspaceId, ownerUserId])
@@ -2182,6 +2187,9 @@ model GoldOrnament {
   // deliberate — don't "fix" it into a booked loss.
   realisedGain          Decimal?           @db.Decimal(14, 2)
 
+  // Set when this piece was traded in against a later bill.
+  exchangedInto GoldExchangeItem? @relation("GoldOrnamentExchange")
+
   notes     String?
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
@@ -2192,6 +2200,50 @@ model GoldOrnament {
   @@index([workspaceId, assignedContactId])
   @@index([workspaceId, boughtForContactId])
   @@index([workspaceId, disposalContactId])
+}
+
+// Old gold handed to the jeweller as part-payment for this bill.
+//
+// Modelled as a DISPOSAL that happens to be tendered rather than banked:
+// the new ornaments keep their full cost basis (total consideration is
+// the bill, however it was paid), the old piece leaves the portfolio
+// realising a gain against ITS cost basis, and only the cash difference
+// touches an account. Netting the credit off the new pieces instead
+// would understate their basis and hide the gain entirely.
+model GoldExchangeItem {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  acquisitionId String
+  acquisition   GoldAcquisition @relation(fields: [acquisitionId], references: [id], onDelete: Cascade)
+
+  // The piece from your own holdings that went in. Null when the old
+  // gold was never tracked here (heirloom scrap, bangles from before
+  // the app) — then `assumedCostBasis` carries whatever it originally
+  // cost, if the user even knows.
+  ornamentId String?       @unique
+  ornament   GoldOrnament? @relation("GoldOrnamentExchange", fields: [ornamentId], references: [id], onDelete: SetNull)
+
+  name             String
+  grossWeightGrams Decimal  @db.Decimal(10, 3)
+  purity           String?
+  ratePerGram      Decimal  @default(0) @db.Decimal(14, 4)
+  // Melting loss the jeweller knocked off. Informational — the shop's
+  // quoted credit is what actually settles, so `creditAmount` wins.
+  deductionPercent Decimal? @db.Decimal(6, 3)
+  // Authoritative: what the bill credited for this piece.
+  creditAmount     Decimal  @db.Decimal(14, 2)
+  // Untracked gold only; ignored when `ornamentId` is set, because a
+  // tracked piece already carries its own cost basis.
+  assumedCostBasis Decimal  @default(0) @db.Decimal(14, 2)
+
+  notes     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([acquisitionId, sortOrder])
 }
 
 model StockWishlist {

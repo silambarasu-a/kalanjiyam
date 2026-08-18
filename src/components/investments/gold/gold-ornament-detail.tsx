@@ -33,7 +33,7 @@ type Detail = {
     costBasis: number;
     declaredValue: number | null;
     stones: GoldStone[] | null;
-    status: "HELD" | "SOLD" | "GIFTED_OUT";
+    status: "HELD" | "SOLD" | "GIFTED_OUT" | "EXCHANGED";
     disposedAt: string | null;
     disposalKind: string | null;
     disposalAmount: number | null;
@@ -118,7 +118,11 @@ export function GoldOrnamentDetail({ ornamentId }: { ornamentId: string }) {
             )}
             {o.status !== "HELD" && (
               <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                {o.status === "SOLD" ? "Sold" : "Gifted away"}
+                {o.status === "SOLD"
+                  ? "Sold"
+                  : o.status === "EXCHANGED"
+                    ? "Exchanged"
+                    : "Gifted away"}
               </span>
             )}
           </div>
@@ -204,7 +208,11 @@ export function GoldOrnamentDetail({ ornamentId }: { ornamentId: string }) {
       {o.status !== "HELD" && (
         <div className="rounded-xl border bg-card p-4 text-sm">
           <p>
-            {o.status === "SOLD" ? "Sold" : "Gifted away"}
+            {o.status === "SOLD"
+              ? "Sold"
+              : o.status === "EXCHANGED"
+                ? "Traded in against a later bill"
+                : "Gifted away"}
             {o.disposedAt ? ` on ${formatDate(o.disposedAt)}` : ""}
             {o.disposalContact ? ` to ${o.disposalContact.name}` : ""}
             {o.disposalAmount != null

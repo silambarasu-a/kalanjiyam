@@ -179,6 +179,73 @@ export function blockingSettledCharge(
   return null;
 }
 
+/**
+ * Trade-in pieces that came from the user's own holdings must actually
+ * be theirs, still held, and not somebody else's ornament.
+ */
+export async function validateExchangeOrnaments(
+  workspaceId: string,
+  ornamentIds: string[],
+): Promise<
+  | {
+      ornaments: Array<{
+        id: string;
+        name: string;
+        costBasis: Prisma.Decimal;
+        acquisitionId: string;
+      }>;
+    }
+  | { error: GoldRouteError }
+> {
+  const ids = [...new Set(ornamentIds)];
+  if (ids.length === 0) return { ornaments: [] };
+  if (ids.length !== ornamentIds.length) {
+    return {
+      error: {
+        status: 400,
+        message: "The same ornament can't be exchanged twice on one bill.",
+      },
+    };
+  }
+
+  const rows = await prisma.goldOrnament.findMany({
+    where: { id: { in: ids }, workspaceId },
+    select: {
+      id: true,
+      name: true,
+      costBasis: true,
+      status: true,
+      acquisitionId: true,
+      boughtForContactId: true,
+      boughtForContact: { select: { name: true } },
+    },
+  });
+  if (rows.length !== ids.length) {
+    return { error: { status: 404, message: "Ornament not found" } };
+  }
+  for (const r of rows) {
+    if (r.boughtForContactId) {
+      return {
+        error: {
+          status: 409,
+          message:
+            `"${r.name}" belongs to ${r.boughtForContact?.name ?? "a contact"} — ` +
+            `it isn't yours to trade in.`,
+        },
+      };
+    }
+    if (r.status !== "HELD") {
+      return {
+        error: {
+          status: 409,
+          message: `"${r.name}" has already left your holdings.`,
+        },
+      };
+    }
+  }
+  return { ornaments: rows };
+}
+
 /* ------------------------ Read-side serialisation ------------------------ */
 
 /** Relations every ornament read needs. Shared so list and detail agree. */

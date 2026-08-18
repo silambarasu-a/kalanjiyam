@@ -15,10 +15,13 @@ import {
   costBasisFor,
   loadFundingSources,
   resolveGoldCategories,
+  validateExchangeOrnaments,
   type OrnamentInput,
 } from "@/lib/gold-service";
 import {
+  GoldDisposalKind,
   GoldForm,
+  GoldOrnamentStatus,
   InvestmentAction,
   InvestmentKind,
   MemberChargeDirection,
@@ -141,6 +144,22 @@ export async function POST(request: Request) {
       );
     }
     const { cardIdToAccountId } = sources;
+
+    // Trade-ins that came from our own holdings must still be ours and
+    // still held. Untracked scrap has no row to check.
+    const tradedIn = await validateExchangeOrnaments(
+      ctx.workspaceId,
+      data.exchanges
+        .map((e) => e.ornamentId)
+        .filter(Boolean) as string[],
+    );
+    if ("error" in tradedIn) {
+      return NextResponse.json(
+        { error: tradedIn.error.message },
+        { status: tradedIn.error.status },
+      );
+    }
+    const tradedById = new Map(tradedIn.ornaments.map((o) => [o.id, o]));
 
     const { expenseCategoryId } = await resolveGoldCategories(ctx.workspaceId);
     const acquiredAt = new Date(data.acquiredAt);
@@ -345,7 +364,59 @@ export async function POST(request: Request) {
         });
       }
 
+      // Old gold handed over. Recorded as a disposal tendered against
+      // this bill, not as a discount: the new pieces keep their full
+      // cost basis and the old one realises its own gain.
+      const touchedAcquisitions = new Set<string>();
+      for (let i = 0; i < data.exchanges.length; i++) {
+        const e = data.exchanges[i];
+        const tracked = e.ornamentId ? tradedById.get(e.ornamentId) : null;
+
+        await tx.goldExchangeItem.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            acquisitionId: acquisition.id,
+            ornamentId: e.ornamentId ?? null,
+            name: e.name,
+            grossWeightGrams: e.grossWeightGrams,
+            purity: e.purity ?? null,
+            ratePerGram: e.ratePerGram,
+            deductionPercent: e.deductionPercent ?? null,
+            creditAmount: e.creditAmount,
+            assumedCostBasis: tracked ? 0 : (e.assumedCostBasis ?? 0),
+            notes: e.notes ?? null,
+            sortOrder: i,
+          },
+        });
+
+        if (tracked) {
+          await tx.goldOrnament.update({
+            where: { id: tracked.id },
+            data: {
+              status: GoldOrnamentStatus.EXCHANGED,
+              disposedAt: acquiredAt,
+              disposalKind: GoldDisposalKind.EXCHANGED,
+              disposalAmount: e.creditAmount,
+              // No cash moved and no contact received it — the value
+              // went straight into this bill.
+              disposalContactId: null,
+              realisedGain: round2(
+                e.creditAmount - Number(tracked.costBasis),
+              ),
+            },
+          });
+          touchedAcquisitions.add(tracked.acquisitionId);
+        }
+      }
+
       await recomputeGoldInvestment(tx, acquisition.id);
+      // A traded-in piece usually came in on an EARLIER bill, whose
+      // holding just lost that weight and basis.
+      for (const other of touchedAcquisitions) {
+        if (other !== acquisition.id) {
+          await recomputeGoldInvestment(tx, other);
+        }
+      }
       return acquisition;
     });
 

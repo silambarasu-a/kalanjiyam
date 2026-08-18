@@ -204,6 +204,25 @@ export function valueOrnamentAtRate(
   return round2(metal + stones);
 }
 
+/**
+ * Suggested trade-in credit for old gold handed to the jeweller:
+ * weight, less the melting-loss deduction, at the quoted rate.
+ *
+ * Only a suggestion — the shop's figure is what actually settles, so the
+ * user-entered `creditAmount` always wins. This just saves them the
+ * arithmetic and shows when a quote is off.
+ */
+export function suggestExchangeCredit(args: {
+  grossWeightGrams: number;
+  ratePerGram: number;
+  deductionPercent?: number | null;
+}): number {
+  const grams = Math.max(0, toNumber(args.grossWeightGrams));
+  const rate = Math.max(0, toNumber(args.ratePerGram));
+  const deduction = Math.min(100, Math.max(0, toNumber(args.deductionPercent)));
+  return round2(grams * (1 - deduction / 100) * rate);
+}
+
 /** Carats → grams, for the stone repeater's one-shot weight fill. */
 export function caratsToGrams(carats: number): number {
   return round3(Math.max(0, toNumber(carats)) * CARAT_TO_GRAM);

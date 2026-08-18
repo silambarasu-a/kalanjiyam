@@ -1440,6 +1440,44 @@ const goldOrnamentInputSchema = z
 /** Derived, not hand-written, so the service layer can't drift from it. */
 export type GoldOrnamentInput = z.infer<typeof goldOrnamentInputSchema>;
 
+/**
+ * Old gold handed over as part-payment for this bill.
+ *
+ * `ornamentId` set  → a piece from your own holdings; it gets disposed of
+ *                     at `creditAmount` and realises a gain against the
+ *                     cost basis it already carries.
+ * `ornamentId` null → untracked old gold (heirloom scrap). `assumedCostBasis`
+ *                     is whatever it originally cost, if known; left at 0 the
+ *                     whole credit reads as gain, which is truthful about
+ *                     money never spent — the same rule gifts follow.
+ */
+const goldExchangeItemSchema = z
+  .object({
+    ornamentId: z.string().uuid().optional().nullable(),
+    name: z.string().trim().min(1).max(120),
+    grossWeightGrams: z.number().nonnegative().max(100_000),
+    purity: z.enum(["24K", "22K", "18K", "14K", "OTHER"]).optional().nullable(),
+    ratePerGram: z.number().nonnegative().max(1_000_000).default(0),
+    /** Melting loss the jeweller knocked off. Informational. */
+    deductionPercent: z.number().min(0).max(100).optional().nullable(),
+    /** What the bill actually credited. Authoritative. */
+    creditAmount: z.number().positive().max(100_000_000),
+    assumedCostBasis: z
+      .number()
+      .nonnegative()
+      .max(100_000_000)
+      .optional()
+      .nullable(),
+    notes: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine((e) => !e.ornamentId || !e.assumedCostBasis, {
+    message:
+      "A tracked ornament already carries its own cost basis — leave that blank",
+    path: ["assumedCostBasis"],
+  });
+
+export type GoldExchangeInput = z.infer<typeof goldExchangeItemSchema>;
+
 const goldTenderSplitSchema = z
   .object({
     accountId: z.string().uuid().optional().nullable(),
@@ -1470,6 +1508,13 @@ const goldAcquisitionBase = z.object({
    */
   splits: z.array(goldTenderSplitSchema).max(10).default([]),
   /**
+   * Old ornaments traded in against this bill. Their credit counts as
+   * tender alongside `splits` — it is NOT netted off the new pieces,
+   * which keep their full cost basis (total consideration is the bill,
+   * however it was paid).
+   */
+  exchanges: z.array(goldExchangeItemSchema).max(20).default([]),
+  /**
    * Pre-minted acquisition id from the instant-upload flow — bill files
    * are uploaded under GOLD_BILL/<clientId> before this row exists.
    * Doubles as an idempotency key: a double submit hits the primary-key
@@ -1495,17 +1540,40 @@ export const goldAcquisitionCreateSchema = goldAcquisitionBase
       path: ["ornaments"],
     },
   )
+  .refine((d) => d.kind === "PURCHASE" || d.exchanges.length === 0, {
+    message: "Only a purchase can take old gold in exchange",
+    path: ["exchanges"],
+  })
   .refine(
     (d) => {
       if (d.kind !== "PURCHASE") return true;
       const own = d.ornaments
         .filter((o) => !o.boughtForContactId)
         .reduce((a, o) => a + o.lineTotal, 0);
-      const tender = d.splits.reduce((a, s) => a + s.amount, 0);
-      return Math.abs(tender - own) <= 0.01;
+      const credit = d.exchanges.reduce((a, e) => a + e.creditAmount, 0);
+      return credit <= own + 0.01;
     },
     {
-      message: "Payment rows must add up to the ornaments you're keeping",
+      message:
+        "The old gold is worth more than the pieces you're keeping. Record the surplus as a separate sale instead.",
+      path: ["exchanges"],
+    },
+  )
+  .refine(
+    (d) => {
+      if (d.kind !== "PURCHASE") return true;
+      const own = d.ornaments
+        .filter((o) => !o.boughtForContactId)
+        .reduce((a, o) => a + o.lineTotal, 0);
+      const credit = d.exchanges.reduce((a, e) => a + e.creditAmount, 0);
+      const tender = d.splits.reduce((a, s) => a + s.amount, 0);
+      // Exchange credit is tender too, so payments only need to cover
+      // the balance after the trade-in.
+      return Math.abs(tender + credit - own) <= 0.01;
+    },
+    {
+      message:
+        "Payments plus the old-gold credit must add up to the ornaments you're keeping",
       path: ["splits"],
     },
   )
@@ -1582,7 +1650,7 @@ export const goldRevalueSchema = z.object({
 });
 
 export const goldOrnamentListQuerySchema = z.object({
-  status: z.enum(["HELD", "SOLD", "GIFTED_OUT", "ALL"]).default("HELD"),
+  status: z.enum(["HELD", "SOLD", "GIFTED_OUT", "EXCHANGED", "ALL"]).default("HELD"),
   contactId: z.string().uuid().optional().nullable(),
   acquisitionId: z.string().uuid().optional().nullable(),
 });

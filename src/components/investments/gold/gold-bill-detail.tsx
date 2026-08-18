@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { ArrowLeft, Gem, Receipt, Trash2 } from "lucide-react";
+import { ArrowLeft, Gem, Receipt, Repeat, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,19 @@ type Bill = {
       status: string;
     } | null;
   }[];
+  exchanges: {
+    id: string;
+    ornamentId: string | null;
+    ornamentName: string | null;
+    name: string;
+    grossWeightGrams: number;
+    purity: string | null;
+    ratePerGram: number;
+    deductionPercent: number | null;
+    creditAmount: number;
+    assumedCostBasis: number;
+    notes: string | null;
+  }[];
   transactions: {
     id: string;
     type: string;
@@ -79,6 +92,8 @@ export function GoldBillDetail({ billId }: { billId: string }) {
   }
 
   const { acquisition: acq, ornaments, transactions } = data;
+  const exchanges = data.exchanges ?? [];
+  const exchangeCredit = exchanges.reduce((a, e) => a + e.creditAmount, 0);
   const ownTotal = ornaments
     .filter((o) => !o.boughtForContact)
     .reduce((a, o) => a + o.lineTotal, 0);
@@ -142,7 +157,15 @@ export function GoldBillDetail({ billId }: { billId: string }) {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Bill total" value={formatINR(ownTotal + theirTotal)} />
-        <Stat label="You kept" value={formatINR(ownTotal)} />
+        <Stat
+          label="You kept"
+          value={formatINR(ownTotal)}
+          sub={
+            exchangeCredit > 0
+              ? `${formatINR(exchangeCredit)} paid in old gold`
+              : undefined
+          }
+        />
         <Stat
           label="Bought for others"
           value={formatINR(theirTotal)}
@@ -221,6 +244,52 @@ export function GoldBillDetail({ billId }: { billId: string }) {
           ))}
         </div>
       </div>
+
+      {exchanges.length > 0 && (
+        <div>
+          <h2 className="mb-2 text-sm font-semibold">Old gold exchanged</h2>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Tendered against this bill, so the ornaments above keep their
+            full value. Pieces from your holdings left the portfolio at the
+            credit given, realising their own gain.
+          </p>
+          <div className="divide-y rounded-xl border bg-card">
+            {exchanges.map((e) => (
+              <div
+                key={e.id}
+                className="flex items-center gap-3 px-4 py-2.5 text-sm"
+              >
+                <Repeat className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-400" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">
+                    {e.ornamentId ? (
+                      <Link
+                        href={`/investments/gold/${e.ornamentId}`}
+                        className="underline-offset-2 hover:underline"
+                      >
+                        {e.ornamentName ?? e.name}
+                      </Link>
+                    ) : (
+                      e.name
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {e.grossWeightGrams}g {e.purity ?? ""}
+                    {e.ratePerGram > 0 ? ` · ₹${e.ratePerGram}/g` : ""}
+                    {e.deductionPercent
+                      ? ` · ${e.deductionPercent}% melting loss`
+                      : ""}
+                    {!e.ornamentId ? " · untracked" : ""}
+                  </div>
+                </div>
+                <span className="shrink-0 font-medium tabular-nums text-violet-700 dark:text-violet-400">
+                  −{formatINR(e.creditAmount)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {transactions.length > 0 && (
         <div>

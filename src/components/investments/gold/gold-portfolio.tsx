@@ -22,7 +22,7 @@ export type GoldOrnamentRow = {
   lineTotal: number;
   costBasis: number;
   declaredValue: number | null;
-  status: "HELD" | "SOLD" | "GIFTED_OUT";
+  status: "HELD" | "SOLD" | "GIFTED_OUT" | "EXCHANGED";
   disposalAmount: number | null;
   realisedGain: number | null;
   assignedContact: { id: string; name: string } | null;
@@ -49,6 +49,7 @@ const STATUS_OPTIONS = [
   { value: "HELD", label: "Held" },
   { value: "SOLD", label: "Sold" },
   { value: "GIFTED_OUT", label: "Gifted away" },
+  { value: "EXCHANGED", label: "Exchanged" },
   { value: "ALL", label: "All" },
 ];
 
@@ -88,7 +89,12 @@ export function GoldPortfolio() {
         fine += fineGrams(o.netWeightGrams, o.purity);
         invested += o.costBasis;
       }
-      if (o.status === "SOLD" && o.realisedGain != null) {
+      // A trade-in realises a gain just like a sale — the value left the
+      // piece and went into a new bill instead of into an account.
+      if (
+        (o.status === "SOLD" || o.status === "EXCHANGED") &&
+        o.realisedGain != null
+      ) {
         realised += o.realisedGain;
       }
     }
@@ -245,7 +251,11 @@ export function GoldPortfolio() {
                   )}
                   {o.status !== "HELD" && (
                     <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                      {o.status === "SOLD" ? "Sold" : "Gifted away"}
+                      {o.status === "SOLD"
+                        ? "Sold"
+                        : o.status === "EXCHANGED"
+                          ? "Exchanged"
+                          : "Gifted away"}
                     </span>
                   )}
                 </div>
@@ -273,7 +283,8 @@ export function GoldPortfolio() {
                     owed
                   </div>
                 )}
-                {o.status === "SOLD" && o.realisedGain != null && (
+                {(o.status === "SOLD" || o.status === "EXCHANGED") &&
+                  o.realisedGain != null && (
                   <div
                     className={cn(
                       "text-[11px] font-semibold",
