@@ -36,7 +36,6 @@ export type OrnamentRow = {
   roundOff: string;
   assignedContactId: string;
   boughtForContactId: string;
-  onBehalfSource: string;
   declaredValue: string;
   openingCostBasis: string;
   notes: string;
@@ -61,7 +60,6 @@ export const emptyOrnament = (rate = ""): OrnamentRow => ({
   roundOff: "",
   assignedContactId: "",
   boughtForContactId: "",
-  onBehalfSource: "",
   declaredValue: "",
   openingCostBasis: "",
   notes: "",
@@ -103,7 +101,6 @@ export function OrnamentLineEditor({
   onRemove,
   canRemove,
   contacts,
-  sources,
   acquisitionKind,
   expanded,
   onToggle,
@@ -114,8 +111,6 @@ export function OrnamentLineEditor({
   onRemove: () => void;
   canRemove: boolean;
   contacts: { id: string; name: string }[];
-  /** "account:<id>" / "card:<id>" options for the on-behalf funding source. */
-  sources: { value: string; label: string; hint?: string }[];
   acquisitionKind: "PURCHASE" | "GIFT_RECEIVED" | "OPENING_STOCK";
   expanded: boolean;
   onToggle: () => void;
@@ -348,7 +343,7 @@ export function OrnamentLineEditor({
                   onChange={(v) =>
                     set({
                       boughtForContactId: v,
-                      ...(v ? { assignedContactId: "" } : { onBehalfSource: "" }),
+                      ...(v ? { assignedContactId: "" } : {}),
                     })
                   }
                   options={contactOptions}
@@ -360,17 +355,11 @@ export function OrnamentLineEditor({
           </div>
 
           {isTheirs && (
-            <div className="rounded-md border border-amber-400/60 bg-amber-50 p-2 dark:border-amber-500/40 dark:bg-amber-950/30">
-              <Label className="text-xs text-amber-900 dark:text-amber-200">
-                Paid from — this becomes {formatINR(line.lineTotal)} they owe you
-              </Label>
-              <NativeSelect
-                value={ornament.onBehalfSource}
-                onChange={(v) => set({ onBehalfSource: v })}
-                options={sources}
-                placeholder="Pick account or card"
-              />
-            </div>
+            <p className="rounded-md border border-amber-400/60 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-200">
+              {formatINR(line.lineTotal)} they&apos;ll owe you. It&apos;s part of
+              the bill total, so it&apos;s covered by the payment rows below
+              like everything else.
+            </p>
           )}
 
           {acquisitionKind === "GIFT_RECEIVED" && (

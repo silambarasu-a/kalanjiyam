@@ -1125,7 +1125,10 @@ model MemberCharge {
   lastSettlementAt     DateTime?
   notes                String?
   originSplit          TransactionSplit?        @relation("SplitCharge")
-  goldOrnament         GoldOrnament?            @relation("GoldOrnamentCharge")
+  // The gold ornament this obligation was raised for, when it came from
+  // a bill. Several charges can share one ornament — see the note there.
+  goldOrnamentId       String?
+  goldOrnament         GoldOrnament?            @relation("GoldOrnamentCharge", fields: [goldOrnamentId], references: [id], onDelete: Cascade)
   settlements          MemberChargeSettlement[]
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
@@ -1133,6 +1136,7 @@ model MemberCharge {
   @@index([workspaceId, beneficiaryContactId, status])
   @@index([workspaceId, direction, status])
   @@index([sourceTransactionId])
+  @@index([goldOrnamentId])
   @@index([sourceTransferId])
 }
 
@@ -2171,17 +2175,19 @@ model GoldOrnament {
 
   // Who wears it. The piece is still the WORKSPACE's asset.
   assignedContactId  String?
-  assignedContact    Contact?      @relation("GoldOrnamentAssignee", fields: [assignedContactId], references: [id], onDelete: SetNull)
+  assignedContact    Contact?       @relation("GoldOrnamentAssignee", fields: [assignedContactId], references: [id], onDelete: SetNull)
   // Bought on their behalf: the piece is THEIRS and the money is a
   // receivable. Restrict — you cannot delete a contact who owns gold you
   // are still owed for (MemberCharge.beneficiaryContactId is already
   // Restrict, so this is consistent, not new).
   boughtForContactId String?
-  boughtForContact   Contact?      @relation("GoldOrnamentBeneficiary", fields: [boughtForContactId], references: [id], onDelete: Restrict)
-  // The OWED_TO_USER charge this piece created. 1:1 by construction —
-  // one on-behalf ornament produces one EXPENSE, one split, one charge.
-  memberChargeId     String?       @unique
-  memberCharge       MemberCharge? @relation("GoldOrnamentCharge", fields: [memberChargeId], references: [id], onDelete: SetNull)
+  boughtForContact   Contact?       @relation("GoldOrnamentBeneficiary", fields: [boughtForContactId], references: [id], onDelete: Restrict)
+  // The OWED_TO_USER charges this piece raised — usually exactly one.
+  // A bill is settled from a shared list of payment rows, and a piece
+  // bought for someone can straddle two of them (a ₹4.5L set across two
+  // ₹2.5L cards). Forcing 1:1 here made such bills unsaveable, so this
+  // is one-to-many and the UI sums it back into a single owed figure.
+  memberCharges      MemberCharge[] @relation("GoldOrnamentCharge")
 
   status                GoldOrnamentStatus @default(HELD)
   disposedAt            DateTime?

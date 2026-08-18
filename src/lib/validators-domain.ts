@@ -1395,14 +1395,6 @@ const goldOrnamentInputSchema = z
     assignedContactId: z.string().uuid().optional().nullable(),
     /** Bought for them: becomes THEIR asset plus an OWED_TO_USER charge. */
     boughtForContactId: z.string().uuid().optional().nullable(),
-    /**
-     * Which single source funded the on-behalf EXPENSE. One source per
-     * on-behalf ornament: a tender row that straddled two contacts would
-     * have to mint a second MemberCharge for the same person on the same
-     * bill, which TransactionSplit's unique constraints forbid anyway.
-     */
-    onBehalfAccountId: z.string().uuid().optional().nullable(),
-    onBehalfCardId: z.string().uuid().optional().nullable(),
     /** Market value on the acquisition date — lets a gift report a gain. */
     declaredValue: z
       .number()
@@ -1429,18 +1421,7 @@ const goldOrnamentInputSchema = z
     message:
       "An ornament bought for a contact is already theirs — leave 'assigned to' empty",
     path: ["assignedContactId"],
-  })
-  .refine((o) => !(o.onBehalfAccountId && o.onBehalfCardId), {
-    message: "Pick either an account or a card, not both",
-    path: ["onBehalfAccountId"],
-  })
-  .refine(
-    (o) => !o.boughtForContactId || !!o.onBehalfAccountId || !!o.onBehalfCardId,
-    {
-      message: "Pick which account or card paid for this ornament",
-      path: ["onBehalfAccountId"],
-    },
-  );
+  });
 
 /** Derived, not hand-written, so the service layer can't drift from it. */
 export type GoldOrnamentInput = z.infer<typeof goldOrnamentInputSchema>;
@@ -1524,8 +1505,10 @@ const goldAcquisitionBase = z.object({
   notes: z.string().trim().max(1000).optional().nullable(),
   ornaments: z.array(goldOrnamentInputSchema).min(1).max(30),
   /**
-   * Tender for the ornaments the workspace is KEEPING. Must sum to the
-   * own-lines total; on-behalf lines are funded per-ornament instead.
+   * How the whole bill was settled — pieces kept and pieces bought for
+   * other people alike, since the shop was paid once. Must sum to every
+   * line total less any old-gold credit. The server works out which row
+   * funded which receivable; the user never says it twice.
    */
   splits: z.array(goldTenderSplitSchema).max(10).default([]),
   /**
@@ -1575,9 +1558,13 @@ export const goldAcquisitionCreateSchema = goldAcquisitionBase
         .filter((o) => !o.boughtForContactId)
         .reduce((a, o) => a + o.lineTotal, 0),
     );
+    const all = round2(d.ornaments.reduce((a, o) => a + o.lineTotal, 0));
     const credit = round2(d.exchanges.reduce((a, e) => a + e.creditAmount, 0));
     const tender = round2(d.splits.reduce((a, s) => a + s.amount, 0));
 
+    // Credit is capped at your OWN pieces on purpose. Beyond that, your
+    // old gold would be paying for someone else's ornament, leaving that
+    // receivable with no cash behind it to point at.
     if (credit > own + 0.01) {
       ctx.addIssue({
         code: "custom",
@@ -1590,7 +1577,7 @@ export const goldAcquisitionCreateSchema = goldAcquisitionBase
       return;
     }
 
-    const due = round2(own - credit);
+    const due = round2(all - credit);
     if (Math.abs(tender - due) > 0.01) {
       ctx.addIssue({
         code: "custom",
@@ -1600,8 +1587,8 @@ export const goldAcquisitionCreateSchema = goldAcquisitionBase
             ? `After the ${inr(credit)} old-gold credit, ${inr(due)} is left to pay, ` +
               `but the payment rows total ${inr(tender)}. ` +
               `${tender > due ? "Reduce them by" : "Add another"} ${inr(Math.abs(tender - due))}.`
-            : `The ornaments you're keeping come to ${inr(due)}, but the payment ` +
-              `rows total ${inr(tender)}.`,
+            : `The bill comes to ${inr(due)}, but the payment rows total ` +
+              `${inr(tender)}.`,
       });
     }
   })

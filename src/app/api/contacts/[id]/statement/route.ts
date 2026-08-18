@@ -128,6 +128,7 @@ export async function GET(
                     description: true,
                     date: true,
                     type: true,
+                    paidByContactId: true,
                     category: {
                       select: { name: true, parent: { select: { name: true } } },
                     },
@@ -305,7 +306,13 @@ export async function GET(
       const owedToUser = c.direction === "OWED_TO_USER"; // they owe you
       const forgiven = c.status === "WRITTEN_OFF";
       const originTxn = c.originSplit?.transaction ?? null;
-      const fromExpense = owedToUser && originTxn?.type === "EXPENSE";
+      // Cash only left OUR account when WE paid. A gold bill can be part
+      // funded by a contact, and that expense carries paidByContactId —
+      // counting it as money out would invent an outflow that never was.
+      const fromExpense =
+        owedToUser &&
+        originTxn?.type === "EXPENSE" &&
+        !originTxn?.paidByContactId;
       const chargeDate = originTxn?.date ?? c.createdAt;
       const description =
         originTxn?.description ??

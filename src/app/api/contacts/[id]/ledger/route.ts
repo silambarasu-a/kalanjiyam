@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { summariseCharges } from "@/lib/gold-service";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -161,7 +162,7 @@ export async function GET(
               giftedByContactId: true,
             },
           },
-          memberCharge: {
+          memberCharges: {
             select: {
               id: true,
               amount: true,
@@ -342,14 +343,7 @@ export async function GET(
           billNumber: o.acquisition.billNumber,
           acquiredAt: o.acquisition.acquiredAt.toISOString(),
         },
-        memberCharge: o.memberCharge
-          ? {
-              id: o.memberCharge.id,
-              amount: Number(o.memberCharge.amount),
-              settledAmount: Number(o.memberCharge.settledAmount),
-              status: o.memberCharge.status,
-            }
-          : null,
+        memberCharge: summariseCharges(o.memberCharges),
       })),
     });
   } catch (e) {

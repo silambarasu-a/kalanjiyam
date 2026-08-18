@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { canAccessRecord } from "@/lib/permissions";
-import { computeOrnamentLine, type OrnamentLine } from "@/lib/gold";
+import { computeOrnamentLine, round2, type OrnamentLine } from "@/lib/gold";
 import type { Prisma } from "@/generated/prisma/client";
 import type { GoldOrnamentInput } from "@/lib/validators-domain";
 
@@ -156,15 +156,14 @@ export function blockingSettledCharge(
   ornaments: Array<{
     name: string;
     boughtForContact?: { name: string } | null;
-    memberCharge?: {
+    memberCharges?: Array<{
       settledAmount: unknown;
       status: string;
-    } | null;
+    }>;
   }>,
 ): GoldRouteError | null {
   for (const o of ornaments) {
-    const mc = o.memberCharge;
-    if (!mc) continue;
+    for (const mc of o.memberCharges ?? []) {
     const settled = Number(mc.settledAmount);
     if (settled > 0 || mc.status !== "OUTSTANDING") {
       const who = o.boughtForContact?.name ?? "That contact";
@@ -175,8 +174,91 @@ export function blockingSettledCharge(
           `Reverse that settlement before editing or deleting this bill.`,
       };
     }
+    }
   }
   return null;
+}
+
+export type TenderRowInput = {
+  accountId?: string | null;
+  cardId?: string | null;
+  contactId?: string | null;
+  amount: number;
+};
+
+export type FundingChunk = {
+  /** Index into the ornaments array. */
+  ornamentIndex: number;
+  /** Index into the tender rows. */
+  splitIndex: number;
+  amount: number;
+};
+
+/**
+ * Work out which payment rows funded each ornament bought for someone.
+ *
+ * The bill was settled once from a shared list of rows, so the user never
+ * says which row paid for which piece — we derive it. Two properties
+ * matter more than elegance here:
+ *
+ *  - It ALWAYS succeeds. Sequential fill can't fail once the rows total
+ *    the bill, so no real purchase is ever unsaveable. Requiring one row
+ *    per piece turned this into bin-packing, which rejects perfectly
+ *    ordinary bills (a ₹4.5L set paid across two ₹2.5L cards).
+ *  - It rarely splits. Rows are drained in order and account/card rows
+ *    are drained first, so in the ordinary bill each piece still comes
+ *    from exactly one row and carries exactly one receivable.
+ *
+ * Account and card rows are preferred over contact-paid ones so that a
+ * receivable is backed by our own money wherever possible — when a
+ * contact's money funds it, no cash of ours left, and the statement
+ * engine is told so via the expense's paidByContactId.
+ */
+export function allocateOnBehalfFunding(
+  splits: TenderRowInput[],
+  onBehalf: Array<{ index: number; amount: number }>,
+): FundingChunk[] {
+  const remaining = splits.map((s) => round2(s.amount));
+  // Own money first; someone else's only if the bill needs it.
+  const order = [
+    ...splits.map((_, i) => i).filter((i) => !splits[i].contactId),
+    ...splits.map((_, i) => i).filter((i) => !!splits[i].contactId),
+  ];
+
+  const chunks: FundingChunk[] = [];
+  for (const item of onBehalf) {
+    let need = round2(item.amount);
+    // Prefer a single row that can cover the whole piece — one receivable
+    // reads far better than two fragments that add up. Own money still
+    // wins ties, since `order` puts account and card rows first.
+    const whole = order.find((i) => remaining[i] + 0.005 >= need);
+    if (whole !== undefined) {
+      chunks.push({ ornamentIndex: item.index, splitIndex: whole, amount: need });
+      remaining[whole] = round2(remaining[whole] - need);
+      continue;
+    }
+    for (const i of order) {
+      if (need <= 0.005) break;
+      if (remaining[i] <= 0.005) continue;
+      const take = round2(Math.min(remaining[i], need));
+      chunks.push({ ornamentIndex: item.index, splitIndex: i, amount: take });
+      remaining[i] = round2(remaining[i] - take);
+      need = round2(need - take);
+    }
+  }
+  return chunks;
+}
+
+/** What's left on each row after the on-behalf pieces have drawn on it. */
+export function remainingPerSplit(
+  splits: TenderRowInput[],
+  chunks: FundingChunk[],
+): number[] {
+  const remaining = splits.map((s) => round2(s.amount));
+  for (const c of chunks) {
+    remaining[c.splitIndex] = round2(remaining[c.splitIndex] - c.amount);
+  }
+  return remaining;
 }
 
 /**
@@ -288,7 +370,7 @@ export const ornamentInclude = {
   assignedContact: { select: { id: true, name: true } },
   boughtForContact: { select: { id: true, name: true } },
   disposalContact: { select: { id: true, name: true } },
-  memberCharge: {
+  memberCharges: {
     select: {
       id: true,
       amount: true,
@@ -335,12 +417,12 @@ export function serializeOrnament(o: {
   assignedContact?: { id: string; name: string } | null;
   boughtForContact?: { id: string; name: string } | null;
   disposalContact?: { id: string; name: string } | null;
-  memberCharge?: {
+  memberCharges?: Array<{
     id: string;
     amount: Prisma.Decimal;
     settledAmount: Prisma.Decimal;
     status: string;
-  } | null;
+  }>;
 }) {
   return {
     id: o.id,
@@ -380,13 +462,45 @@ export function serializeOrnament(o: {
     assignedContact: o.assignedContact ?? null,
     boughtForContact: o.boughtForContact ?? null,
     disposalContact: o.disposalContact ?? null,
-    memberCharge: o.memberCharge
-      ? {
-          id: o.memberCharge.id,
-          amount: Number(o.memberCharge.amount),
-          settledAmount: Number(o.memberCharge.settledAmount),
-          status: o.memberCharge.status,
-        }
-      : null,
+    memberCharge: summariseCharges(o.memberCharges),
   };
+}
+
+/**
+ * One owed figure per ornament, however many payment rows funded it.
+ *
+ * A piece can straddle rows and so carry several charges; nobody wants to
+ * read "Ravi owes ₹35,000 and ₹23,400". The ids are kept so the UI can
+ * still link through to each underlying charge.
+ */
+export function summariseCharges(
+  charges:
+    | Array<{
+        id: string;
+        amount: Prisma.Decimal;
+        settledAmount: Prisma.Decimal;
+        status: string;
+      }>
+    | undefined,
+): {
+  ids: string[];
+  amount: number;
+  settledAmount: number;
+  status: string;
+} | null {
+  if (!charges || charges.length === 0) return null;
+  const live = charges.filter((c) => c.status !== "WRITTEN_OFF");
+  const amount = round2(live.reduce((a, c) => a + Number(c.amount), 0));
+  const settledAmount = round2(
+    live.reduce((a, c) => a + Number(c.settledAmount), 0),
+  );
+  const status =
+    live.length === 0
+      ? "WRITTEN_OFF"
+      : settledAmount + 0.01 >= amount
+        ? "SETTLED"
+        : settledAmount > 0
+          ? "PARTIAL"
+          : "OUTSTANDING";
+  return { ids: charges.map((c) => c.id), amount, settledAmount, status };
 }

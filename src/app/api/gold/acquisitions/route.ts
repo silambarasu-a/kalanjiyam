@@ -11,6 +11,8 @@ import { goldAcquisitionCreateSchema } from "@/lib/validators-domain";
 import { round2, round3 } from "@/lib/gold";
 import { recomputeGoldInvestment } from "@/lib/gold-rollup";
 import {
+  allocateOnBehalfFunding,
+  remainingPerSplit,
   computeLines,
   costBasisFor,
   loadFundingSources,
@@ -131,14 +133,8 @@ export async function POST(request: Request) {
     const sources = await loadFundingSources(
       session,
       ctx.workspaceId,
-      [
-        ...data.splits.map((s) => s.accountId),
-        ...ornaments.map((o) => o.onBehalfAccountId),
-      ].filter(Boolean) as string[],
-      [
-        ...data.splits.map((s) => s.cardId),
-        ...ornaments.map((o) => o.onBehalfCardId),
-      ].filter(Boolean) as string[],
+      data.splits.map((s) => s.accountId).filter(Boolean) as string[],
+      data.splits.map((s) => s.cardId).filter(Boolean) as string[],
     );
     if ("error" in sources) {
       return NextResponse.json(
@@ -183,6 +179,15 @@ export async function POST(request: Request) {
     const investedGrams = round3(
       ownIdx.reduce((a, i) => a + lines[i].netWeightGrams, 0),
     );
+
+    // Which payment row funded which receivable. Always succeeds — the
+    // rows are already known to total the bill.
+    const onBehalfNeeds = ornaments
+      .map((o, i) => ({ index: i, amount: lines[i].lineTotal, on: !!o.boughtForContactId }))
+      .filter((x) => x.on)
+      .map(({ index, amount }) => ({ index, amount }));
+    const fundingChunks = allocateOnBehalfFunding(data.splits, onBehalfNeeds);
+    const splitRemaining = remainingPerSplit(data.splits, fundingChunks);
 
     const created = await prisma.$transaction(async (tx) => {
       // A bill whose every line was bought for other people produces no
@@ -277,19 +282,22 @@ export async function POST(request: Request) {
       // Tender for the pieces being kept: one BUY per payment row. Gifts
       // and opening stock move no money and so have no splits at all.
       // `investment` is non-null whenever there's tender to post: splits
-      // must sum to the own-lines total, and split amounts are positive,
-      // so an all-on-behalf bill can't carry any. Checked rather than
-      // asserted so a future validator change can't turn this into a crash.
+      // Each row posts what's LEFT of it after the on-behalf pieces have
+      // drawn on it, so every source moves by exactly the entered amount:
+      // (its receivable chunks) + (its BUY) = what the user typed.
       if (data.kind === "PURCHASE" && data.splits.length > 0 && investment) {
         // A loop rather than createMany because a contact-funded row also
         // raises an obligation that has to point back at its transaction.
         for (let i = 0; i < data.splits.length; i++) {
           const s = data.splits[i];
+          // Fully consumed by receivables — nothing of this row bought
+          // gold for us, so there is no BUY to post.
+          if (splitRemaining[i] <= 0.005) continue;
           const buy = await tx.transaction.create({
             data: {
               workspaceId: ctx.workspaceId,
               type: TransactionType.INVESTMENT,
-              amount: s.amount,
+              amount: splitRemaining[i],
               description:
                 data.splits.length > 1
                   ? `Gold · ${data.name} (${i + 1}/${data.splits.length})`
@@ -321,7 +329,7 @@ export async function POST(request: Request) {
               data: {
                 workspaceId: ctx.workspaceId,
                 beneficiaryContactId: s.contactId,
-                amount: s.amount,
+                amount: splitRemaining[i],
                 status: MemberChargeStatus.OUTSTANDING,
                 // They put money in for us, so WE owe THEM — the mirror
                 // of the on-behalf ornaments below.
@@ -334,44 +342,43 @@ export async function POST(request: Request) {
         }
       }
 
-      // Each on-behalf piece becomes its own EXPENSE + recoverable split
-      // + OWED_TO_USER charge — byte-identical to what /api/transactions
-      // produces, which is why the contact statement needs no changes.
-      // One charge per physical item, so each settles separately.
-      for (let i = 0; i < ornaments.length; i++) {
-        const o = ornaments[i];
+      // Each on-behalf piece becomes an EXPENSE + recoverable split +
+      // OWED_TO_USER charge per funding row it drew on — the same shape
+      // /api/transactions produces, which is why the contact statement
+      // needs no changes. Usually one chunk, so usually one charge.
+      for (const chunk of fundingChunks) {
+        const o = ornaments[chunk.ornamentIndex];
         if (!o.boughtForContactId) continue;
-        const amount = lines[i].lineTotal;
+        const row = data.splits[chunk.splitIndex];
         const contact = await tx.contact.findUnique({
           where: { id: o.boughtForContactId },
           select: { name: true },
         });
-
-        const charge = await tx.memberCharge.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            beneficiaryContactId: o.boughtForContactId,
-            amount,
-            status: MemberChargeStatus.OUTSTANDING,
-            direction: MemberChargeDirection.OWED_TO_USER,
-            notes: `Gold — ${o.name}`,
-          },
-        });
+        const siblings = fundingChunks.filter(
+          (c) => c.ornamentIndex === chunk.ornamentIndex,
+        );
+        const part =
+          siblings.length > 1
+            ? ` (${siblings.indexOf(chunk) + 1}/${siblings.length})`
+            : "";
 
         const expense = await tx.transaction.create({
           data: {
             workspaceId: ctx.workspaceId,
             type: TransactionType.EXPENSE,
-            amount,
-            description: `Gold for ${contact?.name ?? "contact"} — ${o.name}`,
+            amount: chunk.amount,
+            description: `Gold for ${contact?.name ?? "contact"} — ${o.name}${part}`,
             date: acquiredAt,
             categoryId: expenseCategoryId,
-            accountId:
-              o.onBehalfAccountId ??
-              (o.onBehalfCardId
-                ? (cardIdToAccountId.get(o.onBehalfCardId) ?? null)
-                : null),
-            cardId: o.onBehalfCardId ?? null,
+            // A contact-funded row moves none of our balances, and
+            // paidByContactId is what tells the statement engine that no
+            // cash of ours left for this row.
+            accountId: row.contactId
+              ? null
+              : (row.accountId ??
+                (row.cardId ? (cardIdToAccountId.get(row.cardId) ?? null) : null)),
+            cardId: row.contactId ? null : (row.cardId ?? null),
+            paidByContactId: row.contactId ?? null,
             goldForm: GoldForm.ORNAMENT,
             beneficiaryContactId: o.boughtForContactId,
             memberChargeType: MemberChargeType.RECOVERABLE,
@@ -380,20 +387,27 @@ export async function POST(request: Request) {
           },
         });
 
+        const charge = await tx.memberCharge.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            beneficiaryContactId: o.boughtForContactId,
+            amount: chunk.amount,
+            status: MemberChargeStatus.OUTSTANDING,
+            direction: MemberChargeDirection.OWED_TO_USER,
+            goldOrnamentId: ornamentRows[chunk.ornamentIndex].id,
+            notes: `Gold — ${o.name}${part}`,
+          },
+        });
+
         await tx.transactionSplit.create({
           data: {
             workspaceId: ctx.workspaceId,
             transactionId: expense.id,
             contactId: o.boughtForContactId,
-            amount,
+            amount: chunk.amount,
             isRecoverable: true,
             memberChargeId: charge.id,
           },
-        });
-
-        await tx.goldOrnament.update({
-          where: { id: ornamentRows[i].id },
-          data: { memberChargeId: charge.id },
         });
       }
 

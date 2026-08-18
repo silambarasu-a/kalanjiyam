@@ -219,6 +219,21 @@ export async function DELETE(
         { status: 409 },
       );
     }
+    // On a purchase, the payment rows were entered to total the whole
+    // bill. Removing a line here would leave them over-allocated — the
+    // account would still show money leaving for a piece that no longer
+    // exists — so the payments have to be corrected in the same edit.
+    if (ornament.acquisition.kind === "PURCHASE") {
+      return NextResponse.json(
+        {
+          error:
+            "Remove this ornament from its bill, so the payment rows can be " +
+            "corrected at the same time.",
+          billId: ornament.acquisitionId,
+        },
+        { status: 409 },
+      );
+    }
 
     await prisma.$transaction(async (tx) => {
       await archiveAttachmentsForOwner({
@@ -228,21 +243,18 @@ export async function DELETE(
         userId: ctx.userId,
         tx,
       });
-      if (ornament.memberChargeId) {
-        await tx.goldOrnament.update({
-          where: { id },
-          data: { memberChargeId: null },
-        });
-        const split = await tx.transactionSplit.findFirst({
-          where: { memberChargeId: ornament.memberChargeId },
+      // Charges cascade with the ornament; their expenses don't.
+      const chargeIds = ornament.memberCharges.map((c) => c.id);
+      if (chargeIds.length) {
+        const splits = await tx.transactionSplit.findMany({
+          where: { memberChargeId: { in: chargeIds } },
           select: { transactionId: true },
         });
-        if (split) {
-          await tx.transaction.delete({ where: { id: split.transactionId } });
+        if (splits.length) {
+          await tx.transaction.deleteMany({
+            where: { id: { in: splits.map((x) => x.transactionId) } },
+          });
         }
-        await tx.memberCharge.delete({
-          where: { id: ornament.memberChargeId },
-        });
       }
       await tx.goldOrnament.delete({ where: { id } });
       await recomputeGoldInvestment(tx, ornament.acquisitionId);

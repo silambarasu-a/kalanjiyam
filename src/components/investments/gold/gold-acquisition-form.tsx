@@ -143,10 +143,11 @@ export function GoldAcquisitionForm() {
   const exchangeCredit = round2(
     exchanges.reduce((a, e) => a + (parseFloat(e.creditAmount) || 0), 0),
   );
-  // What still has to be paid in cash or card for the pieces you're
-  // keeping. The credit is tender, not a discount — the ornaments above
-  // keep their full value.
-  const cashDue = round2(ownTotal - exchangeCredit);
+  // The payment rows fund the WHOLE bill — pieces you keep and pieces
+  // bought for someone else alike, since the shop was paid once. The
+  // old-gold credit is tender, not a discount, so it comes off here
+  // while the ornaments above keep their full value.
+  const cashDue = round2(grandTotal - exchangeCredit);
 
   useEffect(() => {
     if (tenderEdited || kind !== "PURCHASE" || splits.length !== 1) return;
@@ -233,12 +234,6 @@ export function GoldAcquisitionForm() {
             lineTotal: lines[i].lineTotal,
             assignedContactId: o.assignedContactId || null,
             boughtForContactId: o.boughtForContactId || null,
-            onBehalfAccountId: o.boughtForContactId
-              ? (splitSource(o.onBehalfSource).accountId ?? null)
-              : null,
-            onBehalfCardId: o.boughtForContactId
-              ? (splitSource(o.onBehalfSource).cardId ?? null)
-              : null,
             declaredValue: o.declaredValue ? Number(o.declaredValue) : null,
             openingCostBasis: o.openingCostBasis
               ? Number(o.openingCostBasis)
@@ -412,7 +407,6 @@ export function GoldAcquisitionForm() {
             }}
             canRemove={ornaments.length > 1}
             contacts={contacts}
-            sources={sources}
             acquisitionKind={kind}
             expanded={expanded === i}
             onToggle={() => setExpanded(expanded === i ? null : i)}
@@ -437,9 +431,7 @@ export function GoldAcquisitionForm() {
             </div>
             <div className="flex items-center justify-between border-t pt-2 font-semibold">
               <span>To pay now</span>
-              <span className="tabular-nums">
-                {formatINR(round2(cashDue + theirTotal))}
-              </span>
+              <span className="tabular-nums">{formatINR(cashDue)}</span>
             </div>
           </>
         )}
@@ -455,7 +447,7 @@ export function GoldAcquisitionForm() {
         <GoldExchangeRepeater exchanges={exchanges} onChange={setExchanges} />
       )}
 
-      {kind === "PURCHASE" && ownTotal > 0 && (
+      {kind === "PURCHASE" && grandTotal > 0 && (
         <GoldTenderSplits
           splits={splits}
           onChange={(next) => {

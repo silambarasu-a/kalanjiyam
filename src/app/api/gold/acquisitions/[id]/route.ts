@@ -16,9 +16,12 @@ import {
 import { round2 } from "@/lib/gold";
 import { recomputeGoldInvestment } from "@/lib/gold-rollup";
 import {
+  allocateOnBehalfFunding,
   blockingFundedCharge,
   blockingSettledCharge,
   computeLines,
+  remainingPerSplit,
+  resolveGoldCategories,
   costBasisFor,
   loadFundingSources,
   ornamentInclude,
@@ -343,14 +346,8 @@ export async function PATCH(
     const sources = await loadFundingSources(
       session,
       ctx.workspaceId,
-      [
-        ...splits.map((s) => s.accountId),
-        ...ornaments.map((o) => o.onBehalfAccountId),
-      ].filter(Boolean) as string[],
-      [
-        ...splits.map((s) => s.cardId),
-        ...ornaments.map((o) => o.onBehalfCardId),
-      ].filter(Boolean) as string[],
+      splits.map((s) => s.accountId).filter(Boolean) as string[],
+      splits.map((s) => s.cardId).filter(Boolean) as string[],
     );
     if ("error" in sources) {
       return NextResponse.json(
@@ -367,6 +364,14 @@ export async function PATCH(
     );
     const removed = acq.ornaments.filter((o) => !keptIds.has(o.id));
 
+    const onBehalfNeeds = ornaments
+      .map((o, i) => ({ index: i, amount: lines[i].lineTotal, on: !!o.boughtForContactId }))
+      .filter((x) => x.on)
+      .map(({ index, amount }) => ({ index, amount }));
+    const fundingChunks = allocateOnBehalfFunding(splits, onBehalfNeeds);
+    const splitRemaining = remainingPerSplit(splits, fundingChunks);
+    const { expenseCategoryId } = await resolveGoldCategories(ctx.workspaceId);
+
     await prisma.$transaction(async (tx) => {
       for (const gone of removed) {
         await archiveAttachmentsForOwner({
@@ -376,22 +381,15 @@ export async function PATCH(
           userId: ctx.userId,
           tx,
         });
-        if (gone.memberChargeId) {
-          // Clear the FK first so deleting the charge can't null the
-          // ornament we're about to remove out from under us.
-          await tx.goldOrnament.update({
-            where: { id: gone.id },
-            data: { memberChargeId: null },
+        // Charges cascade with the ornament; their expense rows don't.
+        const goneSplits = await tx.transactionSplit.findMany({
+          where: { memberChargeId: { in: gone.memberCharges.map((c) => c.id) } },
+          select: { transactionId: true },
+        });
+        if (goneSplits.length) {
+          await tx.transaction.deleteMany({
+            where: { id: { in: goneSplits.map((x) => x.transactionId) } },
           });
-          const split = await tx.transactionSplit.findFirst({
-            where: { memberChargeId: gone.memberChargeId },
-            select: { transactionId: true },
-          });
-          if (split) {
-            // Deleting the expense cascades its split.
-            await tx.transaction.delete({ where: { id: split.transactionId } });
-          }
-          await tx.memberCharge.delete({ where: { id: gone.memberChargeId } });
         }
         await tx.goldOrnament.delete({ where: { id: gone.id } });
       }
@@ -410,6 +408,7 @@ export async function PATCH(
         },
       });
 
+      const finalOrnamentIds: string[] = [];
       // Diff-apply by id — unlike GoldLoanItem's delete-all-and-recreate,
       // ornaments carry their own attachments and charges, so their ids
       // have to survive an edit.
@@ -470,108 +469,89 @@ export async function PATCH(
                 },
               })
             ).id;
+        finalOrnamentIds.push(ornamentId);
+      }
 
-        // Keep the receivable in step with the line. Every charge here is
-        // untouched-OUTSTANDING (guarded above), so rewriting it is safe.
-        const hadCharge = existing?.memberChargeId ?? null;
-        if (o.boughtForContactId) {
-          const amount = line.lineTotal;
-          const contact = await tx.contact.findUnique({
-            where: { id: o.boughtForContactId },
-            select: { name: true },
+      // Receivables are rebuilt from scratch every edit, exactly like the
+      // BUY rows: which payment row funds which piece is derived, not
+      // stored, so patching one in place would leave the rest stale. Safe
+      // because the guard above refuses any bill with a settled charge.
+      const staleCharges = acq.ornaments.flatMap((o) =>
+        o.memberCharges.map((c) => c.id),
+      );
+      if (staleCharges.length) {
+        const staleSplits = await tx.transactionSplit.findMany({
+          where: { memberChargeId: { in: staleCharges } },
+          select: { transactionId: true },
+        });
+        if (staleSplits.length) {
+          await tx.transaction.deleteMany({
+            where: { id: { in: staleSplits.map((x) => x.transactionId) } },
           });
-          const accountId =
-            o.onBehalfAccountId ??
-            (o.onBehalfCardId
-              ? (cardIdToAccountId.get(o.onBehalfCardId) ?? null)
-              : null);
-
-          if (hadCharge) {
-            await tx.memberCharge.update({
-              where: { id: hadCharge },
-              data: {
-                beneficiaryContactId: o.boughtForContactId,
-                amount,
-                notes: `Gold — ${o.name}`,
-              },
-            });
-            const split = await tx.transactionSplit.findFirst({
-              where: { memberChargeId: hadCharge },
-              select: { id: true, transactionId: true },
-            });
-            if (split) {
-              await tx.transaction.update({
-                where: { id: split.transactionId },
-                data: {
-                  amount,
-                  description: `Gold for ${contact?.name ?? "contact"} — ${o.name}`,
-                  date: acquiredAt,
-                  accountId,
-                  cardId: o.onBehalfCardId ?? null,
-                  beneficiaryContactId: o.boughtForContactId,
-                },
-              });
-              await tx.transactionSplit.update({
-                where: { id: split.id },
-                data: { contactId: o.boughtForContactId, amount },
-              });
-            }
-          } else {
-            const charge = await tx.memberCharge.create({
-              data: {
-                workspaceId: ctx.workspaceId,
-                beneficiaryContactId: o.boughtForContactId,
-                amount,
-                direction: "OWED_TO_USER",
-                notes: `Gold — ${o.name}`,
-              },
-            });
-            const expense = await tx.transaction.create({
-              data: {
-                workspaceId: ctx.workspaceId,
-                type: TransactionType.EXPENSE,
-                amount,
-                description: `Gold for ${contact?.name ?? "contact"} — ${o.name}`,
-                date: acquiredAt,
-                accountId,
-                cardId: o.onBehalfCardId ?? null,
-                goldForm: GoldForm.ORNAMENT,
-                beneficiaryContactId: o.boughtForContactId,
-                memberChargeType: "RECOVERABLE",
-                userId: ctx.userId,
-                createdByUserId: ctx.userId,
-              },
-            });
-            await tx.transactionSplit.create({
-              data: {
-                workspaceId: ctx.workspaceId,
-                transactionId: expense.id,
-                contactId: o.boughtForContactId,
-                amount,
-                isRecoverable: true,
-                memberChargeId: charge.id,
-              },
-            });
-            await tx.goldOrnament.update({
-              where: { id: ornamentId },
-              data: { memberChargeId: charge.id },
-            });
-          }
-        } else if (hadCharge) {
-          // The piece stopped being someone else's — retire its receivable.
-          await tx.goldOrnament.update({
-            where: { id: ornamentId },
-            data: { memberChargeId: null },
-          });
-          const split = await tx.transactionSplit.findFirst({
-            where: { memberChargeId: hadCharge },
-            select: { transactionId: true },
-          });
-          if (split) {
-            await tx.transaction.delete({ where: { id: split.transactionId } });
-          }
-          await tx.memberCharge.delete({ where: { id: hadCharge } });
         }
+        await tx.memberCharge.deleteMany({
+          where: { id: { in: staleCharges } },
+        });
+      }
+
+      for (const chunk of fundingChunks) {
+        const o = ornaments[chunk.ornamentIndex];
+        if (!o.boughtForContactId) continue;
+        const row = splits[chunk.splitIndex];
+        const contact = await tx.contact.findUnique({
+          where: { id: o.boughtForContactId },
+          select: { name: true },
+        });
+        const siblings = fundingChunks.filter(
+          (c) => c.ornamentIndex === chunk.ornamentIndex,
+        );
+        const part =
+          siblings.length > 1
+            ? ` (${siblings.indexOf(chunk) + 1}/${siblings.length})`
+            : "";
+
+        const expense = await tx.transaction.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            type: TransactionType.EXPENSE,
+            amount: chunk.amount,
+            description: `Gold for ${contact?.name ?? "contact"} — ${o.name}${part}`,
+            date: acquiredAt,
+            categoryId: expenseCategoryId,
+            accountId: row.contactId
+              ? null
+              : (row.accountId ??
+                (row.cardId ? (cardIdToAccountId.get(row.cardId) ?? null) : null)),
+            cardId: row.contactId ? null : (row.cardId ?? null),
+            paidByContactId: row.contactId ?? null,
+            goldForm: GoldForm.ORNAMENT,
+            beneficiaryContactId: o.boughtForContactId,
+            memberChargeType: MemberChargeType.RECOVERABLE,
+            userId: ctx.userId,
+            createdByUserId: ctx.userId,
+          },
+        });
+        const charge = await tx.memberCharge.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            beneficiaryContactId: o.boughtForContactId,
+            amount: chunk.amount,
+            status: MemberChargeStatus.OUTSTANDING,
+            direction: MemberChargeDirection.OWED_TO_USER,
+            goldOrnamentId: finalOrnamentIds[chunk.ornamentIndex],
+            notes: `Gold — ${o.name}${part}`,
+          },
+        });
+        await tx.transactionSplit.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            transactionId: expense.id,
+            contactId: o.boughtForContactId,
+            amount: chunk.amount,
+            isRecoverable: true,
+            memberChargeId: charge.id,
+          },
+        });
       }
 
       // A bill's BUY rows ARE its tender, so replacing them wholesale is
@@ -598,11 +578,12 @@ export async function PATCH(
         const label = data.name ?? acq.sellerName ?? "bill";
         for (let i = 0; i < splits.length; i++) {
           const s = splits[i];
+          if (splitRemaining[i] <= 0.005) continue;
           const buy = await tx.transaction.create({
             data: {
               workspaceId: ctx.workspaceId,
               type: TransactionType.INVESTMENT,
-              amount: s.amount,
+              amount: splitRemaining[i],
               description:
                 splits.length > 1
                   ? `Gold · ${label} (${i + 1}/${splits.length})`
@@ -631,7 +612,7 @@ export async function PATCH(
               data: {
                 workspaceId: ctx.workspaceId,
                 beneficiaryContactId: s.contactId,
-                amount: s.amount,
+                amount: splitRemaining[i],
                 status: MemberChargeStatus.OUTSTANDING,
                 direction: MemberChargeDirection.USER_OWES,
                 sourceTransactionId: buy.id,
@@ -810,16 +791,12 @@ export async function DELETE(
         tx,
       });
 
-      const chargeIds = acq.ornaments
-        .map((o) => o.memberChargeId)
-        .filter(Boolean) as string[];
+      // The charges themselves cascade with their ornaments; the expense
+      // rows behind them don't, so they go explicitly and first.
+      const chargeIds = acq.ornaments.flatMap((o) =>
+        o.memberCharges.map((c) => c.id),
+      );
       if (chargeIds.length) {
-        // Break the ornament→charge FK before the charges go, so the
-        // cascade order can't trip over SetNull.
-        await tx.goldOrnament.updateMany({
-          where: { acquisitionId: id },
-          data: { memberChargeId: null },
-        });
         const splits = await tx.transactionSplit.findMany({
           where: { memberChargeId: { in: chargeIds } },
           select: { transactionId: true },
