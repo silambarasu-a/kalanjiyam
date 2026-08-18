@@ -1066,6 +1066,8 @@ model Transaction {
   eggProductionLog        EggProductionLog?
   healthLog               HealthLog?
   memberChargeSettlements MemberChargeSettlement[]
+  // Obligations raised because a contact paid this one for us.
+  fundedCharges           MemberCharge[]           @relation("TransactionObligation")
   reminderConfirmation    InvestmentReminder?      @relation("ReminderConfirmation")
   splits                  TransactionSplit[]       @relation("TransactionSplits")
   // The leftover transfer created alongside this bulk-settlement, if the
@@ -1114,6 +1116,12 @@ model MemberCharge {
   // explicit. SetNull so deleting the transfer doesn't drop the charge.
   sourceTransferId     String?
   sourceTransfer       Transfer?                @relation("TransferObligation", fields: [sourceTransferId], references: [id], onDelete: SetNull)
+  // When the charge came from a transaction a CONTACT paid on our behalf
+  // (Transaction.paidByContactId + memberChargeType = RECOVERABLE). Without
+  // it, editing or deleting that transaction strands the obligation with no
+  // way to find it. SetNull so the charge outlives the transaction.
+  sourceTransactionId  String?
+  sourceTransaction    Transaction?             @relation("TransactionObligation", fields: [sourceTransactionId], references: [id], onDelete: SetNull)
   lastSettlementAt     DateTime?
   notes                String?
   originSplit          TransactionSplit?        @relation("SplitCharge")
@@ -1124,6 +1132,7 @@ model MemberCharge {
 
   @@index([workspaceId, beneficiaryContactId, status])
   @@index([workspaceId, direction, status])
+  @@index([sourceTransactionId])
   @@index([sourceTransferId])
 }
 

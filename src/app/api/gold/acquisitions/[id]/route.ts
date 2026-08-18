@@ -16,6 +16,7 @@ import {
 import { round2 } from "@/lib/gold";
 import { recomputeGoldInvestment } from "@/lib/gold-rollup";
 import {
+  blockingFundedCharge,
   blockingSettledCharge,
   computeLines,
   costBasisFor,
@@ -30,6 +31,9 @@ import {
   GoldForm,
   GoldOrnamentStatus,
   InvestmentAction,
+  MemberChargeDirection,
+  MemberChargeStatus,
+  MemberChargeType,
   Prisma,
   TransactionType,
 } from "@/generated/prisma/client";
@@ -221,6 +225,13 @@ export async function PATCH(
         { status: settled.status },
       );
     }
+    const funded = await blockingFundedCharge(acq.investmentId);
+    if (funded) {
+      return NextResponse.json(
+        { error: funded.message },
+        { status: funded.status },
+      );
+    }
     const disposed = acq.ornaments.find((o) => o.status !== "HELD");
     if (disposed) {
       return NextResponse.json(
@@ -323,6 +334,10 @@ export async function PATCH(
         { error: tradedIn.error.message },
         { status: tradedIn.error.status },
       );
+    }
+
+    for (const sp of splits) {
+      await assertWorkspaceContact(ctx.workspaceId, sp.contactId);
     }
 
     const sources = await loadFundingSources(
@@ -563,32 +578,68 @@ export async function PATCH(
       // safe here — unlike the generic investment PATCH, nothing else
       // posts BUYs against a gold acquisition's holding.
       if (acq.investmentId) {
+        // Charges raised because a contact funded one of these rows have
+        // to go first — the FK is SetNull, so deleting the transaction
+        // would leave a "you owe them" obligation with nothing behind it.
+        const oldBuys = await tx.transaction.findMany({
+          where: { investmentId: acq.investmentId, investmentAction: "BUY" },
+          select: { id: true },
+        });
+        if (oldBuys.length) {
+          await tx.memberCharge.deleteMany({
+            where: { sourceTransactionId: { in: oldBuys.map((b) => b.id) } },
+          });
+        }
         await tx.transaction.deleteMany({
           where: { investmentId: acq.investmentId, investmentAction: "BUY" },
         });
       }
       if (kind === "PURCHASE" && splits.length > 0 && acq.investmentId) {
-        await tx.transaction.createMany({
-          data: splits.map((s, i) => ({
-            workspaceId: ctx.workspaceId,
-            type: TransactionType.INVESTMENT,
-            amount: s.amount,
-            description:
-              splits.length > 1
-                ? `Gold · ${data.name ?? acq.sellerName ?? "bill"} (${i + 1}/${splits.length})`
-                : `Gold · ${data.name ?? acq.sellerName ?? "bill"}`,
-            date: acquiredAt,
-            accountId:
-              s.accountId ??
-              (s.cardId ? (cardIdToAccountId.get(s.cardId) ?? null) : null),
-            cardId: s.cardId ?? null,
-            investmentId: acq.investmentId,
-            investmentAction: InvestmentAction.BUY,
-            goldForm: GoldForm.ORNAMENT,
-            userId: ctx.userId,
-            createdByUserId: ctx.userId,
-          })),
-        });
+        const label = data.name ?? acq.sellerName ?? "bill";
+        for (let i = 0; i < splits.length; i++) {
+          const s = splits[i];
+          const buy = await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: TransactionType.INVESTMENT,
+              amount: s.amount,
+              description:
+                splits.length > 1
+                  ? `Gold · ${label} (${i + 1}/${splits.length})`
+                  : `Gold · ${label}`,
+              date: acquiredAt,
+              accountId: s.contactId
+                ? null
+                : (s.accountId ??
+                  (s.cardId ? (cardIdToAccountId.get(s.cardId) ?? null) : null)),
+              cardId: s.contactId ? null : (s.cardId ?? null),
+              paidByContactId: s.contactId ?? null,
+              memberChargeType: s.contactId
+                ? s.repay
+                  ? MemberChargeType.RECOVERABLE
+                  : MemberChargeType.GIFT
+                : MemberChargeType.NONE,
+              investmentId: acq.investmentId,
+              investmentAction: InvestmentAction.BUY,
+              goldForm: GoldForm.ORNAMENT,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+          if (s.contactId && s.repay) {
+            await tx.memberCharge.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                beneficiaryContactId: s.contactId,
+                amount: s.amount,
+                status: MemberChargeStatus.OUTSTANDING,
+                direction: MemberChargeDirection.USER_OWES,
+                sourceTransactionId: buy.id,
+                notes: `Gold — ${label}`,
+              },
+            });
+          }
+        }
       }
 
       if (acq.investmentId && data.name) {
@@ -717,6 +768,13 @@ export async function DELETE(
         { status: settled.status },
       );
     }
+    const funded = await blockingFundedCharge(acq.investmentId);
+    if (funded) {
+      return NextResponse.json(
+        { error: funded.message },
+        { status: funded.status },
+      );
+    }
 
     await prisma.$transaction(async (tx) => {
       // Give back anything this bill took in exchange — otherwise those
@@ -775,6 +833,11 @@ export async function DELETE(
       }
 
       if (acq.investmentId) {
+        // SetNull on the FK means these must go before their
+        // transactions, or the obligations outlive the bill.
+        await tx.memberCharge.deleteMany({
+          where: { sourceTransaction: { investmentId: acq.investmentId } },
+        });
         await tx.transaction.deleteMany({
           where: { investmentId: acq.investmentId },
         });

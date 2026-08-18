@@ -73,7 +73,7 @@ export function GoldAcquisitionForm() {
   const [ornaments, setOrnaments] = useState<OrnamentRow[]>([emptyOrnament()]);
   const [expanded, setExpanded] = useState<number | null>(0);
   const [splits, setSplits] = useState<TenderRow[]>([
-    { source: "", amount: "" },
+    { source: "", amount: "", repay: true },
   ]);
   const [exchanges, setExchanges] = useState<ExchangeRow[]>([]);
   // Until the user types an amount themselves, the single payment row
@@ -92,7 +92,7 @@ export function GoldAcquisitionForm() {
   );
   const { data: cardData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
 
-  const contacts = contactData?.members ?? [];
+  const contacts = useMemo(() => contactData?.members ?? [], [contactData]);
   const sources = useMemo(
     () => [
       // CARD-kind accounts are cards' companion ledgers — the card
@@ -111,6 +111,19 @@ export function GoldAcquisitionForm() {
       })),
     ],
     [accountData, cardData],
+  );
+  // Someone else settling part of the bill is a payment source too — it
+  // just moves none of our balances.
+  const tenderSources = useMemo(
+    () => [
+      ...sources,
+      ...contacts.map((c) => ({
+        value: `contact:${c.id}`,
+        label: c.name,
+        hint: "Paid by them",
+      })),
+    ],
+    [sources, contacts],
   );
 
   const lines = ornaments.map(lineOf);
@@ -143,9 +156,14 @@ export function GoldAcquisitionForm() {
     setSplits([{ ...splits[0], amount: want }]);
   }, [cashDue, kind, splits, tenderEdited]);
 
-  function splitSource(v: string): { accountId?: string; cardId?: string } {
+  function splitSource(v: string): {
+    accountId?: string;
+    cardId?: string;
+    contactId?: string;
+  } {
     if (v.startsWith("account:")) return { accountId: v.slice(8) };
     if (v.startsWith("card:")) return { cardId: v.slice(5) };
+    if (v.startsWith("contact:")) return { contactId: v.slice(8) };
     return {};
   }
 
@@ -234,6 +252,7 @@ export function GoldAcquisitionForm() {
                   .map((s) => ({
                     ...splitSource(s.source),
                     amount: Number(s.amount),
+                    repay: s.source.startsWith("contact:") ? s.repay : false,
                   }))
               : [],
           exchanges:
@@ -443,7 +462,7 @@ export function GoldAcquisitionForm() {
             setTenderEdited(true);
             setSplits(next);
           }}
-          sources={sources}
+          sources={tenderSources}
           target={cashDue}
         />
       )}

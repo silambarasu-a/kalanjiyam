@@ -1487,11 +1487,27 @@ const goldTenderSplitSchema = z
   .object({
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
+    /**
+     * A contact settled this slice of the bill for us. No account or card
+     * balance moves; whether we owe it back is `repay`.
+     */
+    contactId: z.string().uuid().optional().nullable(),
+    /**
+     * Only meaningful with `contactId`. True raises a USER_OWES charge so
+     * they show up under "You owe them"; false means they meant it as a
+     * gift and nothing is owed.
+     */
+    repay: z.boolean().default(true),
     amount: z.number().positive(),
   })
-  .refine((s) => !!s.accountId !== !!s.cardId, {
-    message: "Each payment row needs exactly one of accountId or cardId",
-  });
+  .refine(
+    (s) =>
+      [s.accountId, s.cardId, s.contactId].filter(Boolean).length === 1,
+    {
+      message:
+        "Each payment row needs exactly one source — an account, a card, or a contact",
+    },
+  );
 
 const goldAcquisitionBase = z.object({
   kind: z

@@ -8,7 +8,13 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { formatINR, cn } from "@/lib/utils";
 import { round2 } from "@/lib/gold";
 
-export type TenderRow = { source: string; amount: string };
+export type TenderRow = {
+  /** "account:<id>" | "card:<id>" | "contact:<id>" */
+  source: string;
+  amount: string;
+  /** Only used when the source is a contact: do we owe it back? */
+  repay: boolean;
+};
 
 /**
  * How the pieces you're KEEPING were paid for. A gold bill routinely goes
@@ -72,7 +78,9 @@ export function GoldTenderSplits({
             size="sm"
             variant="ghost"
             disabled={disabled}
-            onClick={() => onChange([...splits, { source: "", amount: "" }])}
+            onClick={() =>
+              onChange([...splits, { source: "", amount: "", repay: true }])
+            }
             className="h-7 gap-1 text-xs"
           >
             <Plus className="h-3 w-3" /> Add payment
@@ -80,41 +88,67 @@ export function GoldTenderSplits({
         </div>
       </div>
 
-      {splits.map((s, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <NativeSelect
-            value={s.source}
-            onChange={(v) =>
-              onChange(splits.map((r, idx) => (idx === i ? { ...r, source: v } : r)))
-            }
-            options={sources}
-            placeholder="Account or card"
-            className="flex-1"
-            disabled={disabled}
-          />
-          <AmountInput
-            value={s.amount}
-            onChange={(v) =>
-              onChange(splits.map((r, idx) => (idx === i ? { ...r, amount: v } : r)))
-            }
-            className="w-32"
-            disabled={disabled}
-          />
-          {splits.length > 1 && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              disabled={disabled}
-              onClick={() => onChange(splits.filter((_, idx) => idx !== i))}
-              aria-label="Remove payment"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-      ))}
+      {splits.map((s, i) => {
+        const byContact = s.source.startsWith("contact:");
+        const patch = (p: Partial<TenderRow>) =>
+          onChange(splits.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
+        return (
+          <div key={i} className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <NativeSelect
+                value={s.source}
+                onChange={(v) => patch({ source: v })}
+                options={sources}
+                searchable
+                placeholder="Account, card or contact"
+                className="flex-1"
+                disabled={disabled}
+              />
+              <AmountInput
+                value={s.amount}
+                onChange={(v) => patch({ amount: v })}
+                className="w-32"
+                disabled={disabled}
+              />
+              {splits.length > 1 && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  disabled={disabled}
+                  onClick={() => onChange(splits.filter((_, idx) => idx !== i))}
+                  aria-label="Remove payment"
+                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+
+            {/* A contact settling part of the bill moves none of our
+                balances. Whether it becomes a debt is the user's call. */}
+            {byContact && (
+              <label className="ml-1 flex cursor-pointer items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={s.repay}
+                  onChange={(e) => patch({ repay: e.target.checked })}
+                  disabled={disabled}
+                  className="mt-0.5 h-3.5 w-3.5 accent-current"
+                />
+                <span className="text-muted-foreground">
+                  I need to pay this back
+                  <span className="ml-1">
+                    {s.repay
+                      ? "— it'll show under \u201cYou owe them\u201d on their page."
+                      : "— unticked, it's recorded as their gift and nothing is owed."}
+                  </span>
+                </span>
+              </label>
+            )}
+          </div>
+        );
+      })}
 
       <div
         className={cn(

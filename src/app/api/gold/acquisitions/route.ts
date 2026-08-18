@@ -110,6 +110,9 @@ export async function POST(request: Request) {
 
     // Every contact referenced must live in this workspace.
     await assertWorkspaceContact(ctx.workspaceId, data.giftedByContactId);
+    for (const sp of data.splits) {
+      await assertWorkspaceContact(ctx.workspaceId, sp.contactId);
+    }
     for (const o of ornaments) {
       await assertWorkspaceContact(ctx.workspaceId, o.assignedContactId);
       await assertWorkspaceContact(ctx.workspaceId, o.boughtForContactId);
@@ -278,27 +281,57 @@ export async function POST(request: Request) {
       // so an all-on-behalf bill can't carry any. Checked rather than
       // asserted so a future validator change can't turn this into a crash.
       if (data.kind === "PURCHASE" && data.splits.length > 0 && investment) {
-        await tx.transaction.createMany({
-          data: data.splits.map((s, i) => ({
-            workspaceId: ctx.workspaceId,
-            type: TransactionType.INVESTMENT,
-            amount: s.amount,
-            description:
-              data.splits.length > 1
-                ? `Gold · ${data.name} (${i + 1}/${data.splits.length})`
-                : `Gold · ${data.name}`,
-            date: acquiredAt,
-            accountId:
-              s.accountId ??
-              (s.cardId ? (cardIdToAccountId.get(s.cardId) ?? null) : null),
-            cardId: s.cardId ?? null,
-            investmentId: investment.id,
-            investmentAction: InvestmentAction.BUY,
-            goldForm: GoldForm.ORNAMENT,
-            userId: ctx.userId,
-            createdByUserId: ctx.userId,
-          })),
-        });
+        // A loop rather than createMany because a contact-funded row also
+        // raises an obligation that has to point back at its transaction.
+        for (let i = 0; i < data.splits.length; i++) {
+          const s = data.splits[i];
+          const buy = await tx.transaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              type: TransactionType.INVESTMENT,
+              amount: s.amount,
+              description:
+                data.splits.length > 1
+                  ? `Gold · ${data.name} (${i + 1}/${data.splits.length})`
+                  : `Gold · ${data.name}`,
+              date: acquiredAt,
+              // A contact paying leaves every balance of ours untouched —
+              // that is the whole point of paidByContactId.
+              accountId: s.contactId
+                ? null
+                : (s.accountId ??
+                  (s.cardId ? (cardIdToAccountId.get(s.cardId) ?? null) : null)),
+              cardId: s.contactId ? null : (s.cardId ?? null),
+              paidByContactId: s.contactId ?? null,
+              memberChargeType: s.contactId
+                ? s.repay
+                  ? MemberChargeType.RECOVERABLE
+                  : MemberChargeType.GIFT
+                : MemberChargeType.NONE,
+              investmentId: investment.id,
+              investmentAction: InvestmentAction.BUY,
+              goldForm: GoldForm.ORNAMENT,
+              userId: ctx.userId,
+              createdByUserId: ctx.userId,
+            },
+          });
+
+          if (s.contactId && s.repay) {
+            await tx.memberCharge.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                beneficiaryContactId: s.contactId,
+                amount: s.amount,
+                status: MemberChargeStatus.OUTSTANDING,
+                // They put money in for us, so WE owe THEM — the mirror
+                // of the on-behalf ornaments below.
+                direction: MemberChargeDirection.USER_OWES,
+                sourceTransactionId: buy.id,
+                notes: `Gold — ${data.name}`,
+              },
+            });
+          }
+        }
       }
 
       // Each on-behalf piece becomes its own EXPENSE + recoverable split

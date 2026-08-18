@@ -109,7 +109,10 @@ export async function GET(
         where: {
           workspaceId: ctx.workspaceId,
           paidByContactId: id,
-          type: "EXPENSE",
+          // INVESTMENT as well as EXPENSE: a contact can settle part of a
+          // gold bill, which posts as an INVESTMENT/BUY against the
+          // holding rather than as an expense.
+          type: { in: ["EXPENSE", "INVESTMENT"] },
         },
         orderBy: { date: "desc" },
         take: 100,

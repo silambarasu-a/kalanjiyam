@@ -180,6 +180,41 @@ export function blockingSettledCharge(
 }
 
 /**
+ * Obligations raised because a contact funded part of a bill. Rewriting
+ * or dropping the bill would rewrite what they're owed, so a charge
+ * that's already been part-repaid blocks the edit — the same rule the
+ * on-behalf receivables follow.
+ */
+export async function blockingFundedCharge(
+  investmentId: string | null,
+): Promise<GoldRouteError | null> {
+  if (!investmentId) return null;
+  const charges = await prisma.memberCharge.findMany({
+    where: {
+      sourceTransaction: { investmentId, investmentAction: "BUY" },
+    },
+    select: {
+      settledAmount: true,
+      status: true,
+      beneficiaryContact: { select: { name: true } },
+    },
+  });
+  for (const c of charges) {
+    const settled = Number(c.settledAmount);
+    if (settled > 0 || c.status !== "OUTSTANDING") {
+      return {
+        status: 409,
+        message:
+          `You've already repaid ₹${settled.toFixed(2)} to ` +
+          `${c.beneficiaryContact?.name ?? "a contact"} for this bill. ` +
+          `Reverse that settlement before editing or deleting it.`,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Trade-in pieces that came from the user's own holdings must actually
  * be theirs, still held, and not somebody else's ornament.
  */
