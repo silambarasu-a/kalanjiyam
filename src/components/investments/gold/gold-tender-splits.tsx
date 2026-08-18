@@ -14,6 +14,8 @@ export type TenderRow = {
   amount: string;
   /** Only used when the source is a contact: do we owe it back? */
   repay: boolean;
+  /** Their contribution toward their own piece on this bill. */
+  towardTheirOwn: boolean;
 };
 
 /**
@@ -31,13 +33,16 @@ export function GoldTenderSplits({
   onChange,
   sources,
   target,
+  /** Contacts who have a piece bought for them on this bill. */
+  beneficiaryIds,
   disabled,
 }: {
   splits: TenderRow[];
   onChange: (next: TenderRow[]) => void;
   sources: { value: string; label: string; hint?: string }[];
-  /** Total of the ornaments being kept — what these rows must add up to. */
+  /** What these rows must add up to. */
   target: number;
+  beneficiaryIds: string[];
   disabled?: boolean;
 }) {
   const paid = splits.reduce((a, s) => a + (parseFloat(s.amount) || 0), 0);
@@ -79,7 +84,10 @@ export function GoldTenderSplits({
             variant="ghost"
             disabled={disabled}
             onClick={() =>
-              onChange([...splits, { source: "", amount: "", repay: true }])
+              onChange([
+                ...splits,
+                { source: "", amount: "", repay: true, towardTheirOwn: true },
+              ])
             }
             className="h-7 gap-1 text-xs"
           >
@@ -128,23 +136,50 @@ export function GoldTenderSplits({
             {/* A contact settling part of the bill moves none of our
                 balances. Whether it becomes a debt is the user's call. */}
             {byContact && (
-              <label className="ml-1 flex cursor-pointer items-start gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={s.repay}
-                  onChange={(e) => patch({ repay: e.target.checked })}
-                  disabled={disabled}
-                  className="mt-0.5 h-3.5 w-3.5 accent-current"
-                />
-                <span className="text-muted-foreground">
-                  I need to pay this back
-                  <span className="ml-1">
-                    {s.repay
-                      ? "— it'll show under \u201cYou owe them\u201d on their page."
-                      : "— unticked, it's recorded as their gift and nothing is owed."}
-                  </span>
-                </span>
-              </label>
+              <div className="ml-1 space-y-1">
+                {/* They have a piece on this bill, so their money is most
+                    likely their own share of it rather than a loan. */}
+                {beneficiaryIds.includes(s.source.slice(8)) && (
+                  <label className="flex cursor-pointer items-start gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={s.towardTheirOwn}
+                      onChange={(e) =>
+                        patch({ towardTheirOwn: e.target.checked })
+                      }
+                      disabled={disabled}
+                      className="mt-0.5 h-3.5 w-3.5 accent-current"
+                    />
+                    <span className="text-muted-foreground">
+                      This is their share of their own ornament
+                      <span className="ml-1">
+                        {s.towardTheirOwn
+                          ? "— it reduces what they owe you, rather than becoming a debt either way."
+                          : "— untick if the money wasn't for their own piece."}
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {!s.towardTheirOwn && (
+                  <label className="flex cursor-pointer items-start gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={s.repay}
+                      onChange={(e) => patch({ repay: e.target.checked })}
+                      disabled={disabled}
+                      className="mt-0.5 h-3.5 w-3.5 accent-current"
+                    />
+                    <span className="text-muted-foreground">
+                      I need to pay this back
+                      <span className="ml-1">
+                        {s.repay
+                          ? "— it'll show under \u201cYou owe them\u201d on their page."
+                          : "— unticked, it's recorded as their gift and nothing is owed."}
+                      </span>
+                    </span>
+                  </label>
+                )}
+              </div>
             )}
           </div>
         );

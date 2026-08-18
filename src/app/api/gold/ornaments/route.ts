@@ -29,6 +29,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const parsed = goldOrnamentListQuerySchema.safeParse({
       status: url.searchParams.get("status") ?? undefined,
+      scope: url.searchParams.get("scope") ?? undefined,
       contactId: url.searchParams.get("contactId") ?? undefined,
       acquisitionId: url.searchParams.get("acquisitionId") ?? undefined,
     });
@@ -44,11 +45,17 @@ export async function GET(request: Request) {
     // through the parent rather than on the ornament itself.
     const acquisitionScope = visibilityFilter(session, ctx.ownOnly);
 
-    const [ornaments, unItemisedCount] = await Promise.all([
+    const [ornaments, othersRows, unItemisedCount] = await Promise.all([
       prisma.goldOrnament.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           ...(q.status === "ALL" ? {} : { status: q.status }),
+          // A piece bought for a contact is their asset, not a holding.
+          ...(q.scope === "MINE"
+            ? { boughtForContactId: null }
+            : q.scope === "OTHERS"
+              ? { boughtForContactId: { not: null } }
+              : {}),
           ...(q.acquisitionId ? { acquisitionId: q.acquisitionId } : {}),
           ...(q.contactId
             ? {
@@ -80,6 +87,21 @@ export async function GET(request: Request) {
           },
         },
       }),
+      // Reported separately so the holdings list can drop these rows
+      // without losing the "owed to you" figure they drive.
+      prisma.goldOrnament.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          boughtForContactId: { not: null },
+          ...(Object.keys(acquisitionScope).length
+            ? { acquisition: acquisitionScope }
+            : {}),
+        },
+        select: {
+          id: true,
+          memberCharges: { select: { amount: true, settledAmount: true, status: true } },
+        },
+      }),
       prisma.investment.count({
         where: {
           workspaceId: ctx.workspaceId,
@@ -103,6 +125,21 @@ export async function GET(request: Request) {
         },
       })),
       unItemisedCount,
+      othersCount: othersRows.length,
+      owedToYou: Math.round(
+        othersRows.reduce(
+          (a, o) =>
+            a +
+            o.memberCharges.reduce(
+              (b, c) =>
+                c.status === "WRITTEN_OFF"
+                  ? b
+                  : b + Number(c.amount) - Number(c.settledAmount),
+              0,
+            ),
+          0,
+        ) * 100,
+      ) / 100,
     });
   } catch (e) {
     return err(e);

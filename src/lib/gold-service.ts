@@ -183,6 +183,8 @@ export type TenderRowInput = {
   accountId?: string | null;
   cardId?: string | null;
   contactId?: string | null;
+  /** Their contribution toward their own piece on this bill. */
+  towardTheirOwn?: boolean;
   amount: number;
 };
 
@@ -192,6 +194,12 @@ export type FundingChunk = {
   /** Index into the tender rows. */
   splitIndex: number;
   amount: number;
+  /**
+   * The beneficiary paid for this slice of their own piece. No obligation
+   * is raised for it in either direction — the money went straight from
+   * them to the shop, so it simply reduces what they still owe.
+   */
+  selfFunded: boolean;
 };
 
 /**
@@ -216,34 +224,61 @@ export type FundingChunk = {
  */
 export function allocateOnBehalfFunding(
   splits: TenderRowInput[],
-  onBehalf: Array<{ index: number; amount: number }>,
+  onBehalf: Array<{ index: number; amount: number; contactId?: string | null }>,
 ): FundingChunk[] {
   const remaining = splits.map((s) => round2(s.amount));
-  // Own money first; someone else's only if the bill needs it.
-  const order = [
-    ...splits.map((_, i) => i).filter((i) => !splits[i].contactId),
-    ...splits.map((_, i) => i).filter((i) => !!splits[i].contactId),
-  ];
+  const isSelf = (rowIdx: number, contactId?: string | null) =>
+    !!contactId &&
+    !!splits[rowIdx].towardTheirOwn &&
+    splits[rowIdx].contactId === contactId;
 
   const chunks: FundingChunk[] = [];
   for (const item of onBehalf) {
     let need = round2(item.amount);
-    // Prefer a single row that can cover the whole piece — one receivable
-    // reads far better than two fragments that add up. Own money still
-    // wins ties, since `order` puts account and card rows first.
-    const whole = order.find((i) => remaining[i] + 0.005 >= need);
+    // Their own contribution is drawn first: every rupee they put in is a
+    // rupee they no longer owe, so it must land on their piece and not on
+    // someone else's or on gold we're keeping.
+    const order = [
+      ...splits.map((_, i) => i).filter((i) => isSelf(i, item.contactId)),
+      ...splits
+        .map((_, i) => i)
+        .filter((i) => !isSelf(i, item.contactId) && !splits[i].contactId),
+      ...splits
+        .map((_, i) => i)
+        .filter((i) => !isSelf(i, item.contactId) && !!splits[i].contactId),
+    ];
+
+    const push = (i: number, amount: number) => {
+      chunks.push({
+        ornamentIndex: item.index,
+        splitIndex: i,
+        amount,
+        selfFunded: isSelf(i, item.contactId),
+      });
+      remaining[i] = round2(remaining[i] - amount);
+      need = round2(need - amount);
+    };
+
+    // Drain their own contribution first, then look for a single row that
+    // covers the rest — one receivable reads better than two fragments.
+    for (const i of order) {
+      if (need <= 0.005) break;
+      if (!isSelf(i, item.contactId) || remaining[i] <= 0.005) continue;
+      push(i, round2(Math.min(remaining[i], need)));
+    }
+    if (need <= 0.005) continue;
+
+    const whole = order.find(
+      (i) => !isSelf(i, item.contactId) && remaining[i] + 0.005 >= need,
+    );
     if (whole !== undefined) {
-      chunks.push({ ornamentIndex: item.index, splitIndex: whole, amount: need });
-      remaining[whole] = round2(remaining[whole] - need);
+      push(whole, need);
       continue;
     }
     for (const i of order) {
       if (need <= 0.005) break;
       if (remaining[i] <= 0.005) continue;
-      const take = round2(Math.min(remaining[i], need));
-      chunks.push({ ornamentIndex: item.index, splitIndex: i, amount: take });
-      remaining[i] = round2(remaining[i] - take);
-      need = round2(need - take);
+      push(i, round2(Math.min(remaining[i], need)));
     }
   }
   return chunks;

@@ -4,8 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { ArrowLeft, Gem, Receipt } from "lucide-react";
+import { ArrowLeft, Gem, Receipt, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
+import { toast } from "sonner";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { GoldBreakdown, type GoldStone } from "@/components/investments/gold-breakdown";
 import { GoldDisposeDialog } from "@/components/investments/gold/gold-dispose-dialog";
@@ -88,6 +90,27 @@ export function GoldOrnamentDetail({ ornamentId }: { ornamentId: string }) {
   }
 
   const { ornament: o, acquisition: acq, siblings } = data;
+
+  async function remove() {
+    const res = await fetch(`/api/gold/ornaments/${o.id}`, { method: "DELETE" });
+    const json = await res.json();
+    if (!res.ok) {
+      // A purchase's payment rows were entered to total the whole bill,
+      // so a line can only be dropped where they can be corrected too.
+      toast.error(json.error ?? "Couldn't delete this ornament", {
+        action: json.billId
+          ? {
+              label: "Open bill",
+              onClick: () => router.push(`/investments/gold/bills/${json.billId}`),
+            }
+          : undefined,
+      });
+      return;
+    }
+    toast.success("Ornament deleted");
+    router.push("/investments/gold");
+    router.refresh();
+  }
   const goldValue =
     o.lineTotal -
     o.wastageAmount -
@@ -133,11 +156,28 @@ export function GoldOrnamentDetail({ ornamentId }: { ornamentId: string }) {
             {o.quantity > 1 ? ` · ${o.quantity} pieces` : ""}
           </p>
         </div>
-        {o.status === "HELD" && !o.boughtForContact && (
-          <Button variant="outline" onClick={() => setDisposing(true)}>
-            Sell or gift away
-          </Button>
-        )}
+        <div className="flex shrink-0 gap-2">
+          {o.status === "HELD" && !o.boughtForContact && (
+            <Button variant="outline" onClick={() => setDisposing(true)}>
+              Sell or gift away
+            </Button>
+          )}
+          <ConfirmPopover
+            title="Delete this ornament?"
+            description={
+              acq.kind === "PURCHASE"
+                ? "It's on a bill, so its payment rows need correcting at the same time — you'll be sent there."
+                : "The piece and its record are removed."
+            }
+            confirmLabel="Delete"
+            onConfirm={remove}
+            trigger={
+              <Button variant="outline" className="gap-2 text-destructive">
+                <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+            }
+          />
+        </div>
       </div>
 
       {/* Whose it is. Assigned keeps it ours; bought-for makes it theirs

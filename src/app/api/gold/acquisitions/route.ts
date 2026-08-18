@@ -183,9 +183,12 @@ export async function POST(request: Request) {
     // Which payment row funded which receivable. Always succeeds — the
     // rows are already known to total the bill.
     const onBehalfNeeds = ornaments
-      .map((o, i) => ({ index: i, amount: lines[i].lineTotal, on: !!o.boughtForContactId }))
-      .filter((x) => x.on)
-      .map(({ index, amount }) => ({ index, amount }));
+      .map((o, i) => ({
+        index: i,
+        amount: lines[i].lineTotal,
+        contactId: o.boughtForContactId,
+      }))
+      .filter((x) => !!x.contactId);
     const fundingChunks = allocateOnBehalfFunding(data.splits, onBehalfNeeds);
     const splitRemaining = remainingPerSplit(data.splits, fundingChunks);
 
@@ -381,11 +384,18 @@ export async function POST(request: Request) {
             paidByContactId: row.contactId ?? null,
             goldForm: GoldForm.ORNAMENT,
             beneficiaryContactId: o.boughtForContactId,
-            memberChargeType: MemberChargeType.RECOVERABLE,
+            memberChargeType: chunk.selfFunded
+              ? MemberChargeType.NONE
+              : MemberChargeType.RECOVERABLE,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
           },
         });
+
+        // Their own money on their own piece: nothing is owed either
+        // way, so no charge and no recoverable split. The expense still
+        // exists so the piece has a cost record, tagged to them.
+        if (chunk.selfFunded) continue;
 
         const charge = await tx.memberCharge.create({
           data: {

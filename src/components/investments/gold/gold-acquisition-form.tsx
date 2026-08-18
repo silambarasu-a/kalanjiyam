@@ -73,7 +73,7 @@ export function GoldAcquisitionForm() {
   const [ornaments, setOrnaments] = useState<OrnamentRow[]>([emptyOrnament()]);
   const [expanded, setExpanded] = useState<number | null>(0);
   const [splits, setSplits] = useState<TenderRow[]>([
-    { source: "", amount: "", repay: true },
+    { source: "", amount: "", repay: true, towardTheirOwn: true },
   ]);
   const [exchanges, setExchanges] = useState<ExchangeRow[]>([]);
   // Until the user types an amount themselves, the single payment row
@@ -248,6 +248,8 @@ export function GoldAcquisitionForm() {
                     ...splitSource(s.source),
                     amount: Number(s.amount),
                     repay: s.source.startsWith("contact:") ? s.repay : false,
+                    towardTheirOwn:
+                      s.source.startsWith("contact:") && s.towardTheirOwn,
                   }))
               : [],
           exchanges:
@@ -456,6 +458,9 @@ export function GoldAcquisitionForm() {
           }}
           sources={tenderSources}
           target={cashDue}
+          beneficiaryIds={ornaments
+            .map((o) => o.boughtForContactId)
+            .filter(Boolean)}
         />
       )}
 

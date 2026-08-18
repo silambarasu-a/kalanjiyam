@@ -1479,7 +1479,18 @@ const goldTenderSplitSchema = z
      * gift and nothing is owed.
      */
     repay: z.boolean().default(true),
+    /**
+     * The contact is chipping in for THEIR OWN ornament on this bill.
+     * That money never became a debt in either direction — it just
+     * reduces what they still owe you, so the funded slice raises no
+     * charge at all. Anything left over falls back to `repay`.
+     */
+    towardTheirOwn: z.boolean().default(false),
     amount: z.number().positive(),
+  })
+  .refine((s) => !s.towardTheirOwn || !!s.contactId, {
+    message: "Only a contact's payment can go toward their own ornament",
+    path: ["towardTheirOwn"],
   })
   .refine(
     (s) =>
@@ -1666,6 +1677,12 @@ export const goldRevalueSchema = z.object({
 
 export const goldOrnamentListQuerySchema = z.object({
   status: z.enum(["HELD", "SOLD", "GIFTED_OUT", "EXCHANGED", "ALL"]).default("HELD"),
+  /**
+   * MINE excludes pieces bought for a contact — those are THEIR asset, so
+   * they don't belong in your holdings list. They stay reachable from the
+   * bill and from that contact's Gold tab.
+   */
+  scope: z.enum(["MINE", "OTHERS", "ALL"]).default("MINE"),
   contactId: z.string().uuid().optional().nullable(),
   acquisitionId: z.string().uuid().optional().nullable(),
 });

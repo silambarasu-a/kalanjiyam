@@ -365,9 +365,12 @@ export async function PATCH(
     const removed = acq.ornaments.filter((o) => !keptIds.has(o.id));
 
     const onBehalfNeeds = ornaments
-      .map((o, i) => ({ index: i, amount: lines[i].lineTotal, on: !!o.boughtForContactId }))
-      .filter((x) => x.on)
-      .map(({ index, amount }) => ({ index, amount }));
+      .map((o, i) => ({
+        index: i,
+        amount: lines[i].lineTotal,
+        contactId: o.boughtForContactId,
+      }))
+      .filter((x) => !!x.contactId);
     const fundingChunks = allocateOnBehalfFunding(splits, onBehalfNeeds);
     const splitRemaining = remainingPerSplit(splits, fundingChunks);
     const { expenseCategoryId } = await resolveGoldCategories(ctx.workspaceId);
@@ -526,11 +529,17 @@ export async function PATCH(
             paidByContactId: row.contactId ?? null,
             goldForm: GoldForm.ORNAMENT,
             beneficiaryContactId: o.boughtForContactId,
-            memberChargeType: MemberChargeType.RECOVERABLE,
+            memberChargeType: chunk.selfFunded
+              ? MemberChargeType.NONE
+              : MemberChargeType.RECOVERABLE,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
           },
         });
+        // Their own money on their own piece: nothing is owed either
+        // way, so no charge and no recoverable split.
+        if (chunk.selfFunded) continue;
+
         const charge = await tx.memberCharge.create({
           data: {
             workspaceId: ctx.workspaceId,

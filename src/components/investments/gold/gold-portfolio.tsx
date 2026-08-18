@@ -61,13 +61,18 @@ const STATUS_OPTIONS = [
  */
 export function GoldPortfolio() {
   const [status, setStatus] = useState("HELD");
+  // Pieces bought for a contact are THEIR asset — kept out of the
+  // holdings list entirely, reachable behind an explicit toggle.
+  const [scope, setScope] = useState<"MINE" | "OTHERS">("MINE");
   const [rate, setRate] = useState("");
   const [revaluing, setRevaluing] = useState(false);
 
   const { data, isLoading, mutate } = useSWR<{
     ornaments: GoldOrnamentRow[];
     unItemisedCount: number;
-  }>(`/api/gold/ornaments?status=${status}`, fetcher);
+    othersCount: number;
+    owedToYou: number;
+  }>(`/api/gold/ornaments?status=${status}&scope=${scope}`, fetcher);
 
   const ornaments = useMemo(() => data?.ornaments ?? [], [data]);
 
@@ -76,14 +81,8 @@ export function GoldPortfolio() {
     let fine = 0;
     let invested = 0;
     let realised = 0;
-    let owedToYou = 0;
     for (const o of ornaments) {
-      if (o.boughtForContact) {
-        if (o.memberCharge && o.memberCharge.status !== "WRITTEN_OFF") {
-          owedToYou += o.memberCharge.amount - o.memberCharge.settledAmount;
-        }
-        continue;
-      }
+      if (o.boughtForContact) continue;
       if (o.status === "HELD") {
         grams += o.netWeightGrams;
         fine += fineGrams(o.netWeightGrams, o.purity);
@@ -98,7 +97,7 @@ export function GoldPortfolio() {
         realised += o.realisedGain;
       }
     }
-    return { grams, fine, invested, realised, owedToYou };
+    return { grams, fine, invested, realised };
   }, [ornaments]);
 
   async function revalue() {
@@ -134,7 +133,9 @@ export function GoldPortfolio() {
             Gold &amp; jewellery
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every ornament individually, with the bill it came in on.
+            {scope === "OTHERS"
+              ? "Pieces you bought for other people. Theirs, not part of your holdings."
+              : "Every ornament individually, with the bill it came in on."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -189,7 +190,7 @@ export function GoldPortfolio() {
         />
         <Stat
           label="Owed to you"
-          value={formatINR(stats.owedToYou)}
+          value={formatINR(data?.owedToYou ?? 0)}
           sub="bought for others"
         />
       </div>
@@ -204,6 +205,17 @@ export function GoldPortfolio() {
         <span className="text-sm text-muted-foreground">
           {ornaments.length} ornament{ornaments.length === 1 ? "" : "s"}
         </span>
+        {(data?.othersCount ?? 0) > 0 && (
+          <Button
+            size="sm"
+            variant={scope === "OTHERS" ? "default" : "outline"}
+            onClick={() => setScope(scope === "OTHERS" ? "MINE" : "OTHERS")}
+          >
+            {scope === "OTHERS"
+              ? "Back to my gold"
+              : `Bought for others (${data?.othersCount})`}
+          </Button>
+        )}
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
