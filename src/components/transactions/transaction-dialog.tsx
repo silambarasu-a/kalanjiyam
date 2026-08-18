@@ -373,7 +373,6 @@ function DialogBody({
           editingInvestmentId={editingInvestmentId}
           premiumPayment={premiumPayment}
           onClose={onClose}
-          onSwitchToExpense={() => setType("EXPENSE")}
         />
       ) : type === "REFUND" ? (
         <RefundForm cards={cards} onClose={onClose} />
@@ -2831,7 +2830,6 @@ function InvestmentForm({
   editingInvestmentId = null,
   premiumPayment = null,
   onClose,
-  onSwitchToExpense,
 }: {
   accounts: Account[];
   cards: Card[];
@@ -2847,10 +2845,6 @@ function InvestmentForm({
    * the linked reminder is confirmed on submit. */
   premiumPayment?: PremiumPaymentContext | null;
   onClose: () => void;
-  /** Switch the parent dialog to the Expense tab. Used by the GOLD →
-   * ORNAMENTS warning to nudge users toward recording jewellery as
-   * expense (it shouldn't inflate net-worth). */
-  onSwitchToExpense?: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const { data: invData } = useSWR<{ investments: InvestmentHolding[] }>(
@@ -2893,6 +2887,10 @@ function InvestmentForm({
   const [creatingNew, setCreatingNew] = useState(defaultCreatingNew);
   // Pre-mint the txn id so receipt uploads hit S3 instantly.
   const investClientId = useInstantAttachmentOwnerId();
+  // Separate anchor for the HOLDING (not the seed transaction), so a
+  // split-tender buy — which creates many BUY rows and no single one to
+  // attach to — still has somewhere to hang its paperwork.
+  const investmentClientId = useInstantAttachmentOwnerId();
   const investUploaderRef = useRef<InstantAttachmentUploaderHandle | null>(null);
   const [newKind, setNewKind] = useState<
     "STOCK" | "MUTUAL_FUND" | "FD" | "RD" | "SIP" | "INSURANCE" | "GOLD" | "OTHER"
@@ -2949,9 +2947,13 @@ function InvestmentForm({
   );
   const insuranceVehicles = insuranceVehiclesData?.vehicles ?? [];
   // GOLD-specific
+  // Ornaments moved to /investments/gold, where one bill can carry many
+  // pieces. The ORNAMENTS branches below are kept so a legacy holding
+  // still rehydrates and edits correctly; it just isn't offered as a new
+  // choice any more.
   const [newGoldType, setNewGoldType] = useState<
     "ORNAMENTS" | "BAR" | "COIN" | "SGB" | "DIGITAL" | "ETF"
-  >("ORNAMENTS");
+  >("BAR");
   const [newGoldPurity, setNewGoldPurity] = useState("22K");
   const [newGoldWastage, setNewGoldWastage] = useState("");
   const [newGoldWastageMode, setNewGoldWastageMode] = useState<"RUPEE" | "PERCENT">("PERCENT");
@@ -3619,7 +3621,9 @@ function InvestmentForm({
             // Pass clientId on CREATE only — the seed BUY transaction
             // adopts this id so any receipts uploaded under it link
             // automatically. PATCH doesn't create a transaction.
-            ...(isEditing ? {} : { clientId: investClientId }),
+            ...(isEditing
+              ? {}
+              : { clientId: investClientId, investmentClientId }),
             ...insuranceExtraPayload,
             kind: newKind,
             name: newName.trim(),
@@ -4274,7 +4278,9 @@ function InvestmentForm({
                         setNewGoldType(next);
                       }}
                       options={[
-                        { value: "ORNAMENTS", label: "Ornaments / Jewellery" },
+                        ...(newGoldType === "ORNAMENTS"
+                          ? [{ value: "ORNAMENTS", label: "Ornaments / Jewellery" }]
+                          : []),
                         { value: "BAR", label: "Bar / Bullion" },
                         { value: "COIN", label: "Coin" },
                         { value: "SGB", label: "Sovereign Gold Bond" },
@@ -4301,24 +4307,23 @@ function InvestmentForm({
                   </div>
                 </label>
               </div>
-              {newGoldType === "ORNAMENTS" && (
-                <div className="rounded-md border border-amber-300 bg-amber-50/40 p-3 text-xs dark:border-amber-700 dark:bg-amber-950/20">
-                  <div className="font-medium">Ornaments are not investment-grade</div>
-                  <div className="mt-0.5 text-muted-foreground">
-                    Resale bleeds wastage + making — most households don&apos;t treat
-                    jewellery as an investment. Record this on the{" "}
-                    <button
-                      type="button"
-                      onClick={() => onSwitchToExpense?.()}
-                      className="underline"
-                    >
-                      Expense tab
-                    </button>{" "}
-                    under <strong>Gold/Jewellery</strong> instead so it reduces this
-                    month&apos;s cash without inflating net-worth.
-                  </div>
+              <div className="rounded-md border border-sky-300 bg-sky-50/40 p-3 text-xs dark:border-sky-700 dark:bg-sky-950/20">
+                <div className="font-medium">Buying ornaments?</div>
+                <div className="mt-0.5 text-muted-foreground">
+                  A jeweller bill usually covers several pieces, each with its
+                  own weight, purity and making charge.{" "}
+                  <Link
+                    href="/investments/gold/new"
+                    onClick={onClose}
+                    className="underline"
+                  >
+                    Add it in Gold &amp; jewellery
+                  </Link>{" "}
+                  to itemise them, link each to a contact, and keep the bill
+                  attached to every ornament on it. This form is for
+                  investment-grade gold — bars, coins, SGBs, ETFs.
                 </div>
-              )}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium">
@@ -5013,21 +5018,19 @@ function InvestmentForm({
         }
       />
 
-      {/* Single-account new-holding creations and existing-holding pays
-          both anchor receipts on the same `investClientId` via the API's
-          `clientId` plumbing. GOLD split-tender creates many BUY txns —
-          attaching to a single one isn't meaningful, so the receipts
-          orphan and the daily GC sweep cleans them up. */}
-      {!isGoldCreate && (
-        <InstantAttachmentUploader
-          ref={investUploaderRef}
-          ownerKind="TRANSACTION_RECEIPT"
-          ownerId={investClientId}
-          draft
-          maxFiles={5}
-          hint="Broker contract note, MF statement, etc. Uploads instantly to S3."
-        />
-      )}
+      {/* Single-account creations and existing-holding pays anchor on the
+          seed transaction via `clientId`. A split-tender buy has no single
+          transaction to attach to, so it anchors on the HOLDING instead —
+          which is why files there are INVESTMENT_DOCUMENTs. Either way
+          nothing orphans into the GC sweep. */}
+      <InstantAttachmentUploader
+        ref={investUploaderRef}
+        ownerKind={isGoldCreate ? "INVESTMENT_DOCUMENT" : "TRANSACTION_RECEIPT"}
+        ownerId={isGoldCreate ? investmentClientId : investClientId}
+        draft
+        maxFiles={5}
+        hint="Broker contract note, MF statement, etc. Uploads instantly to S3."
+      />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 

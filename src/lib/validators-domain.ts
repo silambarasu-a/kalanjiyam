@@ -1312,6 +1312,13 @@ const investmentCreateBase = z.object({
    *  (no splits) so receipts that were uploaded under this UUID link
    *  to the saved row without a follow-up round trip. */
   clientId: z.string().uuid().optional().nullable(),
+  /**
+   * Client-minted id for the INVESTMENT row itself (distinct from
+   * `clientId`, which the seed BUY transaction adopts). Gives a
+   * split-tender purchase a stable anchor for INVESTMENT_DOCUMENT
+   * uploads — N transactions, but exactly one holding to attach to.
+   */
+  investmentClientId: z.string().uuid().optional().nullable(),
 });
 
 export const investmentCreateSchema = investmentCreateBase.refine(
@@ -1334,6 +1341,250 @@ export const investmentTradeSchema = z.object({
   date: z.string(),
   accountId: z.string().uuid(),
   notes: z.string().trim().max(200).optional().nullable(),
+});
+
+/* ------------------ Gold ornaments, bills & disposals ------------------ */
+
+const chargeModeEnum = z.enum(["PERCENT", "RUPEE"]);
+
+/**
+ * Same shape as GoldStone in components/investments/gold-breakdown.tsx and
+ * as the legacy Investment.metadata.stones — so the backfill is a copy and
+ * <GoldBreakdown> renders stored rows unchanged.
+ */
+const goldStoneSchema = z.object({
+  kind: z.string().trim().max(40).optional().nullable(),
+  weight: z.number().nonnegative().max(10_000).default(0),
+  carats: z.number().nonnegative().max(100_000).optional().nullable(),
+  ratePerCt: z.number().nonnegative().max(10_000_000).optional().nullable(),
+  charge: z.number().nonnegative().max(100_000_000).default(0),
+});
+
+const goldOrnamentInputSchema = z
+  .object({
+    /** Present on PATCH for rows that already exist; absent means create. */
+    id: z.string().uuid().optional(),
+    name: z.string().trim().min(1).max(120),
+    itemType: z.string().trim().max(40).optional().nullable(),
+    quantity: z.number().int().positive().max(999).default(1),
+    purity: z.enum(["24K", "22K", "18K", "14K", "OTHER"]).optional().nullable(),
+    grossWeightGrams: z.number().nonnegative().max(100_000),
+    ratePerGram: z.number().nonnegative().max(1_000_000).default(0),
+    stones: z.array(goldStoneSchema).max(20).default([]),
+    wastageInput: z.string().trim().max(20).optional().nullable(),
+    wastageMode: chargeModeEnum.default("PERCENT"),
+    makingInput: z.string().trim().max(20).optional().nullable(),
+    makingMode: chargeModeEnum.default("PERCENT"),
+    cgstInput: z.string().trim().max(20).optional().nullable(),
+    cgstMode: chargeModeEnum.default("PERCENT"),
+    sgstInput: z.string().trim().max(20).optional().nullable(),
+    sgstMode: chargeModeEnum.default("PERCENT"),
+    roundOff: z.number().min(-10_000).max(10_000).default(0),
+    /**
+     * The client's figure. The server recomputes it with
+     * computeOrnamentLine() and 400s on a mismatch over ₹0.01 — never
+     * trust client arithmetic, and never silently disagree with the bill.
+     */
+    lineTotal: z.number().nonnegative().max(100_000_000),
+    /** Who wears it. The piece stays the workspace's asset. */
+    assignedContactId: z.string().uuid().optional().nullable(),
+    /** Bought for them: becomes THEIR asset plus an OWED_TO_USER charge. */
+    boughtForContactId: z.string().uuid().optional().nullable(),
+    /**
+     * Which single source funded the on-behalf EXPENSE. One source per
+     * on-behalf ornament: a tender row that straddled two contacts would
+     * have to mint a second MemberCharge for the same person on the same
+     * bill, which TransactionSplit's unique constraints forbid anyway.
+     */
+    onBehalfAccountId: z.string().uuid().optional().nullable(),
+    onBehalfCardId: z.string().uuid().optional().nullable(),
+    /** Market value on the acquisition date — lets a gift report a gain. */
+    declaredValue: z
+      .number()
+      .nonnegative()
+      .max(100_000_000)
+      .optional()
+      .nullable(),
+    /** Cost basis for OPENING_STOCK only; ignored for every other kind. */
+    openingCostBasis: z
+      .number()
+      .nonnegative()
+      .max(100_000_000)
+      .optional()
+      .nullable(),
+    notes: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine(
+    (o) =>
+      (o.stones ?? []).reduce((a, s) => a + s.weight, 0) <=
+      o.grossWeightGrams + 0.001,
+    { message: "Stone weight can't exceed the gross weight", path: ["stones"] },
+  )
+  .refine((o) => !o.boughtForContactId || !o.assignedContactId, {
+    message:
+      "An ornament bought for a contact is already theirs — leave 'assigned to' empty",
+    path: ["assignedContactId"],
+  })
+  .refine((o) => !(o.onBehalfAccountId && o.onBehalfCardId), {
+    message: "Pick either an account or a card, not both",
+    path: ["onBehalfAccountId"],
+  })
+  .refine(
+    (o) => !o.boughtForContactId || !!o.onBehalfAccountId || !!o.onBehalfCardId,
+    {
+      message: "Pick which account or card paid for this ornament",
+      path: ["onBehalfAccountId"],
+    },
+  );
+
+/** Derived, not hand-written, so the service layer can't drift from it. */
+export type GoldOrnamentInput = z.infer<typeof goldOrnamentInputSchema>;
+
+const goldTenderSplitSchema = z
+  .object({
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    amount: z.number().positive(),
+  })
+  .refine((s) => !!s.accountId !== !!s.cardId, {
+    message: "Each payment row needs exactly one of accountId or cardId",
+  });
+
+const goldAcquisitionBase = z.object({
+  kind: z
+    .enum(["PURCHASE", "GIFT_RECEIVED", "OPENING_STOCK"])
+    .default("PURCHASE"),
+  /** Becomes Investment.name — e.g. "Saravana Stores · 12 Jan bill". */
+  name: z.string().trim().min(1).max(120),
+  sellerName: z.string().trim().max(120).optional().nullable(),
+  billNumber: z.string().trim().max(60).optional().nullable(),
+  /** What the printed bill says. Reconciliation only. */
+  billTotal: z.number().nonnegative().max(100_000_000).optional().nullable(),
+  acquiredAt: z.string(),
+  giftedByContactId: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(1000).optional().nullable(),
+  ornaments: z.array(goldOrnamentInputSchema).min(1).max(30),
+  /**
+   * Tender for the ornaments the workspace is KEEPING. Must sum to the
+   * own-lines total; on-behalf lines are funded per-ornament instead.
+   */
+  splits: z.array(goldTenderSplitSchema).max(10).default([]),
+  /**
+   * Pre-minted acquisition id from the instant-upload flow — bill files
+   * are uploaded under GOLD_BILL/<clientId> before this row exists.
+   * Doubles as an idempotency key: a double submit hits the primary-key
+   * unique violation instead of creating a second bill.
+   */
+  clientId: z.string().uuid().optional().nullable(),
+});
+
+export const goldAcquisitionCreateSchema = goldAcquisitionBase
+  .refine((d) => d.kind !== "GIFT_RECEIVED" || !!d.giftedByContactId, {
+    message: "Pick who gifted this",
+    path: ["giftedByContactId"],
+  })
+  .refine((d) => d.kind === "PURCHASE" || d.splits.length === 0, {
+    message: "Gifts and opening stock have no payment",
+    path: ["splits"],
+  })
+  .refine(
+    (d) =>
+      d.kind === "PURCHASE" || d.ornaments.every((o) => !o.boughtForContactId),
+    {
+      message: "Only a purchase can include ornaments bought for someone else",
+      path: ["ornaments"],
+    },
+  )
+  .refine(
+    (d) => {
+      if (d.kind !== "PURCHASE") return true;
+      const own = d.ornaments
+        .filter((o) => !o.boughtForContactId)
+        .reduce((a, o) => a + o.lineTotal, 0);
+      const tender = d.splits.reduce((a, s) => a + s.amount, 0);
+      return Math.abs(tender - own) <= 0.01;
+    },
+    {
+      message: "Payment rows must add up to the ornaments you're keeping",
+      path: ["splits"],
+    },
+  )
+  .refine(
+    (d) =>
+      d.billTotal == null ||
+      Math.abs(
+        d.ornaments.reduce((a, o) => a + o.lineTotal, 0) - d.billTotal,
+      ) <= 1,
+    { message: "Line totals don't add up to the bill total", path: ["billTotal"] },
+  );
+
+/**
+ * Refines are lost by .partial(), so the PATCH route re-runs the sum
+ * checks in code — same arrangement as investmentUpdateSchema.
+ */
+export const goldAcquisitionUpdateSchema = goldAcquisitionBase
+  .partial()
+  .extend({ force: z.boolean().optional() });
+
+export const goldOrnamentUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  itemType: z.string().trim().max(40).optional().nullable(),
+  assignedContactId: z.string().uuid().optional().nullable(),
+  declaredValue: z
+    .number()
+    .nonnegative()
+    .max(100_000_000)
+    .optional()
+    .nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
+export const goldOrnamentDisposeSchema = z
+  .object({
+    kind: z.enum(["SOLD", "GIFTED"]),
+    date: z.string(),
+    amount: z.number().nonnegative().max(100_000_000).optional().nullable(),
+    /** Buyer (SOLD) or recipient (GIFTED). */
+    contactId: z.string().uuid().optional().nullable(),
+    accountId: z.string().uuid().optional().nullable(),
+    cardId: z.string().uuid().optional().nullable(),
+    notes: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine((d) => !(d.accountId && d.cardId), {
+    message: "Pick either an account or a card, not both",
+    path: ["accountId"],
+  })
+  .refine((d) => d.kind !== "SOLD" || (d.amount != null && d.amount > 0), {
+    message: "Enter what you sold it for",
+    path: ["amount"],
+  })
+  .refine((d) => d.kind !== "SOLD" || !!d.accountId || !!d.cardId, {
+    message: "Pick where the money landed",
+    path: ["accountId"],
+  })
+  .refine((d) => d.kind !== "GIFTED" || !!d.contactId, {
+    message: "Pick who you gifted it to",
+    path: ["contactId"],
+  })
+  .refine(
+    (d) => d.kind !== "GIFTED" || (!d.amount && !d.accountId && !d.cardId),
+    { message: "A gift moves no money", path: ["amount"] },
+  );
+
+export const goldRevalueSchema = z.object({
+  ratePerGram24K: z.number().positive().max(1_000_000),
+  /**
+   * Stones aren't gold. Carry them at cost so a diamond-heavy piece
+   * doesn't revalue as a 60% loss on the metal rate alone.
+   */
+  includeStonesAtCost: z.boolean().default(true),
+  valuedAt: z.string().optional().nullable(),
+});
+
+export const goldOrnamentListQuerySchema = z.object({
+  status: z.enum(["HELD", "SOLD", "GIFTED_OUT", "ALL"]).default("HELD"),
+  contactId: z.string().uuid().optional().nullable(),
+  acquisitionId: z.string().uuid().optional().nullable(),
 });
 
 export const reminderConfirmSchema = z.object({
@@ -1484,6 +1735,9 @@ const attachmentOwnerKindEnum = z.enum([
   "LIVESTOCK_BATCH_DOCUMENT",
   "LIVESTOCK_CONTRACT_DOCUMENT",
   "MEDICAL_RECORD_DOCUMENT",
+  "GOLD_BILL",
+  "GOLD_ORNAMENT",
+  "INVESTMENT_DOCUMENT",
 ]);
 
 export const attachmentUploadUrlSchema = z.object({

@@ -30,6 +30,10 @@ import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
 import { ContactStatement } from "@/components/contacts/contact-statement";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
 import { ContactAttachmentsPanel } from "@/components/contacts/contact-attachments-panel";
+import {
+  ContactGoldTab,
+  type ContactGoldRow,
+} from "@/components/contacts/contact-gold-tab";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -118,6 +122,10 @@ type Ledger = {
       parent: { id: string; name: string } | null;
     } | null;
   }[];
+  /** Gold this contact is tied to, in any of four roles. Money owed is
+   *  read from the linked MemberCharge, so this can't disagree with the
+   *  Charges tab. */
+  gold?: ContactGoldRow[];
 };
 type Account = {
   id: string;
@@ -341,6 +349,14 @@ export default function MemberLedgerDetail() {
               They paid for me
               <span className="ml-1 text-[10px] text-muted-foreground">
                 ({data.paidForMe?.length})
+              </span>
+            </TabsTrigger>
+          )}
+          {(data.gold?.length ?? 0) > 0 && (
+            <TabsTrigger value="gold">
+              Gold
+              <span className="ml-1 text-[10px] text-muted-foreground">
+                ({data.gold?.length})
               </span>
             </TabsTrigger>
           )}
@@ -784,6 +800,15 @@ export default function MemberLedgerDetail() {
                 </button>
               ))}
             </div>
+          </TabsContent>
+        )}
+
+        {(data.gold?.length ?? 0) > 0 && (
+          <TabsContent value="gold">
+            <ContactGoldTab
+              rows={data.gold!}
+              contactName={data.member.name}
+            />
           </TabsContent>
         )}
 

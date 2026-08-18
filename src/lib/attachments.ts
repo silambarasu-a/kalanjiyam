@@ -26,7 +26,10 @@ export type AttachmentOwnerKind =
   | "SUBSCRIPTION_DOCUMENT"
   | "LIVESTOCK_BATCH_DOCUMENT"
   | "LIVESTOCK_CONTRACT_DOCUMENT"
-  | "MEDICAL_RECORD_DOCUMENT";
+  | "MEDICAL_RECORD_DOCUMENT"
+  | "GOLD_BILL"
+  | "GOLD_ORNAMENT"
+  | "INVESTMENT_DOCUMENT";
 
 export type AttachmentPolicy = {
   /** S3 path segment for this owner kind. Stable; never rename. */
@@ -140,6 +143,33 @@ export const ATTACHMENT_POLICY: Record<AttachmentOwnerKind, AttachmentPolicy> = 
     maxMB: 25,
     // Health data — discharge summaries, lab reports, prescriptions.
     sensitive: true,
+  },
+  GOLD_BILL: {
+    // Owner is the GoldAcquisition, not the holding — that is what makes
+    // one invoice visible from every ornament on it, including bills
+    // where every piece was bought for someone else (no Investment row).
+    entityPath: "gold-bills",
+    feature: "investments",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    sensitive: false,
+  },
+  GOLD_ORNAMENT: {
+    // Per-piece papers: hallmark/BIS certificate, valuation, photo.
+    entityPath: "gold-ornaments",
+    feature: "investments",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 15,
+    sensitive: false,
+  },
+  INVESTMENT_DOCUMENT: {
+    // Owner is the Investment row, which gives split-tender buys a
+    // receipt anchor — N transactions, but one holding to hang files on.
+    entityPath: "investment-docs",
+    feature: "investments",
+    mime: ["application/pdf", "image/*"],
+    maxMB: 25,
+    sensitive: false,
   },
 };
 

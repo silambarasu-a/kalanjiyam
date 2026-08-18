@@ -22,7 +22,8 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const [charges, transfers, expenses, loans, paidForMe] = await Promise.all([
+    const [charges, transfers, expenses, loans, paidForMe, gold] =
+      await Promise.all([
       prisma.memberCharge.findMany({
         where: { workspaceId: ctx.workspaceId, beneficiaryContactId: id },
         orderBy: { createdAt: "desc" },
@@ -123,6 +124,46 @@ export async function GET(
               id: true,
               name: true,
               parent: { select: { id: true, name: true } },
+            },
+          },
+        },
+      }),
+      // Gold this contact is tied to, in any of four roles: they gifted
+      // it to us, it's ours but assigned to them, we bought it for them
+      // (a receivable), or it left us to them. Deliberately NOT gated by
+      // ownOnly — `members` isn't an ownership feature, so this route
+      // already reports every charge regardless of who created it.
+      prisma.goldOrnament.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          OR: [
+            { assignedContactId: id },
+            { boughtForContactId: id },
+            { disposalContactId: id },
+            { acquisition: { giftedByContactId: id } },
+          ],
+        },
+        orderBy: [
+          { acquisition: { acquiredAt: "desc" } },
+          { sortOrder: "asc" },
+        ],
+        include: {
+          acquisition: {
+            select: {
+              id: true,
+              kind: true,
+              sellerName: true,
+              billNumber: true,
+              acquiredAt: true,
+              giftedByContactId: true,
+            },
+          },
+          memberCharge: {
+            select: {
+              id: true,
+              amount: true,
+              settledAmount: true,
+              status: true,
             },
           },
         },
@@ -261,6 +302,49 @@ export async function GET(
               id: t.category.id,
               name: t.category.name,
               parent: t.category.parent,
+            }
+          : null,
+      })),
+      // `relation` is computed here rather than in the UI so the tab
+      // can't disagree with the query that selected these rows. Order
+      // matters: bought-for wins over assigned (they're mutually
+      // exclusive by validation, but a stale row shouldn't read as both),
+      // and a disposal to them describes the piece's end state.
+      gold: gold.map((o) => ({
+        id: o.id,
+        name: o.name,
+        itemType: o.itemType,
+        purity: o.purity,
+        quantity: o.quantity,
+        netWeightGrams: Number(o.netWeightGrams),
+        lineTotal: Number(o.lineTotal),
+        costBasis: Number(o.costBasis),
+        declaredValue: o.declaredValue == null ? null : Number(o.declaredValue),
+        status: o.status,
+        disposedAt: o.disposedAt?.toISOString() ?? null,
+        disposalKind: o.disposalKind,
+        disposalAmount:
+          o.disposalAmount == null ? null : Number(o.disposalAmount),
+        relation: o.boughtForContactId === id
+          ? "BOUGHT_FOR_THEM"
+          : o.disposalContactId === id
+            ? "GIVEN_TO_THEM"
+            : o.acquisition.giftedByContactId === id
+              ? "GIFTED_BY_THEM"
+              : "ASSIGNED",
+        acquisition: {
+          id: o.acquisition.id,
+          kind: o.acquisition.kind,
+          sellerName: o.acquisition.sellerName,
+          billNumber: o.acquisition.billNumber,
+          acquiredAt: o.acquisition.acquiredAt.toISOString(),
+        },
+        memberCharge: o.memberCharge
+          ? {
+              id: o.memberCharge.id,
+              amount: Number(o.memberCharge.amount),
+              settledAmount: Number(o.memberCharge.settledAmount),
+              status: o.memberCharge.status,
             }
           : null,
       })),

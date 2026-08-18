@@ -9,8 +9,9 @@ import {
   TrendingUp,
   ArrowUpRight,
   ArrowDownRight,
+  Gem,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { NavigatingCard } from "@/components/ui/navigating-card";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import { formatINR, formatDate, cn } from "@/lib/utils";
@@ -167,6 +168,12 @@ export default function InvestmentsPage() {
           >
             <TrendingUp className="h-4 w-4" /> Stocks portfolio
           </Link>
+          <Link
+            href="/investments/gold"
+            className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+          >
+            <Gem className="h-4 w-4" /> Gold &amp; jewellery
+          </Link>
           <Button
             onClick={() => openDialog("INVESTMENT", { defaultCreatingNew: true })}
             className="gap-2"
@@ -199,16 +206,28 @@ export default function InvestmentsPage() {
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {(["ALL", ...KIND_OPTIONS.map((k) => k.value)] as const).map((k) => (
-          <Button
-            key={k}
-            size="sm"
-            variant={kindFilter === k ? "default" : "outline"}
-            onClick={() => setKindFilter(k as typeof kindFilter)}
-          >
-            {k === "ALL" ? "All" : KIND_OPTIONS.find((o) => o.value === k)?.label ?? k}
-          </Button>
-        ))}
+        {(["ALL", ...KIND_OPTIONS.map((k) => k.value)] as const).map((k) =>
+          // Gold has its own space now: one row per ornament, not one card
+          // per bill. The chip navigates there rather than filtering here.
+          k === "GOLD" ? (
+            <Link
+              key={k}
+              href="/investments/gold"
+              className={buttonVariants({ size: "sm", variant: "outline" })}
+            >
+              Gold
+            </Link>
+          ) : (
+            <Button
+              key={k}
+              size="sm"
+              variant={kindFilter === k ? "default" : "outline"}
+              onClick={() => setKindFilter(k as typeof kindFilter)}
+            >
+              {k === "ALL" ? "All" : KIND_OPTIONS.find((o) => o.value === k)?.label ?? k}
+            </Button>
+          ),
+        )}
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -245,7 +264,11 @@ export default function InvestmentsPage() {
                   <div className="mt-0.5 text-xs text-muted-foreground truncate">
                     {i.institution ? `${i.institution} · ` : ""}
                     {i.symbol ? `${i.symbol} · ` : ""}
-                    {qtyDisplay ? `${qtyDisplay} ${isStock ? "shares" : "units"}` : ""}
+                    {qtyDisplay
+                      ? `${qtyDisplay} ${
+                          isStock ? "shares" : i.kind === "GOLD" ? "g" : "units"
+                        }`
+                      : ""}
                     {i.premiumFrequency ? ` · ${i.premiumFrequency} premium` : ""}
                   </div>
                   {isStock && row.isLive && (

@@ -135,6 +135,9 @@ export async function POST(request: Request) {
     const investment = await prisma.$transaction(async (tx) => {
       const inv = await tx.investment.create({
         data: {
+          // Adopt the client-minted holding id so documents uploaded
+          // against it before save resolve the moment this row exists.
+          ...(data.investmentClientId ? { id: data.investmentClientId } : {}),
           workspaceId: ctx.workspaceId,
           ownerUserId: ctx.userId,
           kind: data.kind as InvestmentKind,

@@ -266,6 +266,26 @@ enum GoldForm {
   JEWELLERY_MAKING
 }
 
+// How a set of ornaments entered the household. PURCHASE has a bill and
+// tender; GIFT_RECEIVED has a giver and zero cost basis; OPENING_STOCK is
+// already-owned / inherited gold with no bill, no payment, no transaction.
+enum GoldAcquisitionKind {
+  PURCHASE
+  GIFT_RECEIVED
+  OPENING_STOCK
+}
+
+enum GoldOrnamentStatus {
+  HELD
+  SOLD
+  GIFTED_OUT
+}
+
+enum GoldDisposalKind {
+  SOLD
+  GIFTED
+}
+
 enum NotificationKind {
   PREMIUM_DUE_SOON
   PREMIUM_OVERDUE
@@ -524,6 +544,7 @@ model User {
   uploadedAttachments       Attachment[]       @relation("AttachmentUploader")
   archivedAttachments       Attachment[]       @relation("AttachmentArchiver")
   editedCardStatements      CardStatement[]    @relation("CardStatementEditor")
+  goldAcquisitions          GoldAcquisition[]  @relation("GoldAcquisitionOwner")
 
   @@index([email])
 }
@@ -575,6 +596,8 @@ model Workspace {
   loans               Loan[]
   loanLedgerEntries   LoanLedgerEntry[]
   investments         Investment[]
+  goldAcquisitions    GoldAcquisition[]
+  goldOrnaments       GoldOrnament[]
   investmentReminders InvestmentReminder[]
   insuredMembers      InsuredMember[]
   insuranceClaims     InsuranceClaim[]
@@ -708,6 +731,14 @@ model Contact {
   vehiclesBought     Vehicle[]           @relation("VehicleDisposalBuyer")
   medicalRecords     MedicalRecord[]     @relation("MedicalRecordPatient")
   livestockContracts LivestockContract[] @relation("LivestockContractContact")
+
+  // Gold. Four distinct roles a contact can play against a piece: they
+  // gifted it to us, it's ours but assigned to them, we bought it for
+  // them (a receivable), or we sold/gifted it to them.
+  goldGiftsGiven       GoldAcquisition[] @relation("GoldGiftGiver")
+  goldAssigned         GoldOrnament[]    @relation("GoldOrnamentAssignee")
+  goldBoughtForThem    GoldOrnament[]    @relation("GoldOrnamentBeneficiary")
+  goldReceivedFromUser GoldOrnament[]    @relation("GoldOrnamentDisposalParty")
 
   @@index([workspaceId, active])
 }
@@ -1036,6 +1067,8 @@ model Transaction {
   // The leftover transfer created alongside this bulk-settlement, if the
   // contact paid more than the charges it cleared.
   leftoverTransfer        Transfer?                @relation("SettlementLeftoverTransfer")
+  // The gold ornament this INCOME row is the sale proceeds of.
+  goldOrnamentDisposal    GoldOrnament?            @relation("GoldOrnamentDisposal")
 
   @@index([workspaceId, date])
   @@index([workspaceId, categoryId])
@@ -1080,6 +1113,7 @@ model MemberCharge {
   lastSettlementAt     DateTime?
   notes                String?
   originSplit          TransactionSplit?        @relation("SplitCharge")
+  goldOrnament         GoldOrnament?            @relation("GoldOrnamentCharge")
   settlements          MemberChargeSettlement[]
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
@@ -1115,20 +1149,20 @@ model TransactionSplit {
 }
 
 model MemberChargeSettlement {
-  id            String       @id @default(uuid())
-  chargeId      String
-  charge        MemberCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
-  amount        Decimal      @db.Decimal(14, 2)
-  paidAt        DateTime
-  transactionId String?
-  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  id              String       @id @default(uuid())
+  chargeId        String
+  charge          MemberCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  amount          Decimal      @db.Decimal(14, 2)
+  paidAt          DateTime
+  transactionId   String?
+  transaction     Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   // True when this settlement was funded by drawing down the contact's
   // advance credit instead of moving cash. Such rows always have
   // transactionId = null; the flag distinguishes them from an audit-only
   // settlement (a real payment the user chose not to attach to an account).
-  fundedByAdvance Boolean    @default(false)
-  notes         String?
-  createdAt     DateTime     @default(now())
+  fundedByAdvance Boolean      @default(false)
+  notes           String?
+  createdAt       DateTime     @default(now())
 
   @@index([chargeId, paidAt])
   @@index([transactionId])
@@ -1214,32 +1248,32 @@ model Livestock {
 }
 
 model LivestockBatch {
-  id                String           @id @default(uuid())
+  id                String             @id @default(uuid())
   livestockId       String
-  livestock         Livestock        @relation(fields: [livestockId], references: [id], onDelete: Cascade)
+  livestock         Livestock          @relation(fields: [livestockId], references: [id], onDelete: Cascade)
   landId            String?
-  land              Land?            @relation(fields: [landId], references: [id], onDelete: SetNull)
+  land              Land?              @relation(fields: [landId], references: [id], onDelete: SetNull)
   name              String
   // Drives form / detail-page variant. Existing rows backfill to
   // DUAL_PURPOSE in the migration so nothing breaks.
-  productionType    ProductionType   @default(DUAL_PURPOSE)
+  productionType    ProductionType     @default(DUAL_PURPOSE)
   contractId        String?
   contract          LivestockContract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
   startDate         DateTime
   endDate           DateTime?
   expectedCycleDays Int?
-  initialCount      Int              @default(0)
-  currentCount      Int              @default(0)
+  initialCount      Int                @default(0)
+  currentCount      Int                @default(0)
   // Average weight per bird/animal at arrival; drives FCR + ADG math.
-  initialAvgWeight  Decimal?         @db.Decimal(8, 3)
+  initialAvgWeight  Decimal?           @db.Decimal(8, 3)
   // Optional grower targets — surfaced on the detail page as a goal
   // marker on the weight-gain chart.
-  targetWeight      Decimal?         @db.Decimal(8, 3)
-  targetFCR         Decimal?         @db.Decimal(5, 3)
+  targetWeight      Decimal?           @db.Decimal(8, 3)
+  targetFCR         Decimal?           @db.Decimal(5, 3)
   notes             String?
-  active            Boolean          @default(true)
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  active            Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   events       LivestockEvent[]
   feedLogs     FeedLog[]
@@ -1289,26 +1323,26 @@ model LivestockEvent {
 // herd of 8 named cows we do. Models like WeighingLog / MortalityLog
 // can reference either the batch (bulk events) or a specific animal.
 model LivestockAnimal {
-  id          String           @id @default(uuid())
-  batchId     String
-  batch       LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  tagNumber   String
-  name        String?
-  sex         AnimalSex        @default(UNKNOWN)
-  dob         DateTime?
-  breed       String?
-  color       String?
-  notes       String?
+  id        String         @id @default(uuid())
+  batchId   String
+  batch     LivestockBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  tagNumber String
+  name      String?
+  sex       AnimalSex      @default(UNKNOWN)
+  dob       DateTime?
+  breed     String?
+  color     String?
+  notes     String?
   // Flips to false on individual SALE / DEATH so the active herd view
   // stays clean while history is preserved.
-  active      Boolean          @default(true)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  active    Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
-  weighings   WeighingLog[]
-  mortality   MortalityLog[]
-  milkLogs    MilkLog[]
-  healthLogs  HealthLog[]
+  weighings  WeighingLog[]
+  mortality  MortalityLog[]
+  milkLogs   MilkLog[]
+  healthLogs HealthLog[]
 
   @@unique([batchId, tagNumber])
   @@index([batchId, active])
@@ -1320,20 +1354,20 @@ model LivestockAnimal {
 // industry-standard for broiler. Per-animal events set animalId and
 // usually sampleSize=1.
 model WeighingLog {
-  id          String           @id @default(uuid())
-  batchId     String
-  batch       LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  animalId    String?
-  animal      LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
-  phase       WeighingPhase
-  date        DateTime
-  sampleSize  Int              @default(1)
-  totalKg     Decimal          @db.Decimal(12, 3)
+  id         String           @id @default(uuid())
+  batchId    String
+  batch      LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId   String?
+  animal     LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  phase      WeighingPhase
+  date       DateTime
+  sampleSize Int              @default(1)
+  totalKg    Decimal          @db.Decimal(12, 3)
   // Denormalised = totalKg / sampleSize. Stored to keep the analytics
   // query fast and to survive sampleSize edits without a recompute.
-  avgKg       Decimal          @db.Decimal(8, 3)
-  notes       String?
-  createdAt   DateTime         @default(now())
+  avgKg      Decimal          @db.Decimal(8, 3)
+  notes      String?
+  createdAt  DateTime         @default(now())
 
   @@index([batchId, date])
   @@index([animalId, date])
@@ -1347,27 +1381,27 @@ model WeighingLog {
 // `animalId` is optional — populated only when the farmer records per-
 // cow yield (named dairy cows). Bulk dairy units skip it.
 model MilkLog {
-  id              String           @id @default(uuid())
-  batchId         String
-  batch           LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  animalId        String?
-  animal          LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
-  date            DateTime
+  id            String           @id @default(uuid())
+  batchId       String
+  batch         LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  animalId      String?
+  animal        LivestockAnimal? @relation(fields: [animalId], references: [id], onDelete: SetNull)
+  date          DateTime
   // Denormalised totals so the chart query is fast. `sessions` keeps the
   // per-session breakdown for the detail view.
-  totalLitres     Decimal          @db.Decimal(10, 3)
-  sessions        Json?
-  fatPct          Decimal?         @db.Decimal(4, 2)
-  snfPct          Decimal?         @db.Decimal(4, 2)
+  totalLitres   Decimal          @db.Decimal(10, 3)
+  sessions      Json?
+  fatPct        Decimal?         @db.Decimal(4, 2)
+  snfPct        Decimal?         @db.Decimal(4, 2)
   // Sold portion (litres) + price. The remainder is treated as home use.
-  soldLitres      Decimal?         @db.Decimal(10, 3)
-  ratePerLitre    Decimal?         @db.Decimal(8, 2)
+  soldLitres    Decimal?         @db.Decimal(10, 3)
+  ratePerLitre  Decimal?         @db.Decimal(8, 2)
   // Linked INCOME Transaction when sold + rate are both set. Nullable so
   // a production-only log (no sale yet) is still a valid row.
-  transactionId   String?          @unique
-  transaction     Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
-  notes           String?
-  createdAt       DateTime         @default(now())
+  transactionId String?          @unique
+  transaction   Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime         @default(now())
 
   @@index([batchId, date])
   @@index([animalId, date])
@@ -1406,20 +1440,20 @@ model HealthLog {
 // and `salePricePerEgg` are both set the API creates a linked INCOME
 // Transaction (kind=EGG_SALE) tagged to the batch. Mirrors MilkLog.
 model EggProductionLog {
-  id              String           @id @default(uuid())
+  id              String         @id @default(uuid())
   batchId         String
-  batch           LivestockBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch           LivestockBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   date            DateTime
   collected       Int
   grades          Json?
   broken          Int?
   // Sale columns — when both set, API creates an INCOME Transaction.
   sold            Int?
-  salePricePerEgg Decimal?         @db.Decimal(8, 2)
-  transactionId   String?          @unique
-  transaction     Transaction?     @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  salePricePerEgg Decimal?       @db.Decimal(8, 2)
+  transactionId   String?        @unique
+  transaction     Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   notes           String?
-  createdAt       DateTime         @default(now())
+  createdAt       DateTime       @default(now())
 
   @@index([batchId, date])
 }
@@ -1452,39 +1486,39 @@ model MortalityLog {
 // through the existing MemberCharge ledger; integratorName /
 // contractRef stay denormalised for fast list rendering.
 model LivestockContract {
-  id              String          @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id               String    @id @default(uuid())
+  workspaceId      String
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // Optional Contact link — present when the integrator was added to
   // the contacts book; nullable so the user can record a contract
   // before creating the Contact row.
-  contactId       String?
-  contact         Contact?        @relation("LivestockContractContact", fields: [contactId], references: [id], onDelete: SetNull)
-  integratorName  String
-  contractRef     String?
+  contactId        String?
+  contact          Contact?  @relation("LivestockContractContact", fields: [contactId], references: [id], onDelete: SetNull)
+  integratorName   String
+  contractRef      String?
   // Base growing charge in ₹ per kg of live weight lifted.
-  agreedRatePerKg Decimal         @db.Decimal(10, 2)
+  agreedRatePerKg  Decimal   @db.Decimal(10, 2)
   // Json array: [{ "maxFcr": 1.6, "bonusPerKg": 1.50 }, ...]
   // Lower FCR ranges typically pay more — bands evaluated in order,
   // first match wins. Empty array == no bonus structure.
-  fcrBonusBands   Json?
+  fcrBonusBands    Json?
   // Mortality % above which penalties kick in (e.g. 5.00 means "no
   // penalty up to 5%, then per-band penalties apply").
-  mortalityCap    Decimal?        @db.Decimal(5, 2)
+  mortalityCap     Decimal?  @db.Decimal(5, 2)
   // Json array: [{ "overByPct": 2, "deductPerKg": 1 }, ...]
   mortalityPenalty Json?
   // Free-form list of what the integrator supplies — DOC, FEED,
   // MEDICINE, VACCINES, TECH. Used only for UI surfacing on the
   // contract card; not validated by an enum so new supplies can be
   // added without a migration.
-  suppliesProvided String[]       @default([])
-  notes           String?
-  startedOn       DateTime
-  endedOn         DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  suppliesProvided String[]  @default([])
+  notes            String?
+  startedOn        DateTime
+  endedOn          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  batches         LivestockBatch[]
+  batches LivestockBatch[]
 
   @@index([workspaceId, startedOn])
   @@index([contactId])
@@ -1507,18 +1541,18 @@ model FeedLog {
 }
 
 model VaccinationLog {
-  id            String         @id @default(uuid())
+  id            String               @id @default(uuid())
   batchId       String
-  batch         LivestockBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch         LivestockBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
   vaccine       String
   date          DateTime
   nextDueDate   DateTime?
-  cost          Decimal?       @db.Decimal(12, 2)
+  cost          Decimal?             @db.Decimal(12, 2)
   notes         String?
-  transactionId String?        @unique
-  transaction   Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  transactionId String?              @unique
+  transaction   Transaction?         @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   reminders     InvestmentReminder[] @relation("ReminderVaccination")
-  createdAt     DateTime       @default(now())
+  createdAt     DateTime             @default(now())
 
   @@index([batchId, date])
 }
@@ -1645,41 +1679,41 @@ model SubscriptionSchedule {
 // ELECTRICITY we track meter readings and units consumed.
 //
 model UtilityProvider {
-  id                String                @id @default(uuid())
-  workspaceId       String
-  workspace         Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ownerUserId       String?
-  owner             User?                 @relation("UtilityProviderOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sharedWithUserIds String[]              @default([])
-  kind              UtilityKind
-  providerName      String
-  connectionNumber  String?
-  addressLine       String?
+  id                   String                @id @default(uuid())
+  workspaceId          String
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUserId          String?
+  owner                User?                 @relation("UtilityProviderOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds    String[]              @default([])
+  kind                 UtilityKind
+  providerName         String
+  connectionNumber     String?
+  addressLine          String?
   // Default payment source: exactly one of accountId or cardId
   // (Zod-enforced). Bills inherit this unless overridden at pay time.
-  accountId         String?
-  account           Account?              @relation("UtilityProviderAccount", fields: [accountId], references: [id], onDelete: SetNull)
-  cardId            String?
-  card              Card?                 @relation("UtilityProviderCard", fields: [cardId], references: [id], onDelete: SetNull)
-  autoPay           Boolean               @default(false)
+  accountId            String?
+  account              Account?              @relation("UtilityProviderAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  cardId               String?
+  card                 Card?                 @relation("UtilityProviderCard", fields: [cardId], references: [id], onDelete: SetNull)
+  autoPay              Boolean               @default(false)
   // Due-date basis. Exactly one applies (Zod/UI enforced):
   //   defaultDueDay   → a FIXED day-of-month (e.g. always the 20th).
   //   gracePeriodDays → N days AFTER the statement date (e.g. due 15 days
   //                     from the bill date). Takes precedence when set.
   // Neither set → a 15-day grace fallback.
-  defaultDueDay     Int?
-  gracePeriodDays   Int?
+  defaultDueDay        Int?
+  gracePeriodDays      Int?
   // Auto-pay lead time: pay this many days BEFORE the bill's due date
   // (0 = on the due date itself). Lets payment clear ahead of a deadline.
-  autoPayLeadDays   Int                   @default(0)
+  autoPayLeadDays      Int                   @default(0)
   // ── Recurrence ──────────────────────────────────────────────────
   // When `recurring`, the generate-bills cron creates a fresh UtilityBill
   // each `billingCycle` on `billingDay`, then advances `nextBillDate`.
   // FIXED providers generate at `defaultAmount` (autopay-eligible);
   // VARIABLE providers generate an `estimated` placeholder to be filled.
-  recurring         Boolean               @default(false)
-  billingCycle      UtilityBillCycle      @default(MONTHLY)
-  billingDay        Int?
+  recurring            Boolean               @default(false)
+  billingCycle         UtilityBillCycle      @default(MONTHLY)
+  billingDay           Int?
   // Real-world cadences drift. TN electricity is nominally bimonthly but
   // a bill can land after one month or after ten weeks, so a fixed grid
   // either mints phantom bills or misses real ones. When `cycleVaries`,
@@ -1688,29 +1722,29 @@ model UtilityProvider {
   //     for the bill") instead of creating a placeholder UtilityBill;
   //   • `nextBillDate` re-anchors off each REAL bill's date rather than
   //     marching on its own grid, so the two never drift apart.
-  cycleVaries       Boolean               @default(false)
-  amountMode        UtilityAmountMode     @default(VARIABLE)
-  defaultAmount     Decimal?              @db.Decimal(14, 2)
+  cycleVaries          Boolean               @default(false)
+  amountMode           UtilityAmountMode     @default(VARIABLE)
+  defaultAmount        Decimal?              @db.Decimal(14, 2)
   // Next date the generator should emit a bill for this provider. Null
   // when not recurring. Advanced by one cycle on each generation.
-  nextBillDate      DateTime?             @db.Date
+  nextBillDate         DateTime?             @db.Date
   // ── Prepaid ─────────────────────────────────────────────────────
   // Prepaid connections (JioAirFiber, mobile prepaid, prepaid DTH) are
   // paid UP FRONT and run on a validity clock instead of owing a
   // postpaid bill. `prepaid` providers never generate bills or autopay;
   // each recharge extends `validUntil` and re-points a single
   // UTILITY_RECHARGE_DUE reminder that warns before the plan expires.
-  prepaid           Boolean               @default(false)
+  prepaid              Boolean               @default(false)
   // Current validity expiry — the date the recharge lapses. Drives the
   // expiry reminder (reminder.dueDate == validUntil) and the card copy.
-  validUntil        DateTime?             @db.Date
+  validUntil           DateTime?             @db.Date
   // Typical plan validity in days — prefills the Recharge dialog.
   rechargeValidityDays Int?
   // Running advance balance. Increased by UTILITY_ADVANCE transactions;
   // decreased by UtilityBill.advanceApplied on Pay. Never negative.
-  advanceBalance    Decimal               @default(0) @db.Decimal(14, 2)
-  status            UtilityProviderStatus @default(ACTIVE)
-  notes             String?
+  advanceBalance       Decimal               @default(0) @db.Decimal(14, 2)
+  status               UtilityProviderStatus @default(ACTIVE)
+  notes                String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2000,15 +2034,164 @@ model Investment {
   renewedFrom             Investment?  @relation("InvestmentRenewal", fields: [renewedFromInvestmentId], references: [id], onDelete: SetNull)
   successors              Investment[] @relation("InvestmentRenewal")
 
-  transactions   Transaction[]
-  reminders      InvestmentReminder[] @relation("ReminderInvestment")
-  insuredMembers InsuredMember[]      @relation("InsuranceMembers")
-  claims         InsuranceClaim[]     @relation("InsuranceClaims")
+  transactions    Transaction[]
+  reminders       InvestmentReminder[] @relation("ReminderInvestment")
+  insuredMembers  InsuredMember[]      @relation("InsuranceMembers")
+  claims          InsuranceClaim[]     @relation("InsuranceClaims")
+  goldAcquisition GoldAcquisition?     @relation("GoldAcquisitionInvestment")
 
   @@index([workspaceId, kind, active])
   @@index([workspaceId, ownerUserId])
   @@index([vehicleId])
   @@index([renewedFromInvestmentId])
+}
+
+// One acquisition event: a jeweller bill, a gift received, or an
+// opening-stock entry. Deliberately NOT the same row as Investment — a
+// bill whose every line was bought for other people produces no
+// Investment at all, yet still needs the bill, its attachments, and its
+// ornaments. Attachments (ownerKind GOLD_BILL) anchor here, which is what
+// makes the bill reachable from EVERY ornament on it regardless of who
+// ends up owning each piece.
+model GoldAcquisition {
+  id          String              @id @default(uuid())
+  workspaceId String
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  kind        GoldAcquisitionKind @default(PURCHASE)
+
+  // The holding carrying the workspace's own share of this acquisition.
+  // Null when every ornament here belongs to a contact. SetNull (not
+  // Cascade) so deleting a holding never silently drops someone else's
+  // ornaments — the API refuses that delete anyway.
+  investmentId String?     @unique
+  investment   Investment? @relation("GoldAcquisitionInvestment", fields: [investmentId], references: [id], onDelete: SetNull)
+
+  // Ownership lives HERE, not on the ornaments — an on-behalf-only
+  // acquisition has no Investment to inherit visibility from.
+  ownerUserId       String?
+  ownerUser         User?    @relation("GoldAcquisitionOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sharedWithUserIds String[] @default([])
+
+  sellerName String?
+  billNumber String?
+  // What the printed bill says. Reconciliation only — the sum of the
+  // ornaments' lineTotal is the authoritative figure.
+  billTotal  Decimal? @db.Decimal(14, 2)
+  acquiredAt DateTime
+
+  // GIFT_RECEIVED only. One giver per gift event; two givers means two
+  // acquisitions.
+  giftedByContactId String?
+  giftedByContact   Contact? @relation("GoldGiftGiver", fields: [giftedByContactId], references: [id], onDelete: SetNull)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ornaments GoldOrnament[]
+
+  @@index([workspaceId, kind, acquiredAt])
+  @@index([workspaceId, ownerUserId])
+  @@index([giftedByContactId])
+}
+
+// One physical piece on an acquisition. Wastage / making / GST are PER
+// ORNAMENT because that is how a printed Indian gold bill itemises them —
+// nothing is pro-rated from a bill-level figure. roundOff is per-ornament
+// too (the UI puts the whole bill's round-off on the last line by
+// default) so the sum of lineTotal is exact with zero allocation logic.
+model GoldOrnament {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  acquisitionId String
+  acquisition   GoldAcquisition @relation(fields: [acquisitionId], references: [id], onDelete: Cascade)
+
+  name     String
+  // Free-form (Chain / Bangle / Ring / Studs). No enum — same reasoning
+  // as crop kinds: every household's jewellery box is different.
+  itemType String?
+  quantity Int     @default(1)
+  // "24K" / "22K" / "18K" / "14K" / "OTHER" — the vocabulary the legacy
+  // Investment.metadata already used, so the backfill is lossless.
+  // Numeric karat is derived by karatFactor() in src/lib/gold.ts.
+  purity   String?
+
+  grossWeightGrams Decimal @db.Decimal(10, 3)
+  stoneWeightGrams Decimal @default(0) @db.Decimal(10, 3)
+  netWeightGrams   Decimal @db.Decimal(10, 3)
+  ratePerGram      Decimal @default(0) @db.Decimal(14, 4)
+
+  // Each charge stores BOTH the resolved rupee amount and the user's raw
+  // input + mode, so re-opening the form shows "10.55%" instead of a
+  // reverse-engineered percentage. Mirrors the legacy metadata shape.
+  wastageAmount Decimal @default(0) @db.Decimal(14, 2)
+  wastageInput  String?
+  wastageMode   String? @default("PERCENT")
+  makingAmount  Decimal @default(0) @db.Decimal(14, 2)
+  makingInput   String?
+  makingMode    String? @default("PERCENT")
+  // GoldStone[] — { kind, weight, carats, ratePerCt, charge }. Same shape
+  // as the legacy metadata.stones and as GoldStone in
+  // src/components/investments/gold-breakdown.tsx, so <GoldBreakdown>
+  // renders it unchanged.
+  stones        Json?
+  cgstAmount    Decimal @default(0) @db.Decimal(14, 2)
+  cgstInput     String?
+  cgstMode      String? @default("PERCENT")
+  sgstAmount    Decimal @default(0) @db.Decimal(14, 2)
+  sgstInput     String?
+  sgstMode      String? @default("PERCENT")
+  roundOff      Decimal @default(0) @db.Decimal(10, 2)
+  // Server-recomputed from the components above and rejected if it
+  // disagrees with the client by more than ₹0.01.
+  lineTotal     Decimal @db.Decimal(14, 2)
+
+  // What the workspace actually invested in this piece: lineTotal for an
+  // own PURCHASE line, 0 for on-behalf and for GIFT_RECEIVED,
+  // user-entered for OPENING_STOCK. Realised gain measures against this.
+  costBasis     Decimal  @default(0) @db.Decimal(14, 2)
+  // Market value on the acquisition date. Lets a gifted-in piece report a
+  // gain without adding a rupee to "Invested".
+  declaredValue Decimal? @db.Decimal(14, 2)
+
+  // Who wears it. The piece is still the WORKSPACE's asset.
+  assignedContactId  String?
+  assignedContact    Contact?      @relation("GoldOrnamentAssignee", fields: [assignedContactId], references: [id], onDelete: SetNull)
+  // Bought on their behalf: the piece is THEIRS and the money is a
+  // receivable. Restrict — you cannot delete a contact who owns gold you
+  // are still owed for (MemberCharge.beneficiaryContactId is already
+  // Restrict, so this is consistent, not new).
+  boughtForContactId String?
+  boughtForContact   Contact?      @relation("GoldOrnamentBeneficiary", fields: [boughtForContactId], references: [id], onDelete: Restrict)
+  // The OWED_TO_USER charge this piece created. 1:1 by construction —
+  // one on-behalf ornament produces one EXPENSE, one split, one charge.
+  memberChargeId     String?       @unique
+  memberCharge       MemberCharge? @relation("GoldOrnamentCharge", fields: [memberChargeId], references: [id], onDelete: SetNull)
+
+  status                GoldOrnamentStatus @default(HELD)
+  disposedAt            DateTime?
+  disposalKind          GoldDisposalKind?
+  disposalAmount        Decimal?           @db.Decimal(14, 2)
+  disposalContactId     String?
+  disposalContact       Contact?           @relation("GoldOrnamentDisposalParty", fields: [disposalContactId], references: [id], onDelete: SetNull)
+  disposalTransactionId String?            @unique
+  disposalTransaction   Transaction?       @relation("GoldOrnamentDisposal", fields: [disposalTransactionId], references: [id], onDelete: SetNull)
+  // proceeds - costBasis, on SOLD only. Null on GIFTED_OUT: gifting
+  // realises nothing, the cost basis simply leaves the portfolio. This is
+  // deliberate — don't "fix" it into a booked loss.
+  realisedGain          Decimal?           @db.Decimal(14, 2)
+
+  notes     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, status])
+  @@index([acquisitionId, sortOrder])
+  @@index([workspaceId, assignedContactId])
+  @@index([workspaceId, boughtForContactId])
+  @@index([workspaceId, disposalContactId])
 }
 
 model StockWishlist {
@@ -2112,27 +2295,27 @@ model InsuredMember {
 }
 
 model InsuranceClaim {
-  id                String           @id @default(uuid())
-  workspaceId       String
-  workspace         Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  investmentId      String
-  investment        Investment       @relation("InsuranceClaims", fields: [investmentId], references: [id], onDelete: Cascade)
-  insuredMemberId   String?
-  insuredMember     InsuredMember?   @relation("ClaimInsuredMember", fields: [insuredMemberId], references: [id], onDelete: SetNull)
-  vehicleId         String?
-  vehicle           Vehicle?         @relation("VehicleClaims", fields: [vehicleId], references: [id], onDelete: SetNull)
-  medicalRecordId   String?          @unique
-  medicalRecord     MedicalRecord?   @relation("MedicalRecordClaim", fields: [medicalRecordId], references: [id], onDelete: SetNull)
-  claimNumber       String?
-  incidentDate      DateTime
-  filedAt           DateTime?
-  status            ClaimStatus      @default(FILED)
-  claimedAmount     Decimal?         @db.Decimal(14, 2)
-  approvedAmount    Decimal?         @db.Decimal(14, 2)
-  receivedAmount    Decimal?         @db.Decimal(14, 2)
-  notes             String?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  id              String         @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  investmentId    String
+  investment      Investment     @relation("InsuranceClaims", fields: [investmentId], references: [id], onDelete: Cascade)
+  insuredMemberId String?
+  insuredMember   InsuredMember? @relation("ClaimInsuredMember", fields: [insuredMemberId], references: [id], onDelete: SetNull)
+  vehicleId       String?
+  vehicle         Vehicle?       @relation("VehicleClaims", fields: [vehicleId], references: [id], onDelete: SetNull)
+  medicalRecordId String?        @unique
+  medicalRecord   MedicalRecord? @relation("MedicalRecordClaim", fields: [medicalRecordId], references: [id], onDelete: SetNull)
+  claimNumber     String?
+  incidentDate    DateTime
+  filedAt         DateTime?
+  status          ClaimStatus    @default(FILED)
+  claimedAmount   Decimal?       @db.Decimal(14, 2)
+  approvedAmount  Decimal?       @db.Decimal(14, 2)
+  receivedAmount  Decimal?       @db.Decimal(14, 2)
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   transactions Transaction[] @relation("TransactionClaim")
 
@@ -2310,6 +2493,14 @@ enum AttachmentOwnerKind {
   LIVESTOCK_BATCH_DOCUMENT
   LIVESTOCK_CONTRACT_DOCUMENT
   MEDICAL_RECORD_DOCUMENT
+  // The jeweller's invoice, owned by the GoldAcquisition so every
+  // ornament on that bill renders the same file set.
+  GOLD_BILL
+  // Per-piece papers: hallmark/BIS certificate, valuation, photo.
+  GOLD_ORNAMENT
+  // Generic investment paperwork, owned by the Investment row. Gives
+  // split-tender buys a receipt anchor (N transactions, one holding).
+  INVESTMENT_DOCUMENT
 }
 
 //

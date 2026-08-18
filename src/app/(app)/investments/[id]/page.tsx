@@ -61,6 +61,18 @@ export default async function InvestmentDetailPage({
   // instead of duplicating buy/sell tables here.
   if (inv.kind === "STOCK") redirect(`/investments/stocks/${inv.id}`);
 
+  // Same for an itemised gold holding: the bill page shows every ornament
+  // on it, the payments, and the shared invoice. This page can only show
+  // the rollup. Legacy gold with no bill yet falls through and renders
+  // here as before.
+  if (inv.kind === "GOLD") {
+    const bill = await prisma.goldAcquisition.findUnique({
+      where: { investmentId: inv.id },
+      select: { id: true },
+    });
+    if (bill) redirect(`/investments/gold/bills/${bill.id}`);
+  }
+
   const [transactions, reminders] = await Promise.all([
     prisma.transaction.findMany({
       where: { investmentId: id, workspaceId: inv.workspaceId },

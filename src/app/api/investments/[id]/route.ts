@@ -192,6 +192,27 @@ export async function PATCH(
     }
     const data = parsed.data;
 
+    // Gold holdings backed by an itemised bill are owned by the gold
+    // routes. The splits path below recomputes amount/quantity as
+    // `buys − sells`, but an itemised holding's figures come from its
+    // ornaments (own, still held) — letting this run would overwrite
+    // them with a different formula, and it can't touch the on-behalf
+    // expenses or receivables at all.
+    const goldBill = await prisma.goldAcquisition.findUnique({
+      where: { investmentId: id },
+      select: { id: true },
+    });
+    if (goldBill) {
+      return NextResponse.json(
+        {
+          error:
+            "This gold holding is itemised into ornaments. Edit it from its bill instead.",
+          billId: goldBill.id,
+        },
+        { status: 409 },
+      );
+    }
+
     // Day-window lock — anchored on the RECORD's `createdAt`, not the
     // investment's `startedAt`. For insurance policies in particular,
     // `startedAt` is the policy's real-life effective date (which can be
@@ -419,6 +440,24 @@ export async function DELETE(
     }
     if (!canModifyRecord(session, inv)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    // An itemised gold holding must be deleted through its bill. The FK
+    // is SetNull, so deleting from here would leave the ornaments alive
+    // and still counting grams with no holding behind them — and would
+    // strand any on-behalf expenses and receivables the bill created.
+    const goldBill = await prisma.goldAcquisition.findUnique({
+      where: { investmentId: id },
+      select: { id: true },
+    });
+    if (goldBill) {
+      return NextResponse.json(
+        {
+          error:
+            "This gold holding is itemised into ornaments. Delete it from its bill instead.",
+          billId: goldBill.id,
+        },
+        { status: 409 },
+      );
     }
     // Day-window lock for delete (matches PATCH). Anchored on
     // `createdAt`, and skipped entirely for INSURANCE policies (see PATCH

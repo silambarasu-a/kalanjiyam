@@ -122,6 +122,27 @@ export async function assertOwnerInWorkspace(
       });
       return !!row && row.workspaceId === workspaceId;
     }
+    case "GOLD_BILL": {
+      const row = await prisma.goldAcquisition.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
+    case "GOLD_ORNAMENT": {
+      const row = await prisma.goldOrnament.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
+    case "INVESTMENT_DOCUMENT": {
+      const row = await prisma.investment.findUnique({
+        where: { id: ownerId },
+        select: { workspaceId: true },
+      });
+      return !!row && row.workspaceId === workspaceId;
+    }
     default: {
       const exhaustive: never = ownerKind;
       void exhaustive;

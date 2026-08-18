@@ -55,6 +55,25 @@ export async function DELETE(
     if (!existing || existing.workspaceId !== ctx.workspaceId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    // GoldOrnament.boughtForContactId is Restrict — you can't delete a
+    // contact who owns gold you're still owed for. Caught here so the
+    // user gets the ornament names instead of an opaque 500 from P2003.
+    const ownedGold = await prisma.goldOrnament.findMany({
+      where: { workspaceId: ctx.workspaceId, boughtForContactId: id },
+      select: { name: true },
+      take: 5,
+    });
+    if (ownedGold.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            `${existing.name} owns gold you bought for them ` +
+            `(${ownedGold.map((o) => o.name).join(", ")}). ` +
+            `Settle or remove those ornaments before deleting the contact.`,
+        },
+        { status: 409 },
+      );
+    }
     await prisma.$transaction(async (tx) => {
       await archiveAttachmentsForOwner({
         workspaceId: ctx.workspaceId,
