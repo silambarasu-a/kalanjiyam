@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { Plus, Loader2 } from "lucide-react";
@@ -76,6 +76,10 @@ export function GoldAcquisitionForm() {
     { source: "", amount: "" },
   ]);
   const [exchanges, setExchanges] = useState<ExchangeRow[]>([]);
+  // Until the user types an amount themselves, the single payment row
+  // follows the balance due. Without this, entering payments and THEN
+  // adding a trade-in silently leaves the row overstated by the credit.
+  const [tenderEdited, setTenderEdited] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const { data: contactData } = useSWR<{ members: Contact[] }>(
@@ -131,6 +135,14 @@ export function GoldAcquisitionForm() {
   // keep their full value.
   const cashDue = round2(ownTotal - exchangeCredit);
 
+  useEffect(() => {
+    if (tenderEdited || kind !== "PURCHASE" || splits.length !== 1) return;
+    const want = cashDue > 0 ? String(cashDue) : "";
+    if (splits[0].amount === want) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- payment row tracks the derived balance until hand-edited
+    setSplits([{ ...splits[0], amount: want }]);
+  }, [cashDue, kind, splits, tenderEdited]);
+
   function splitSource(v: string): { accountId?: string; cardId?: string } {
     if (v.startsWith("account:")) return { accountId: v.slice(8) };
     if (v.startsWith("card:")) return { cardId: v.slice(5) };
@@ -145,6 +157,22 @@ export function GoldAcquisitionForm() {
     if (ornaments.some((o) => !o.name.trim())) {
       toast.error("Every ornament needs a name");
       return;
+    }
+    if (kind === "PURCHASE" && ownTotal > 0) {
+      const tender = round2(
+        splits
+          .filter((s) => s.source && parseFloat(s.amount) > 0)
+          .reduce((a, s) => a + Number(s.amount), 0),
+      );
+      const gap = round2(tender - cashDue);
+      if (Math.abs(gap) > 0.01) {
+        toast.error(
+          exchangeCredit > 0
+            ? `After the ${formatINR(exchangeCredit)} old-gold credit, ${formatINR(cashDue)} is left to pay — your payment rows total ${formatINR(tender)}.`
+            : `Payment rows total ${formatINR(tender)} but ${formatINR(cashDue)} is due.`,
+        );
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -411,7 +439,10 @@ export function GoldAcquisitionForm() {
       {kind === "PURCHASE" && ownTotal > 0 && (
         <GoldTenderSplits
           splits={splits}
-          onChange={setSplits}
+          onChange={(next) => {
+            setTenderEdited(true);
+            setSplits(next);
+          }}
           sources={sources}
           target={cashDue}
         />

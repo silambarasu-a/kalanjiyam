@@ -1,11 +1,12 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { Plus, X, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { AmountInput } from "@/components/ui/amount-input";
 import { formatINR, cn } from "@/lib/utils";
+import { round2 } from "@/lib/gold";
 
 export type TenderRow = { source: string; amount: string };
 
@@ -40,16 +41,43 @@ export function GoldTenderSplits({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <Label className="text-sm font-medium">Paid from</Label>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={disabled}
-          onClick={() => onChange([...splits, { source: "", amount: "" }])}
-          className="h-7 gap-1 text-xs"
-        >
-          <Plus className="h-3 w-3" /> Add payment
-        </Button>
+        <div className="flex items-center gap-1">
+          {Math.abs(remaining) > 0.01 && splits.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={disabled}
+              onClick={() => {
+                // Put the whole outstanding balance on the last row —
+                // the common case is one payment source, and after a
+                // trade-in the amount is rarely a round number.
+                const last = splits.length - 1;
+                const current = parseFloat(splits[last].amount) || 0;
+                onChange(
+                  splits.map((r, i) =>
+                    i === last
+                      ? { ...r, amount: String(round2(current + remaining)) }
+                      : r,
+                  ),
+                );
+              }}
+              className="h-7 gap-1 text-xs"
+            >
+              <Wand2 className="h-3 w-3" /> Fill remaining
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={disabled}
+            onClick={() => onChange([...splits, { source: "", amount: "" }])}
+            className="h-7 gap-1 text-xs"
+          >
+            <Plus className="h-3 w-3" /> Add payment
+          </Button>
+        </div>
       </div>
 
       {splits.map((s, i) => (
@@ -98,10 +126,10 @@ export function GoldTenderSplits({
       >
         <span>
           {Math.abs(remaining) <= 0.01
-            ? "Payments match the ornaments you're keeping"
+            ? `Payments match the ${formatINR(target)} due`
             : remaining > 0
-              ? "Still to allocate"
-              : "Over-allocated"}
+              ? `Still to allocate (of ${formatINR(target)} due)`
+              : `Over-allocated — only ${formatINR(target)} is due`}
         </span>
         <span className="font-semibold">
           {Math.abs(remaining) <= 0.01

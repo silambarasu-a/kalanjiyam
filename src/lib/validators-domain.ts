@@ -1347,6 +1347,11 @@ export const investmentTradeSchema = z.object({
 
 const chargeModeEnum = z.enum(["PERCENT", "RUPEE"]);
 
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+/** Rupees for a validation message — no dependency on the UI formatter. */
+const inr = (n: number) =>
+  `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 /**
  * Same shape as GoldStone in components/investments/gold-breakdown.tsx and
  * as the legacy Investment.metadata.stones — so the backfill is a copy and
@@ -1544,39 +1549,46 @@ export const goldAcquisitionCreateSchema = goldAcquisitionBase
     message: "Only a purchase can take old gold in exchange",
     path: ["exchanges"],
   })
-  .refine(
-    (d) => {
-      if (d.kind !== "PURCHASE") return true;
-      const own = d.ornaments
+  // superRefine rather than refine so the message can name the actual
+  // shortfall. "They don't add up" is useless when the fix is "change
+  // this row to ₹1,11,920".
+  .superRefine((d, ctx) => {
+    if (d.kind !== "PURCHASE") return;
+    const own = round2(
+      d.ornaments
         .filter((o) => !o.boughtForContactId)
-        .reduce((a, o) => a + o.lineTotal, 0);
-      const credit = d.exchanges.reduce((a, e) => a + e.creditAmount, 0);
-      return credit <= own + 0.01;
-    },
-    {
-      message:
-        "The old gold is worth more than the pieces you're keeping. Record the surplus as a separate sale instead.",
-      path: ["exchanges"],
-    },
-  )
-  .refine(
-    (d) => {
-      if (d.kind !== "PURCHASE") return true;
-      const own = d.ornaments
-        .filter((o) => !o.boughtForContactId)
-        .reduce((a, o) => a + o.lineTotal, 0);
-      const credit = d.exchanges.reduce((a, e) => a + e.creditAmount, 0);
-      const tender = d.splits.reduce((a, s) => a + s.amount, 0);
-      // Exchange credit is tender too, so payments only need to cover
-      // the balance after the trade-in.
-      return Math.abs(tender + credit - own) <= 0.01;
-    },
-    {
-      message:
-        "Payments plus the old-gold credit must add up to the ornaments you're keeping",
-      path: ["splits"],
-    },
-  )
+        .reduce((a, o) => a + o.lineTotal, 0),
+    );
+    const credit = round2(d.exchanges.reduce((a, e) => a + e.creditAmount, 0));
+    const tender = round2(d.splits.reduce((a, s) => a + s.amount, 0));
+
+    if (credit > own + 0.01) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["exchanges"],
+        message:
+          `The old gold is credited at ${inr(credit)} but the pieces you're ` +
+          `keeping only come to ${inr(own)}. Record the surplus as a separate ` +
+          `sale instead of a trade-in.`,
+      });
+      return;
+    }
+
+    const due = round2(own - credit);
+    if (Math.abs(tender - due) > 0.01) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["splits"],
+        message:
+          credit > 0
+            ? `After the ${inr(credit)} old-gold credit, ${inr(due)} is left to pay, ` +
+              `but the payment rows total ${inr(tender)}. ` +
+              `${tender > due ? "Reduce them by" : "Add another"} ${inr(Math.abs(tender - due))}.`
+            : `The ornaments you're keeping come to ${inr(due)}, but the payment ` +
+              `rows total ${inr(tender)}.`,
+      });
+    }
+  })
   .refine(
     (d) =>
       d.billTotal == null ||
