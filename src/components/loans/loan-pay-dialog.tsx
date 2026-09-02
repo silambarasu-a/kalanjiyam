@@ -24,6 +24,7 @@ import {
   cyclesPerYear,
   type LoanFrequency,
 } from "@/lib/loan-math";
+import { isEmiPrepayment } from "@/lib/loan-accrual";
 import { TIMING } from "@/lib/timing";
 import { fetcher } from "@/lib/swr-fetcher";
 
@@ -110,6 +111,7 @@ export function LoanPayDialog({
     timeAware: boolean;
     anchor: string | null;
     days: number | null;
+    cycleDays: number | null;
     interest: number;
     gst: number;
     payoff?: number;
@@ -144,9 +146,19 @@ export function LoanPayDialog({
     ) / 100,
   );
   const newOutstanding = Math.max(0, (loan?.outstanding ?? 0) - suggestedPrincipal);
-  // Same policy as the server: the tenure stays, the instalment shrinks.
+  // Same policy as the server: only a prepayment re-amortizes — the tenure
+  // stays, the instalment shrinks. A scheduled EMI payment leaves the
+  // instalment alone, so no "New EMI" row is previewed for it.
+  const prepaying = isEmiPrepayment({
+    amount: amt,
+    emiAmount: loan?.emiAmount ?? null,
+    cyclesCovered:
+      accrual?.days != null && accrual.cycleDays
+        ? accrual.days / accrual.cycleDays
+        : 1,
+  });
   const newEmi =
-    accrual?.timeAware && accrual.remainingCycles && newOutstanding > 0
+    prepaying && accrual?.timeAware && accrual.remainingCycles && newOutstanding > 0
       ? calculateEMI(
           newOutstanding,
           loan?.interestRate ?? 0,

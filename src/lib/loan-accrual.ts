@@ -201,6 +201,32 @@ export function remainingCycles(
 }
 
 /**
+ * Whether a payment prepays principal — pays materially more than the
+ * instalment(s) the elapsed cycles cover. Only such a payment may re-amortize
+ * the EMI. A scheduled on-time payment must leave the instalment untouched:
+ * real loans rarely sit exactly on the formula's curve (bank-quoted EMIs are
+ * rounded, `isExisting` loans carry a hand-entered outstanding, and maturityAt
+ * need not land on the due-date grid), so an unconditional recompute after
+ * every payment made the EMI drift — paying one ordinary 18,211 EMI rewrote
+ * the next one to a different number.
+ *
+ * `cyclesCovered` is the elapsed cycles the payment settles (the accrual's
+ * `fraction`), so a two-cycle catch-up of 2×EMI is not mistaken for a
+ * prepayment. A null/zero `emiAmount` counts as prepaying so the first payment
+ * on a loan with no instalment on file can put one there. 1% tolerance absorbs
+ * rupee rounding on a hand-entered EMI.
+ */
+export function isEmiPrepayment(args: {
+  amount: number;
+  emiAmount: number | null;
+  cyclesCovered?: number;
+}): boolean {
+  if (args.emiAmount == null || args.emiAmount <= 0) return true;
+  const cycles = Math.max(1, Math.round(args.cyclesCovered ?? 1));
+  return args.amount > args.emiAmount * cycles * 1.01;
+}
+
+/**
  * The EMI that clears `outstanding` by maturity with the tenure unchanged.
  * Returns null when the loan has no schedule to re-amortize (no rate, no
  * maturity, nothing left owing), so callers can leave `emiAmount` untouched.

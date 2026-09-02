@@ -14,7 +14,11 @@ import {
   splitPayment,
   type LoanFrequency,
 } from "@/lib/loan-math";
-import { applyPaymentBankStyle, recalculatedEmi } from "@/lib/loan-accrual";
+import {
+  applyPaymentBankStyle,
+  isEmiPrepayment,
+  recalculatedEmi,
+} from "@/lib/loan-accrual";
 import { classifyLoanTxn } from "@/lib/loan-direction";
 import { checkTransactionEditAllowed } from "@/lib/transaction-edit-lock";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
@@ -680,11 +684,18 @@ const body = await request.json();
           const wasForeclosed =
             !full.loan.active && full.loan.foreclosedAt != null;
           const willClose = finalOutstanding === 0;
-          // The instalment tracks the balance, so a corrected amount has to
-          // re-amortize what's left — otherwise the loan keeps the EMI derived
-          // from the wrong figure.
+          // Re-amortize only when a prepayment is involved on either side of
+          // the correction — that's the only kind of payment that moves the
+          // EMI in the first place (see `isEmiPrepayment`). Correcting an
+          // ordinary instalment's amount or date must not rewrite it.
+          const emiOnFile = full.loan.emiAmount
+            ? Number(full.loan.emiAmount)
+            : null;
           const restoredEmi =
-            full.loan.source !== "CARD_EMI" && full.loan.repaymentMode === "EMI"
+            full.loan.source !== "CARD_EMI" &&
+            full.loan.repaymentMode === "EMI" &&
+            (isEmiPrepayment({ amount: oldAmount, emiAmount: emiOnFile }) ||
+              isEmiPrepayment({ amount: newAmount, emiAmount: emiOnFile }))
               ? recalculatedEmi({
                   outstanding: finalOutstanding,
                   annualRate: rate,
@@ -1066,9 +1077,16 @@ export async function DELETE(
           !t.loan.active && t.loan.foreclosedAt != null;
         // Undo the EMI recalculation this payment triggered. Restoring the
         // balance without restoring the instalment would leave the loan quoting
-        // an EMI sized for a principal reduction that no longer exists.
+        // an EMI sized for a principal reduction that no longer exists. Only a
+        // prepayment triggered one (see `isEmiPrepayment`), so deleting an
+        // ordinary EMI payment leaves the instalment untouched.
         const restoredEmi =
-          t.loan.source !== "CARD_EMI" && t.loan.repaymentMode === "EMI"
+          t.loan.source !== "CARD_EMI" &&
+          t.loan.repaymentMode === "EMI" &&
+          isEmiPrepayment({
+            amount: Number(t.amount),
+            emiAmount: t.loan.emiAmount ? Number(t.loan.emiAmount) : null,
+          })
             ? recalculatedEmi({
                 outstanding: newOutstanding,
                 annualRate: t.loan.interestRate ? Number(t.loan.interestRate) : 0,

@@ -602,6 +602,7 @@ model Workspace {
   goldAcquisitions    GoldAcquisition[]
   goldOrnaments       GoldOrnament[]
   goldExchangeItems   GoldExchangeItem[]
+  goldTenderRows      GoldTenderRow[]
   investmentReminders InvestmentReminder[]
   insuredMembers      InsuredMember[]
   insuranceClaims     InsuranceClaim[]
@@ -744,6 +745,8 @@ model Contact {
   goldBoughtForThem    GoldOrnament[]    @relation("GoldOrnamentBeneficiary")
   goldReceivedFromUser GoldOrnament[]    @relation("GoldOrnamentDisposalParty")
 
+  goldTenderRows GoldTenderRow[] @relation("GoldTenderContact")
+
   @@index([workspaceId, active])
 }
 
@@ -785,6 +788,7 @@ model Account {
   cardStatements   CardStatement[]
   subscriptions    Subscription[]    @relation("SubscriptionAccount")
   utilityProviders UtilityProvider[] @relation("UtilityProviderAccount")
+  goldTenderRows   GoldTenderRow[]   @relation("GoldTenderAccount")
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
@@ -821,6 +825,7 @@ model Card {
   emiLoans         Loan[]            @relation("CardEmiLoan")
   subscriptions    Subscription[]    @relation("SubscriptionCard")
   utilityProviders UtilityProvider[] @relation("UtilityProviderCard")
+  goldTenderRows   GoldTenderRow[]   @relation("GoldTenderCard")
 
   @@index([workspaceId, active])
   @@index([workspaceId, ownerUserId])
@@ -2105,8 +2110,9 @@ model GoldAcquisition {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ornaments GoldOrnament[]
-  exchanges GoldExchangeItem[]
+  ornaments  GoldOrnament[]
+  exchanges  GoldExchangeItem[]
+  tenderRows GoldTenderRow[]
 
   @@index([workspaceId, kind, acquiredAt])
   @@index([workspaceId, ownerUserId])
@@ -2215,6 +2221,46 @@ model GoldOrnament {
   @@index([workspaceId, assignedContactId])
   @@index([workspaceId, boughtForContactId])
   @@index([workspaceId, disposalContactId])
+}
+
+// How the bill was settled: one row per payment source.
+//
+// These are persisted rather than inferred from the transactions they
+// produce, because the inference is lossy — a row fully consumed by
+// pieces bought for other people posts no BUY at all, so it would vanish
+// from the record and reappear as a different allocation on the next
+// edit. Storing them keeps an edit faithful to what the user typed.
+model GoldTenderRow {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  acquisitionId String
+  acquisition   GoldAcquisition @relation(fields: [acquisitionId], references: [id], onDelete: Cascade)
+
+  // Exactly one of these three is set.
+  accountId String?
+  account   Account? @relation("GoldTenderAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  cardId    String?
+  card      Card?    @relation("GoldTenderCard", fields: [cardId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation("GoldTenderContact", fields: [contactId], references: [id], onDelete: SetNull)
+
+  amount         Decimal @db.Decimal(14, 2)
+  /**
+   * Contact rows only: do we owe it back?
+   */
+  repay          Boolean @default(true)
+  /**
+   * Contact rows only: their share of their own piece on this bill.
+   */
+  towardTheirOwn Boolean @default(false)
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([acquisitionId, sortOrder])
+  @@index([workspaceId])
 }
 
 // Old gold handed to the jeweller as part-payment for this bill.

@@ -5,6 +5,7 @@ import { splitPayment, type LoanFrequency } from "@/lib/loan-math";
 import {
   accrualAnchor,
   applyPaymentBankStyle,
+  isEmiPrepayment,
   recalculatedEmi,
   remainingCycles,
 } from "@/lib/loan-accrual";
@@ -133,8 +134,15 @@ export async function GET(
       // What it would take to clear the loan on this date.
       payoff: Math.round((outstanding + split.interest + split.gst) * 100) / 100,
       emiAmount: loan.emiAmount ? Number(loan.emiAmount) : null,
+      // Mirrors /pay: only a prepayment re-amortizes; a scheduled EMI keeps
+      // the instalment on file.
       newEmi:
-        newOutstanding > 0
+        newOutstanding > 0 &&
+        isEmiPrepayment({
+          amount,
+          emiAmount: loan.emiAmount ? Number(loan.emiAmount) : null,
+          cyclesCovered: split.fraction,
+        })
           ? recalculatedEmi({
               outstanding: newOutstanding,
               annualRate,

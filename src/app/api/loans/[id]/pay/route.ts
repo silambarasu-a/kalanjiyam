@@ -8,6 +8,7 @@ import { splitPayment, advanceByCycle, type LoanFrequency } from "@/lib/loan-mat
 import {
   accrualAnchor,
   applyPaymentBankStyle,
+  isEmiPrepayment,
   recalculatedEmi,
 } from "@/lib/loan-accrual";
 import { nextStatementDueDate } from "@/lib/statement-period";
@@ -259,15 +260,22 @@ export async function POST(
       return advanceByCycle(new Date(loan.nextDueDate), frequency, 1);
     })();
 
-    // Re-amortize what's left over the cycles remaining to maturity, so the
-    // instalment reflects the balance the borrower actually carries. A
+    // Re-amortize what's left over the cycles remaining to maturity — but only
+    // when this payment actually prepaid principal (see `isEmiPrepayment`). A
     // part-prepayment keeps the tenure and lowers the EMI (the chosen policy);
+    // a scheduled EMI payment leaves the instalment exactly as it was.
     // `tenure` and `maturityAt` are never touched here.
     //
     // Skipped for CARD_EMI — the issuer's instalment is contractual, and
     // rewriting it would misreport the statement.
     const newEmi =
-      !isCardEmi && newOutstanding > 0
+      !isCardEmi &&
+      newOutstanding > 0 &&
+      isEmiPrepayment({
+        amount: data.amount,
+        emiAmount: loan.emiAmount ? Number(loan.emiAmount) : null,
+        cyclesCovered: accrued?.fraction ?? 1,
+      })
         ? recalculatedEmi({
             outstanding: newOutstanding,
             annualRate,

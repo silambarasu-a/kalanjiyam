@@ -6,7 +6,11 @@ import {
 import { deleteObject, isS3Configured } from "@/lib/s3";
 import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 
-type Tx = PrismaClient | Prisma.TransactionClient;
+// The union is widened to the transaction client alone: comparing it
+// against the full PrismaClient blows Prisma 7's instantiation depth on a
+// schema this size. Same dodge as transaction-edit-lock.ts. `prisma`
+// itself satisfies every method this file uses.
+type Tx = Prisma.TransactionClient;
 
 /**
  * Soft-archive every live Attachment row that points at the given
@@ -30,7 +34,7 @@ export async function archiveAttachmentsForOwner(args: {
   userId: string | null;
   tx?: Tx;
 }): Promise<{ archived: number; s3Failed: string[] }> {
-  const db: Tx = args.tx ?? prisma;
+  const db: Tx = args.tx ?? (prisma as unknown as Tx);
 
   const live = await db.attachment.findMany({
     where: {

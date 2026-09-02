@@ -46,6 +46,72 @@ const KIND_OPTIONS = [
 
 type Kind = "PURCHASE" | "GIFT_RECEIVED" | "OPENING_STOCK";
 
+type GoldBillPayload = {
+  acquisition: {
+    kind: Kind;
+    sellerName: string | null;
+    billNumber: string | null;
+    billTotal: number | null;
+    acquiredAt: string;
+    notes: string | null;
+    investmentName: string | null;
+    giftedByContact: { id: string; name: string } | null;
+  };
+  /** The API's serialised rows, read once to seed the form's own
+   *  string-based state. */
+  ornaments: Array<{
+    id: string;
+    name: string;
+    itemType: string | null;
+    quantity: number;
+    purity: string | null;
+    grossWeightGrams: number;
+    ratePerGram: number;
+    stones:
+      | Array<{
+          kind?: string | null;
+          weight?: number;
+          carats?: number | null;
+          ratePerCt?: number | null;
+          charge?: number;
+        }>
+      | null;
+    wastageInput: string | null;
+    wastageMode: string | null;
+    makingInput: string | null;
+    makingMode: string | null;
+    cgstInput: string | null;
+    cgstMode: string | null;
+    sgstInput: string | null;
+    sgstMode: string | null;
+    roundOff: number;
+    costBasis: number;
+    declaredValue: number | null;
+    assignedContact: { id: string; name: string } | null;
+    boughtForContact: { id: string; name: string } | null;
+    notes: string | null;
+  }>;
+  exchanges?: Array<{
+    ornamentId: string | null;
+    name: string;
+    grossWeightGrams: number;
+    purity: string | null;
+    ratePerGram: number;
+    deductionPercent: number | null;
+    creditAmount: number;
+    assumedCostBasis: number;
+    notes: string | null;
+  }>;
+  tenderRows?: Array<{
+    accountId: string | null;
+    cardId: string | null;
+    contactId: string | null;
+    amount: number;
+    repay: boolean;
+    towardTheirOwn: boolean;
+  }>;
+};
+
 /**
  * One acquisition event: a jeweller bill with several ornaments on it, a
  * gift, or already-owned gold being recorded for the first time.
@@ -55,7 +121,8 @@ type Kind = "PURCHASE" | "GIFT_RECEIVED" | "OPENING_STOCK";
  * invoice ends up visible from every ornament on it, and a double submit
  * collides on the primary key instead of creating a second bill.
  */
-export function GoldAcquisitionForm() {
+export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
+  const isEditing = !!billId;
   const router = useRouter();
   const acquisitionId = useInstantAttachmentOwnerId();
   const uploaderRef = useRef<InstantAttachmentUploaderHandle>(null);
@@ -81,6 +148,96 @@ export function GoldAcquisitionForm() {
   // adding a trade-in silently leaves the row overstated by the credit.
   const [tenderEdited, setTenderEdited] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Edit mode: everything typed originally comes back, including the
+  // payment rows — which is why they're persisted rather than inferred.
+  const { data: bill } = useSWR<GoldBillPayload>(
+    billId ? `/api/gold/acquisitions/${billId}` : null,
+    fetcher,
+  );
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    if (!bill || hydrated) return;
+    const a = bill.acquisition;
+    setKind(a.kind);
+    setName(a.investmentName ?? a.sellerName ?? "");
+    setSellerName(a.sellerName ?? "");
+    setBillNumber(a.billNumber ?? "");
+    setBillTotal(a.billTotal != null ? String(a.billTotal) : "");
+    setAcquiredAt(a.acquiredAt.slice(0, 10));
+    setGiftedByContactId(a.giftedByContact?.id ?? "");
+    setNotes(a.notes ?? "");
+    setOrnaments(
+      bill.ornaments.map((o) => ({
+        id: o.id,
+        name: o.name,
+        itemType: o.itemType ?? "",
+        quantity: String(o.quantity),
+        purity: o.purity ?? "22K",
+        grossWeightGrams: String(o.grossWeightGrams),
+        ratePerGram: String(o.ratePerGram),
+        stones: (o.stones ?? []).map((st) => ({
+          kind: st.kind ?? "",
+          weight: String(st.weight ?? ""),
+          carats: st.carats != null ? String(st.carats) : "",
+          ratePerCt: st.ratePerCt != null ? String(st.ratePerCt) : "",
+          charge: String(st.charge ?? ""),
+        })),
+        wastageInput: o.wastageInput ?? "",
+        wastageMode: (o.wastageMode as "PERCENT" | "RUPEE") ?? "PERCENT",
+        makingInput: o.makingInput ?? "",
+        makingMode: (o.makingMode as "PERCENT" | "RUPEE") ?? "PERCENT",
+        cgstInput: o.cgstInput ?? "",
+        cgstMode: (o.cgstMode as "PERCENT" | "RUPEE") ?? "PERCENT",
+        sgstInput: o.sgstInput ?? "",
+        sgstMode: (o.sgstMode as "PERCENT" | "RUPEE") ?? "PERCENT",
+        roundOff: o.roundOff ? String(o.roundOff) : "",
+        assignedContactId: o.assignedContact?.id ?? "",
+        boughtForContactId: o.boughtForContact?.id ?? "",
+        declaredValue: o.declaredValue != null ? String(o.declaredValue) : "",
+        openingCostBasis: o.costBasis ? String(o.costBasis) : "",
+        notes: o.notes ?? "",
+      })),
+    );
+    setExchanges(
+      (bill.exchanges ?? []).map((e) => ({
+        ornamentId: e.ornamentId ?? "",
+        name: e.name,
+        grossWeightGrams: String(e.grossWeightGrams),
+        purity: e.purity ?? "22K",
+        ratePerGram: String(e.ratePerGram),
+        deductionPercent:
+          e.deductionPercent != null ? String(e.deductionPercent) : "",
+        creditAmount: String(e.creditAmount),
+        assumedCostBasis: e.assumedCostBasis
+          ? String(e.assumedCostBasis)
+          : "",
+        notes: e.notes ?? "",
+      })),
+    );
+    const rows = bill.tenderRows ?? [];
+    setSplits(
+      rows.length
+        ? rows.map((r) => ({
+            source: r.accountId
+              ? `account:${r.accountId}`
+              : r.cardId
+                ? `card:${r.cardId}`
+                : r.contactId
+                  ? `contact:${r.contactId}`
+                  : "",
+            amount: String(r.amount),
+            repay: r.repay,
+            towardTheirOwn: r.towardTheirOwn,
+          }))
+        : [{ source: "", amount: "", repay: true, towardTheirOwn: true }],
+    );
+    // Rows came from the record, so they're already correct — don't let
+    // the auto-fill effect rewrite them.
+    setTenderEdited(true);
+    setExpanded(null);
+    setHydrated(true);
+  }, [bill, hydrated]);
 
   const { data: contactData } = useSWR<{ members: Contact[] }>(
     "/api/contacts",
@@ -195,11 +352,13 @@ export function GoldAcquisitionForm() {
     }
     setSaving(true);
     try {
-      const res = await fetch("/api/gold/acquisitions", {
-        method: "POST",
+      const res = await fetch(
+        isEditing ? `/api/gold/acquisitions/${billId}` : "/api/gold/acquisitions",
+        {
+        method: isEditing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clientId: acquisitionId,
+          ...(isEditing ? {} : { clientId: acquisitionId }),
           kind,
           name: name.trim(),
           sellerName: sellerName.trim() || null,
@@ -209,6 +368,7 @@ export function GoldAcquisitionForm() {
           giftedByContactId: giftedByContactId || null,
           notes: notes.trim() || null,
           ornaments: ornaments.map((o, i) => ({
+            ...(o.id ? { id: o.id } : {}),
             name: o.name.trim(),
             itemType: o.itemType.trim() || null,
             quantity: Number(o.quantity) || 1,
@@ -274,14 +434,15 @@ export function GoldAcquisitionForm() {
                   }))
               : [],
         }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error ?? "Couldn't save this bill");
         return;
       }
-      toast.success("Gold bill saved");
-      router.push("/investments/gold");
+      toast.success(isEditing ? "Bill updated" : "Gold bill saved");
+      router.push(isEditing ? `/investments/gold/bills/${billId}` : "/investments/gold");
       router.refresh();
     } finally {
       setSaving(false);
@@ -289,8 +450,8 @@ export function GoldAcquisitionForm() {
   }
 
   async function cancel() {
-    await uploaderRef.current?.discardAll();
-    router.push("/investments/gold");
+    if (!isEditing) await uploaderRef.current?.discardAll();
+    router.push(isEditing ? `/investments/gold/bills/${billId}` : "/investments/gold");
   }
 
   return (
@@ -493,7 +654,7 @@ export function GoldAcquisitionForm() {
         </Button>
         <Button type="button" onClick={submit} disabled={saving} className="gap-2">
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-          Save bill
+          {isEditing ? "Save changes" : "Save bill"}
         </Button>
       </div>
     </div>

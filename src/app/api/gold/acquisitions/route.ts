@@ -285,6 +285,24 @@ export async function POST(request: Request) {
       // Tender for the pieces being kept: one BUY per payment row. Gifts
       // and opening stock move no money and so have no splits at all.
       // `investment` is non-null whenever there's tender to post: splits
+      // Persist the rows as typed, so an edit can reload them exactly
+      // rather than guessing from the transactions they produced.
+      if (data.splits.length > 0) {
+        await tx.goldTenderRow.createMany({
+          data: data.splits.map((sp, i) => ({
+            workspaceId: ctx.workspaceId,
+            acquisitionId: acquisition.id,
+            accountId: sp.accountId ?? null,
+            cardId: sp.cardId ?? null,
+            contactId: sp.contactId ?? null,
+            amount: sp.amount,
+            repay: sp.repay,
+            towardTheirOwn: sp.towardTheirOwn,
+            sortOrder: i,
+          })),
+        });
+      }
+
       // Each row posts what's LEFT of it after the on-behalf pieces have
       // drawn on it, so every source moves by exactly the entered amount:
       // (its receivable chunks) + (its BUY) = what the user typed.

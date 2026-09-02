@@ -86,6 +86,7 @@ export async function GET(
           orderBy: { sortOrder: "asc" },
           include: { ornament: { select: { id: true, name: true } } },
         },
+        tenderRows: { orderBy: { sortOrder: "asc" } },
       },
     });
     // 404 rather than 403 on a cross-workspace id — never leak existence.
@@ -157,6 +158,15 @@ export async function GET(
         creditAmount: Number(e.creditAmount),
         assumedCostBasis: Number(e.assumedCostBasis),
         notes: e.notes,
+      })),
+      tenderRows: acq.tenderRows.map((t) => ({
+        id: t.id,
+        accountId: t.accountId,
+        cardId: t.cardId,
+        contactId: t.contactId,
+        amount: Number(t.amount),
+        repay: t.repay,
+        towardTheirOwn: t.towardTheirOwn,
       })),
       transactions: transactions.map((t) => ({
         id: t.id,
@@ -560,6 +570,23 @@ export async function PATCH(
             isRecoverable: true,
             memberChargeId: charge.id,
           },
+        });
+      }
+
+      await tx.goldTenderRow.deleteMany({ where: { acquisitionId: id } });
+      if (splits.length > 0) {
+        await tx.goldTenderRow.createMany({
+          data: splits.map((sp, i) => ({
+            workspaceId: ctx.workspaceId,
+            acquisitionId: id,
+            accountId: sp.accountId ?? null,
+            cardId: sp.cardId ?? null,
+            contactId: sp.contactId ?? null,
+            amount: sp.amount,
+            repay: sp.repay,
+            towardTheirOwn: sp.towardTheirOwn,
+            sortOrder: i,
+          })),
         });
       }
 
