@@ -37,7 +37,9 @@ export async function GET(request: Request) {
     const results = await Promise.all(
       symbolList.map(async (sym) => {
         try {
-          return await yf.quote(sym);
+          // validateResult: false — same reason as the search route: Yahoo
+          // schema drift must not turn into a silent per-symbol failure.
+          return await yf.quote(sym, {}, { validateResult: false });
         } catch {
           return null;
         }

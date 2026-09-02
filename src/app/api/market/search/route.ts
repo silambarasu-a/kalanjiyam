@@ -37,7 +37,15 @@ export async function GET(request: Request) {
     const safe = q.replace(/[^A-Za-z0-9 .\-^]/g, "");
     if (!safe) return NextResponse.json([]);
 
-    const searchResult = await yf.search(safe, { quotesCount: 8, newsCount: 0 });
+    // validateResult: false — Yahoo adds fields (e.g. prevName/nameChangeDate)
+    // faster than the library's schema tracks them, and a validation throw here
+    // surfaces to the user as "No matches." The mapping below only reads fields
+    // it checks for, so unvalidated extras are harmless.
+    const searchResult = (await yf.search(
+      safe,
+      { quotesCount: 8, newsCount: 0 },
+      { validateResult: false },
+    )) as { quotes?: Record<string, unknown>[] };
     const quotes = searchResult.quotes ?? [];
 
     const results: SymbolSearchResult[] = quotes
