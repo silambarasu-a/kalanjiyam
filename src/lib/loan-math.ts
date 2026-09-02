@@ -150,6 +150,51 @@ export function amortizationSchedule(
 }
 
 /**
+ * Cycle-by-cycle projection at a FIXED instalment, walked until the balance
+ * clears. `amortizationSchedule` derives its own EMI from the cycle count —
+ * right for quoting a fresh loan, wrong for projecting an existing one, where
+ * the instalment on file is the contract (a bank-quoted EMI is rounded, an
+ * `isExisting` outstanding is hand-entered, and under the pay route's policy
+ * an ordinary payment never rewrites the EMI). Here the cycle count falls OUT
+ * of the walk instead of being fed in, and the final row absorbs the smaller
+ * closing payment.
+ *
+ * Returns [] when `emi` doesn't amortize the balance (it can't outrun the
+ * first cycle's interest), so callers can fall back rather than render an
+ * endless schedule. `maxCycles` is a safety valve for near-degenerate inputs.
+ */
+export function amortizationScheduleFixedEmi(
+  outstanding: number,
+  annualRate: number,
+  emi: number,
+  frequency: LoanFrequency = "MONTHLY",
+  gstOnInterestPct: number | null = null,
+  maxCycles = 600
+): AmortRow[] {
+  if (outstanding <= 0 || emi <= 0) return [];
+  const rows: AmortRow[] = [];
+  let balance = outstanding;
+  for (let c = 1; c <= maxCycles; c++) {
+    const split = splitPayment(balance, annualRate, emi, frequency, gstOnInterestPct);
+    if (split.principal <= 0) return []; // non-amortizing: EMI ≤ interest
+    const opening = round2(balance);
+    const closing = round2(Math.max(0, balance - split.principal));
+    rows.push({
+      cycle: c,
+      opening,
+      interest: split.interest,
+      principal: split.principal,
+      gst: split.gst,
+      totalPaid: round2(split.principal + split.interest + split.gst),
+      closing,
+    });
+    balance = closing;
+    if (balance <= 0) return rows;
+  }
+  return []; // didn't clear within maxCycles — treat as non-amortizing
+}
+
+/**
  * Headline numbers for the form preview: total interest, total GST, and
  * the total amount payable (sum of all per-cycle outflows).
  */

@@ -18,7 +18,11 @@ import { LoanPayDialog } from "@/components/loans/loan-pay-dialog";
 import { LoanSettleDialog } from "@/components/loans/loan-settle-dialog";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { formatINR, formatDate } from "@/lib/utils";
-import { monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
+import {
+  amortizationScheduleFixedEmi,
+  monthsPerCycle,
+  type LoanFrequency,
+} from "@/lib/loan-math";
 import { remainingCycles } from "@/lib/loan-accrual";
 import {
   formatInterestCadence,
@@ -90,13 +94,23 @@ function computeEmiProgress(
   if (l.repaymentMode === "AD_HOC") return null;
   if (!l.tenure || !l.emiAmount || l.emiAmount <= 0) return null;
   const freq = l.frequency ?? "MONTHLY";
-  // Counted off the calendar, same as the loan detail page — the two must
-  // agree. Back-deriving the count from the balance (countPaidEmis) breaks as
-  // soon as a part-prepayment drops the outstanding to a level the original
-  // schedule only reaches several cycles later.
-  const left = l.maturityAt
+  // Counted from the balance at the instalment on file, same as the loan
+  // detail page — the two must agree. The EMI is fixed under the pay route's
+  // policy (only a prepayment re-amortizes it), so the honest count is "how
+  // many EMIs until the balance clears". Calendar distance to maturity is
+  // only the fallback, for an EMI that can't amortize the balance.
+  const calendarLeft = l.maturityAt
     ? Math.min(l.tenure, remainingCycles(new Date(), new Date(l.maturityAt), freq))
     : l.tenure;
+  const left =
+    l.outstanding > 0
+      ? amortizationScheduleFixedEmi(
+          l.outstanding,
+          l.interestRate ?? 0,
+          l.emiAmount,
+          freq,
+        ).length || calendarLeft
+      : 0;
   return { paid: Math.max(0, l.tenure - left), total: l.tenure, left };
 }
 

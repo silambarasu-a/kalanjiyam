@@ -6,6 +6,7 @@ import { canAccessRecord } from "@/lib/permissions";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   amortizationSchedule,
+  amortizationScheduleFixedEmi,
   calculateEMI,
   loanTotals,
   splitPayment,
@@ -203,30 +204,38 @@ export default async function LoanDetailPage({
   // schedule the two parties never agreed to.
   const hasSchedule = !isAdHoc && rate > 0 && tenure > 0 && emi > 0;
 
-  // How far through the term we are, read off the calendar rather than
-  // back-derived from the balance. `countPaidEmis` walks the ORIGINAL
-  // schedule looking for the cycle whose projected balance is nearest the
-  // current outstanding, which stops meaning anything the moment an
-  // off-schedule payment lands: a part-prepayment drops the balance to a point
-  // the schedule only reaches several cycles later, and the loan then claims
-  // those cycles are "paid". Maturity is the fixed point under the
-  // recalculate-EMI-keep-tenure policy, so cycles-to-maturity is the honest
-  // count. (countPaidEmis still earns its keep in the create/PATCH routes,
-  // where it seeds nextDueDate for a loan entered mid-life.)
-  const cyclesRemaining = !hasSchedule
+  // Calendar distance to maturity — only the FALLBACK cycle count now (see
+  // below); kept because a mis-entered EMI can make the fixed-EMI walk
+  // impossible. (`countPaidEmis` still earns its keep in the create/PATCH
+  // routes, where it seeds nextDueDate for a loan entered mid-life.)
+  const calendarCyclesRemaining = !hasSchedule
     ? 0
     : loan.maturityAt
       ? Math.min(tenure, remainingCycles(new Date(), loan.maturityAt, freq))
       : tenure;
-  const cyclesPaid = Math.max(0, tenure - cyclesRemaining);
 
-  // Re-based on the CURRENT outstanding over the cycles that are left, not on
-  // the original principal over the full tenure. Without this the table keeps
-  // projecting from the opening balance and a prepayment leaves no trace.
-  const fullSchedule =
+  // Projected forward at the instalment actually on file, walked until the
+  // balance clears — the EMI is fixed under the pay route's policy (only a
+  // prepayment re-amortizes it), so the remaining cycle count falls out of
+  // the walk rather than being read off the calendar. Re-deriving the EMI
+  // from calendar-cycles-to-maturity (the old approach) showed a different
+  // instalment than the one every payment actually charges, because real
+  // loans never sit exactly on the formula's curve. Falls back to the
+  // calendar-count re-amortization only when the stored EMI can't amortize
+  // the balance at all (mis-entered EMI below the per-cycle interest).
+  const fixedEmiSchedule =
     hasSchedule && outstanding > 0
-      ? amortizationSchedule(outstanding, rate, cyclesRemaining, freq, gstPct)
+      ? amortizationScheduleFixedEmi(outstanding, rate, emi, freq, gstPct)
       : [];
+  const fullSchedule =
+    fixedEmiSchedule.length > 0
+      ? fixedEmiSchedule
+      : hasSchedule && outstanding > 0
+        ? amortizationSchedule(outstanding, rate, calendarCyclesRemaining, freq, gstPct)
+        : [];
+  const cyclesRemaining =
+    fixedEmiSchedule.length > 0 ? fixedEmiSchedule.length : calendarCyclesRemaining;
+  const cyclesPaid = Math.max(0, tenure - cyclesRemaining);
   // The contract as originally written — what the loan was quoted to cost.
   const lifetime = hasSchedule
     ? loanTotals(principal, rate, tenure, freq, gstPct)
@@ -941,9 +950,9 @@ export default async function LoanDetailPage({
           <header className="px-5 py-3 border-b">
             <h2 className="text-sm font-semibold">Upcoming EMIs</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Reducing-balance schedule re-amortized from {formatINR(outstanding)}{" "}
-              over the {cyclesRemaining} cycle
-              {cyclesRemaining === 1 ? "" : "s"} to maturity
+              {fixedEmiSchedule.length > 0
+                ? `${formatINR(outstanding)} outstanding at the current ${formatINR(emi)} EMI — ${cyclesRemaining} payment${cyclesRemaining === 1 ? "" : "s"} left`
+                : `Reducing-balance schedule re-amortized from ${formatINR(outstanding)} over the ${cyclesRemaining} cycle${cyclesRemaining === 1 ? "" : "s"} to maturity`}
             </p>
           </header>
           <div className="overflow-x-auto">
@@ -994,7 +1003,8 @@ export default async function LoanDetailPage({
           </div>
           {moreCycles > 0 && (
             <p className="border-t px-5 py-2 text-center text-[11px] text-muted-foreground">
-              + {moreCycles} more EMI{moreCycles === 1 ? "" : "s"} until maturity
+              + {moreCycles} more EMI{moreCycles === 1 ? "" : "s"} until the
+              balance clears
             </p>
           )}
         </section>
