@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
 import {
   Dialog,
   DialogContent,
@@ -12,10 +11,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { DescriptionField } from "@/components/ui/description-field";
-import { fetcher } from "@/lib/swr-fetcher";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceFromIds, fundingSourceIds } from "@/lib/funding-sources";
 
 type Props = {
   open: boolean;
@@ -30,20 +29,10 @@ function todayIso() {
 }
 
 export function AddAdvanceDialog({ open, onOpenChange, provider, onSaved }: Props) {
-  const { data: accountsRes } = useSWR<{
-    accounts: { id: string; name: string; kind: string }[];
-  }>(open ? "/api/accounts" : null, fetcher);
-  const { data: cardsRes } = useSWR<{ cards: { id: string; name: string }[] }>(
-    open ? "/api/cards" : null,
-    fetcher,
-  );
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayIso());
-  const [sourceMode, setSourceMode] = useState<"account" | "card">(
-    provider.cardId ? "card" : "account",
-  );
-  const [accountId, setAccountId] = useState(provider.accountId ?? "");
-  const [cardId, setCardId] = useState(provider.cardId ?? "");
+  // "account:<id>" | "card:<id>" | "" — seeded from the provider's default.
+  const [source, setSource] = useState(() => fundingSourceFromIds(provider));
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,8 +44,8 @@ export function AddAdvanceDialog({ open, onOpenChange, provider, onSaved }: Prop
     const amountNum = Number(amount);
     if (!Number.isFinite(amountNum) || amountNum <= 0)
       return setError("Enter a positive amount");
-    if (sourceMode === "account" && !accountId) return setError("Pick an account");
-    if (sourceMode === "card" && !cardId) return setError("Pick a card");
+    const { accountId, cardId } = fundingSourceIds(source);
+    if (!accountId && !cardId) return setError("Pick an account or card");
     setSubmitting(true);
     try {
       const res = await fetch(`/api/utility-providers/${provider.id}/advance`, {
@@ -65,8 +54,8 @@ export function AddAdvanceDialog({ open, onOpenChange, provider, onSaved }: Prop
         body: JSON.stringify({
           amount: amountNum,
           date,
-          accountId: sourceMode === "account" ? accountId : null,
-          cardId: sourceMode === "card" ? cardId : null,
+          accountId,
+          cardId,
           notes: notes.trim() || null,
         }),
       });
@@ -106,52 +95,12 @@ export function AddAdvanceDialog({ open, onOpenChange, provider, onSaved }: Prop
           </div>
           <div className="space-y-2 rounded-md border bg-muted/30 p-3">
             <div className="text-xs font-medium">Paid from</div>
-            <div className="flex gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setSourceMode("account")}
-                className={`rounded-md border px-3 py-1.5 ${
-                  sourceMode === "account"
-                    ? "bg-foreground text-background"
-                    : "bg-background"
-                }`}
-              >
-                Account
-              </button>
-              <button
-                type="button"
-                onClick={() => setSourceMode("card")}
-                className={`rounded-md border px-3 py-1.5 ${
-                  sourceMode === "card"
-                    ? "bg-foreground text-background"
-                    : "bg-background"
-                }`}
-              >
-                Card
-              </button>
-            </div>
-            {sourceMode === "account" ? (
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={(accountsRes?.accounts ?? []).map((a) => ({
-                  value: a.id,
-                  label: a.name,
-                  hint: a.kind,
-                }))}
-                placeholder="Select account"
-              />
-            ) : (
-              <NativeSelect
-                value={cardId}
-                onChange={setCardId}
-                options={(cardsRes?.cards ?? []).map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                }))}
-                placeholder="Select card"
-              />
-            )}
+            <FundingSourcePicker
+              value={source}
+              onChange={setSource}
+              enabled={open}
+              amount={Number(amount) || 0}
+            />
           </div>
           <DescriptionField
             value={notes}

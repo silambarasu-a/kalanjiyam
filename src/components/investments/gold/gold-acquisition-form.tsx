@@ -35,8 +35,6 @@ import { formatINR } from "@/lib/utils";
 import { round2 } from "@/lib/gold";
 
 type Contact = { id: string; name: string };
-type Account = { id: string; name: string; kind: string };
-type Card = { id: string; name: string };
 
 const KIND_OPTIONS = [
   { value: "PURCHASE", label: "Bought from a jeweller" },
@@ -159,6 +157,8 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
   useEffect(() => {
     if (!bill || hydrated) return;
     const a = bill.acquisition;
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot hydration
+       from the fetched bill; `hydrated` stops it re-running */
     setKind(a.kind);
     setName(a.investmentName ?? a.sellerName ?? "");
     setSellerName(a.sellerName ?? "");
@@ -237,51 +237,16 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
     setTenderEdited(true);
     setExpanded(null);
     setHydrated(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [bill, hydrated]);
 
+  // Contacts feed the "gifted by" picker and the per-ornament editors; the
+  // payment rows fetch their own accounts / cards / contacts.
   const { data: contactData } = useSWR<{ members: Contact[] }>(
     "/api/contacts",
     fetcher,
   );
-  const { data: accountData } = useSWR<{ accounts: Account[] }>(
-    "/api/accounts",
-    fetcher,
-  );
-  const { data: cardData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
-
   const contacts = useMemo(() => contactData?.members ?? [], [contactData]);
-  const sources = useMemo(
-    () => [
-      // CARD-kind accounts are cards' companion ledgers — the card
-      // itself is the thing you spend from, and it's listed below.
-      ...(accountData?.accounts ?? [])
-        .filter((a) => a.kind !== "CARD")
-        .map((a) => ({
-          value: `account:${a.id}`,
-          label: a.name,
-          hint: "Account",
-        })),
-      ...(cardData?.cards ?? []).map((c) => ({
-        value: `card:${c.id}`,
-        label: c.name,
-        hint: "Card",
-      })),
-    ],
-    [accountData, cardData],
-  );
-  // Someone else settling part of the bill is a payment source too — it
-  // just moves none of our balances.
-  const tenderSources = useMemo(
-    () => [
-      ...sources,
-      ...contacts.map((c) => ({
-        value: `contact:${c.id}`,
-        label: c.name,
-        hint: "Paid by them",
-      })),
-    ],
-    [sources, contacts],
-  );
 
   const lines = ornaments.map(lineOf);
   const ownTotal = round2(
@@ -617,7 +582,6 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
             setTenderEdited(true);
             setSplits(next);
           }}
-          sources={tenderSources}
           target={cashDue}
           beneficiaryIds={ornaments
             .map((o) => o.boughtForContactId)

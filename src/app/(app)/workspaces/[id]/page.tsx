@@ -6,11 +6,19 @@ import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
-import { ChevronLeft, Pencil, Save } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, Pencil, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
+import {
+  DEFAULT_FUNDING_SOURCE_ORDER,
+  FUNDING_SOURCE_KIND_META,
+  isDefaultFundingSourceOrder,
+  normalizeFundingSourceOrder,
+  type FundingSourceKind,
+} from "@/lib/funding-sources";
+import { FUNDING_SOURCE_ORDER_KEY } from "@/lib/use-funding-sources";
 
 type WorkspaceDetail = {
   id: string;
@@ -19,6 +27,7 @@ type WorkspaceDetail = {
   memberCount: number;
   transactionEditWindowDays: number;
   farmEnabled: boolean;
+  fundingSourceOrder: FundingSourceKind[];
   editWindowDefaultDays: number;
   createdAt: string;
   role: "OWNER" | "ADMIN" | "MEMBER" | "SUPER_ADMIN";
@@ -100,7 +109,159 @@ export default function WorkspaceDetailPage() {
       <FarmModuleSection workspace={ws} canEdit={canEdit} />
 
       <EditWindowSection workspace={ws} canEdit={canEdit} />
+
+      <FundingSourceOrderSection workspace={ws} canEdit={canEdit} />
     </div>
+  );
+}
+
+/**
+ * Order of the groups in every "Pay from" / "Receive into" picker. Plain
+ * up/down buttons rather than drag-and-drop: six rows, keyboard-friendly,
+ * and it works on a phone.
+ */
+function FundingSourceOrderSection({
+  workspace: ws,
+  canEdit,
+}: {
+  workspace: WorkspaceDetail;
+  canEdit: boolean;
+}) {
+  const [draft, setDraft] = useState<FundingSourceKind[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const saved = normalizeFundingSourceOrder(ws.fundingSourceOrder);
+  const order = draft ?? saved;
+  const dirty = draft !== null && draft.some((k, i) => k !== saved[i]);
+
+  function move(index: number, delta: -1 | 1) {
+    const next = [...order];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    setDraft(next);
+  }
+
+  async function save(next: FundingSourceKind[]) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/workspaces/${ws.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fundingSourceOrder: next }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        toast.error(body.error ?? "Failed");
+        return;
+      }
+      toast.success("Pay-from order updated");
+      await globalMutate(`/api/workspaces/${ws.id}`);
+      // Every open picker reads this key — refresh so they reorder at once.
+      await globalMutate(FUNDING_SOURCE_ORDER_KEY);
+      setDraft(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border bg-card p-5 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Pay-from order</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The order groups appear in every &ldquo;Pay from&rdquo; and
+            &ldquo;Receive into&rdquo; dropdown — transactions, bills,
+            subscriptions, loans, contacts, wages and the rest. Put what you
+            use most at the top. Groups with nothing in them are hidden.
+          </p>
+        </div>
+        {canEdit && !isDefaultFundingSourceOrder(order) && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="gap-1.5"
+            disabled={busy}
+            onClick={() => setDraft([...DEFAULT_FUNDING_SOURCE_ORDER])}
+          >
+            <RotateCcw className="h-3.5 w-3.5" /> Reset
+          </Button>
+        )}
+      </div>
+
+      <ol className="divide-y rounded-lg border bg-muted/30">
+        {order.map((kind, i) => {
+          const meta = FUNDING_SOURCE_KIND_META[kind];
+          return (
+            <li
+              key={kind}
+              className="flex items-center gap-3 px-3 py-2 text-sm"
+            >
+              <span className="w-5 text-right text-xs tabular-nums text-muted-foreground">
+                {i + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">{meta.label}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {meta.description}
+                </div>
+              </div>
+              {canEdit && (
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={cn("h-7 w-7", i === 0 && "invisible")}
+                    disabled={busy || i === 0}
+                    aria-label={`Move ${meta.label} up`}
+                    onClick={() => move(i, -1)}
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={cn("h-7 w-7", i === order.length - 1 && "invisible")}
+                    disabled={busy || i === order.length - 1}
+                    aria-label={`Move ${meta.label} down`}
+                    onClick={() => move(i, 1)}
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+
+      {canEdit ? (
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="gap-1.5"
+            disabled={busy || !dirty}
+            onClick={() => save(order)}
+          >
+            <Save className="h-3.5 w-3.5" /> Save order
+          </Button>
+          {dirty && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setDraft(null)}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          Only the workspace Owner or an Admin can change this.
+        </p>
+      )}
+    </section>
   );
 }
 

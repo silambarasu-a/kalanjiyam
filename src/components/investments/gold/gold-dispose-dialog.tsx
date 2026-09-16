@@ -17,12 +17,15 @@ import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { AmountInput } from "@/components/ui/amount-input";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import { fetcher } from "@/lib/swr-fetcher";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { formatINR, cn } from "@/lib/utils";
 
 type Contact = { id: string; name: string };
-type Account = { id: string; name: string; kind: string };
-type Card = { id: string; name: string };
+
+/** Sale proceeds can land in an account or be credited to a card. */
+const PROCEEDS_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
 
 /**
  * Sell an ornament for cash, or give it away.
@@ -54,25 +57,6 @@ export function GoldDisposeDialog({
     open ? "/api/contacts" : null,
     fetcher,
   );
-  const { data: accountData } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const { data: cardData } = useSWR<{ cards: Card[] }>(
-    open ? "/api/cards" : null,
-    fetcher,
-  );
-
-  const sources = [
-    ...(accountData?.accounts ?? [])
-      .filter((a) => a.kind !== "CARD")
-      .map((a) => ({ value: `account:${a.id}`, label: a.name, hint: "Account" })),
-    ...(cardData?.cards ?? []).map((c) => ({
-      value: `card:${c.id}`,
-      label: c.name,
-      hint: "Card",
-    })),
-  ];
   const contacts = contactData?.members ?? [];
 
   const proceeds = Number(amount) || 0;
@@ -81,6 +65,7 @@ export function GoldDisposeDialog({
   async function submit() {
     setSaving(true);
     try {
+      const sourceIds = fundingSourceIds(kind === "SOLD" ? source : "");
       const res = await fetch(`/api/gold/ornaments/${ornament.id}/dispose`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -89,14 +74,8 @@ export function GoldDisposeDialog({
           date,
           amount: kind === "SOLD" ? proceeds : null,
           contactId: contactId || null,
-          accountId:
-            kind === "SOLD" && source.startsWith("account:")
-              ? source.slice(8)
-              : null,
-          cardId:
-            kind === "SOLD" && source.startsWith("card:")
-              ? source.slice(5)
-              : null,
+          accountId: sourceIds.accountId,
+          cardId: sourceIds.cardId,
           notes: notes.trim() || null,
         }),
       });
@@ -158,10 +137,12 @@ export function GoldDisposeDialog({
                 <Label className="text-xs text-muted-foreground">
                   Money landed in
                 </Label>
-                <NativeSelect
+                <FundingSourcePicker
                   value={source}
                   onChange={setSource}
-                  options={sources}
+                  kinds={PROCEEDS_KINDS}
+                  direction="in"
+                  enabled={open}
                   placeholder="Account or card"
                 />
               </div>

@@ -3,10 +3,13 @@
 import { Plus, X, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import { AmountInput } from "@/components/ui/amount-input";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import { formatINR, cn } from "@/lib/utils";
 import { round2 } from "@/lib/gold";
+
+/** Accounts, credit cards, or someone else settling part of the bill. */
+const TENDER_KINDS = ["BANK", "WALLET", "CASH", "CREDIT", "CONTACT"] as const;
 
 export type TenderRow = {
   /** "account:<id>" | "card:<id>" | "contact:<id>" */
@@ -31,7 +34,6 @@ export type TenderRow = {
 export function GoldTenderSplits({
   splits,
   onChange,
-  sources,
   target,
   /** Contacts who have a piece bought for them on this bill. */
   beneficiaryIds,
@@ -39,7 +41,6 @@ export function GoldTenderSplits({
 }: {
   splits: TenderRow[];
   onChange: (next: TenderRow[]) => void;
-  sources: { value: string; label: string; hint?: string }[];
   /** What these rows must add up to. */
   target: number;
   beneficiaryIds: string[];
@@ -103,11 +104,12 @@ export function GoldTenderSplits({
         return (
           <div key={i} className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <NativeSelect
+              <FundingSourcePicker
                 value={s.source}
                 onChange={(v) => patch({ source: v })}
-                options={sources}
-                searchable
+                kinds={TENDER_KINDS}
+                direction="out"
+                contactHint="Paid by them"
                 placeholder="Account, card or contact"
                 className="flex-1"
                 disabled={disabled}

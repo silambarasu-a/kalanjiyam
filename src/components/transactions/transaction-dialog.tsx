@@ -44,6 +44,7 @@ import {
   submitPolicyMembers,
   type InsurancePolicyExtras,
 } from "@/components/insurance/policy-extras-fields";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { CategoryQuickCreateDialog } from "@/components/categories/category-quick-create-dialog";
 import { uploadReceiptsToAttachment } from "@/components/transactions/receipt-stager";
@@ -68,13 +69,8 @@ import {
   type SplitMode,
   type SplitUnit,
 } from "@/components/transactions/split-rows";
-import { cn, formatINR, groupAccountOptions, formatAccountLabel } from "@/lib/utils";
-import {
-  memberColorsFor,
-  rowOwner,
-  shortMemberName,
-  type OwnedRow,
-} from "@/lib/member-colors";
+import { cn, formatINR } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -275,22 +271,24 @@ function DialogBody({
   // `!== false` so an absent flag (pre-flag JWT) still means farm on.
   const { data: session } = useSession();
   const farmOn = session?.user.farmEnabled !== false;
-  const { data: accountsData, isLoading: accountsLoading } = useSWR<{
-    accounts: Account[];
-  }>("/api/accounts", fetcher);
-  const { data: cardsData, isLoading: cardsLoading } = useSWR<{ cards: Card[] }>(
-    "/api/cards",
+  // The funding-source pickers fetch these themselves (SWR dedupes the
+  // keys); the copies here feed the gold split validation and the refund
+  // form's card list.
+  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
+    "/api/accounts",
     fetcher,
   );
+  const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const { data: categoriesData } = useSWR<{ categories: Category[] }>(
     type === "INCOME" || type === "EXPENSE"
       ? `/api/categories?type=${type}`
       : null,
     fetcher
   );
-  const { data: contactsData, isLoading: contactsLoading } = useSWR<{
-    members: Contact[];
-  }>("/api/contacts", fetcher);
+  const { data: contactsData } = useSWR<{ members: Contact[] }>(
+    "/api/contacts",
+    fetcher,
+  );
   // Farm keys go null with the module off. Left live they'd 403 on every
   // dialog open across all six tabs, and SWR's default error-retry would
   // back off against a wall.
@@ -361,9 +359,9 @@ function DialogBody({
       </div>
 
       {type === "TRANSFER" ? (
-        <TransferForm accounts={accounts} onClose={onClose} />
+        <TransferForm cards={cards} onClose={onClose} />
       ) : type === "LOAN" ? (
-        <LoanEmiForm accounts={accounts} onClose={onClose} />
+        <LoanEmiForm onClose={onClose} />
       ) : type === "INVESTMENT" ? (
         <InvestmentForm
           accounts={accounts}
@@ -379,15 +377,12 @@ function DialogBody({
       ) : (
         <IncomeExpenseForm
           type={type}
-          accounts={accounts}
-          cards={cards}
           categories={categories}
           contacts={contacts}
           cropBatches={cropBatches}
           livestockBatches={livestockBatches}
           events={events}
           workers={workers}
-          sourcesLoading={accountsLoading || cardsLoading || contactsLoading}
           onClose={onClose}
         />
       )}
@@ -397,20 +392,15 @@ function DialogBody({
 
 function IncomeExpenseForm({
   type,
-  accounts,
-  cards,
   categories,
   contacts,
   cropBatches,
   livestockBatches,
   events,
   workers,
-  sourcesLoading = false,
   onClose,
 }: {
   type: "INCOME" | "EXPENSE";
-  accounts: Account[];
-  cards: Card[];
   categories: Category[];
   contacts: Contact[];
   cropBatches: CropBatch[];
@@ -424,7 +414,6 @@ function IncomeExpenseForm({
     active: boolean;
   }[];
   workers: Worker[];
-  sourcesLoading?: boolean;
   onClose: () => void;
 }) {
   // Same read as DialogBody's — `useSession` is a context read, not a fetch,
@@ -656,116 +645,6 @@ function IncomeExpenseForm({
   }
 
   const amtNum = parseFloat(amount) || 0;
-  // Pay-from picker grouped by funding-source kind so users scan by
-  // category (Bank → Wallet → Cash → Debit Card → Credit Card) rather
-  // than a flat alphabetical list.
-  const sources = useMemo(() => {
-    // Colour-code by owning member so two members' identically-named
-    // accounts are tellable apart. Derived from the full account list (which
-    // includes the companion CARD rows), so cards and accounts agree.
-    const ownerColors = memberColorsFor(accounts);
-    const decorate = (row: OwnedRow) => {
-      const owner = rowOwner(row);
-      const color = owner ? ownerColors?.get(owner.id) : undefined;
-      if (!owner || !color) return {};
-      return { dotClassName: color.dot, meta: shortMemberName(owner.name) || undefined };
-    };
-    type Item = {
-      value: string;
-      label: string;
-      sub: string;
-      disabled: boolean;
-      dotClassName?: string;
-      meta?: string;
-    };
-    const buckets: Record<
-      "BANK" | "WALLET" | "CASH" | "DEBIT" | "CREDIT" | "CONTACT",
-      Item[]
-    > = {
-      BANK: [],
-      WALLET: [],
-      CASH: [],
-      DEBIT: [],
-      CREDIT: [],
-      CONTACT: [],
-    };
-    for (const a of accounts) {
-      if (a.kind === "CARD") continue; // companion card-accounts are surfaced via /api/cards
-      if (a.kind !== "BANK" && a.kind !== "WALLET" && a.kind !== "CASH") continue;
-      const insufficient = type === "EXPENSE" && amtNum > 0 && amtNum > a.balance;
-      buckets[a.kind].push({
-        value: `account:${a.id}`,
-        label: formatAccountLabel(a.name, a.kind),
-        sub: formatINR(a.balance),
-        disabled: insufficient,
-        ...decorate(a),
-      });
-    }
-    if (type === "EXPENSE") {
-      for (const c of cards) {
-        const baseLabel = formatAccountLabel(c.name, "CARD");
-        const label = c.last4 ? `${baseLabel} ••${c.last4}` : baseLabel;
-        if (c.kind === "CREDIT") {
-          const avail = c.availableLimit;
-          const insufficient = avail != null && amtNum > 0 && amtNum > avail;
-          buckets.CREDIT.push({
-            value: `card:${c.id}`,
-            label,
-            sub: `${avail != null ? formatINR(avail) : "—"} avail`,
-            disabled: insufficient,
-            ...decorate(c),
-          });
-        } else {
-          // Debit cards draw on a linked bank account; spendable is the
-          // bank's balance, surfaced by the API as availableLimit.
-          const avail = c.availableLimit;
-          const insufficient = avail != null && amtNum > 0 && amtNum > avail;
-          buckets.DEBIT.push({
-            value: `card:${c.id}`,
-            label,
-            sub: avail != null ? formatINR(avail) : "—",
-            disabled: insufficient,
-            ...decorate(c),
-          });
-        }
-      }
-    }
-    // EXPENSE only: a contact can pay for me. The transaction is still
-    // recorded in my books (categorized, counted in cashflow) but no
-    // account/card balance moves. A toggle below decides whether I owe
-    // them back (creates a USER_OWES MemberCharge) or it's a gift.
-    if (type === "EXPENSE") {
-      for (const c of contacts) {
-        buckets.CONTACT.push({
-          value: `contact:${c.id}`,
-          label: c.name,
-          sub: "they paid",
-          disabled: false,
-        });
-      }
-    }
-    const groupOrder: { key: keyof typeof buckets; label: string }[] = [
-      { key: "BANK", label: "Bank" },
-      { key: "WALLET", label: "Wallet" },
-      { key: "CASH", label: "Cash" },
-      { key: "DEBIT", label: "Debit Card" },
-      { key: "CREDIT", label: "Credit Card" },
-      { key: "CONTACT", label: "Paid by contact" },
-    ];
-    return groupOrder
-      .filter((g) => buckets[g.key].length > 0)
-      .map((g) => ({
-        label: g.label,
-        options: buckets[g.key].map((it) => ({
-          value: it.value,
-          label: it.label,
-          hint: it.sub,
-          dotClassName: it.dotClassName,
-          meta: it.meta,
-          disabled: it.disabled,
-        })),
-      }));
-  }, [accounts, cards, contacts, type, amtNum]);
 
   async function submit() {
     setError(null);
@@ -1081,22 +960,19 @@ function IncomeExpenseForm({
             {type === "INCOME" ? "To account" : "Pay from"}
           </span>
           <div className="mt-1">
-            <NativeSelect
+            {/* EXPENSE additionally offers "Paid by contact": the transaction
+                is still recorded in my books but no balance moves, and the
+                toggle below decides whether I owe them back or it's a gift. */}
+            <FundingSourcePicker
               value={effectivePaymentSource}
               onChange={setPaymentSource}
-              options={sources}
-              searchable
-              searchPlaceholder={
+              direction={type === "INCOME" ? "in" : "out"}
+              kinds={
                 type === "INCOME"
-                  ? "Search accounts…"
-                  : "Search accounts, cards, contacts…"
+                  ? undefined
+                  : ["BANK", "WALLET", "CASH", "DEBIT", "CREDIT", "CONTACT"]
               }
-              loading={sourcesLoading}
-              loadingMessage={
-                type === "INCOME"
-                  ? "Loading accounts…"
-                  : "Loading accounts & cards…"
-              }
+              amount={amtNum}
             />
           </div>
         </label>
@@ -2154,11 +2030,16 @@ function ContactRepaymentToggle({
   );
 }
 
-function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () => void }) {
+/** Transfers move between ledger accounts; a credit card is offered so a
+ *  bill payment can target it, and resolves to its companion account. */
+const TRANSFER_SOURCE_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
+/** Ledger accounts only — where money lands, or an EMI is paid from. */
+const ACCOUNT_KINDS = ["BANK", "WALLET", "CASH"] as const;
+/** Investment buys, premiums and gold splits: accounts or a credit card. */
+const INVESTMENT_PAY_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
+
+function TransferForm({ cards, onClose }: { cards: Card[]; onClose: () => void }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  // Derived from the unfiltered list so the "To" picker (which drops the
-  // already-picked "From" account) keeps every member on the same colour.
-  const ownerColors = useMemo(() => memberColorsFor(accounts), [accounts]);
   const [destinationKind, setDestinationKind] = useState<"ACCOUNT" | "MEMBER">(
     "ACCOUNT",
   );
@@ -2166,10 +2047,29 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
   // person → my account (inflow). The single picked account plays "from"
   // when SENT and "to" when RECEIVED.
   const [direction, setDirection] = useState<"SENT" | "RECEIVED">("SENT");
-  const [fromId, setFromId] = useState("");
-  const [toId, setToId] = useState("");
+  // Picker values: "account:<id>" | "card:<id>" | "". /api/transfers only
+  // speaks in account ids, so a card pick is resolved to its companion
+  // ledger account before submit.
+  const [fromSource, setFromSource] = useState("");
+  const [toSource, setToSource] = useState("");
   // Single account picker shared across both directions of MEMBER mode.
-  const [memberAccountId, setMemberAccountId] = useState("");
+  const [memberSource, setMemberSource] = useState("");
+  const resolveAccountId = (source: string): string => {
+    const { accountId, cardId } = fundingSourceIds(source);
+    if (accountId) return accountId;
+    if (cardId) return cards.find((c) => c.id === cardId)?.accountId ?? "";
+    return "";
+  };
+  const fromId = resolveAccountId(fromSource);
+  const toId = resolveAccountId(toSource);
+  const memberAccountId = resolveAccountId(memberSource);
+  // The "To" list drops whatever "From" resolved to — the account row and
+  // any card that posts through that same account.
+  const excludeFromAccountIds = useMemo(() => (fromId ? [fromId] : []), [fromId]);
+  const excludeFromCardIds = useMemo(
+    () => (fromId ? cards.filter((c) => c.accountId === fromId).map((c) => c.id) : []),
+    [cards, fromId],
+  );
   // For the external flow we keep a free-text person name plus an optional
   // resolved memberId. Clicking a chip pins both; typing the input auto-links
   // to a matching member. On submit, if no memberId resolves we create one
@@ -2323,10 +2223,12 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           <label className="block">
             <span className="text-xs text-muted-foreground">From</span>
             <div className="mt-1">
-              <NativeSelect
-                value={fromId}
-                onChange={setFromId}
-                options={groupAccountOptions(accounts, amtNum, ownerColors)}
+              <FundingSourcePicker
+                value={fromSource}
+                onChange={setFromSource}
+                kinds={TRANSFER_SOURCE_KINDS}
+                direction="out"
+                amount={amtNum}
               />
             </div>
           </label>
@@ -2338,14 +2240,13 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
           <label className="block">
             <span className="text-xs text-muted-foreground">To</span>
             <div className="mt-1">
-              <NativeSelect
-                value={toId}
-                onChange={setToId}
-                options={groupAccountOptions(
-                  accounts.filter((a) => a.id !== fromId),
-                  0,
-                  ownerColors,
-                )}
+              <FundingSourcePicker
+                value={toSource}
+                onChange={setToSource}
+                kinds={TRANSFER_SOURCE_KINDS}
+                direction="in"
+                excludeAccountIds={excludeFromAccountIds}
+                excludeCardIds={excludeFromCardIds}
               />
             </div>
           </label>
@@ -2393,14 +2294,12 @@ function TransferForm({ accounts, onClose }: { accounts: Account[]; onClose: () 
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2">
                 {direction === "SENT" ? "From (my account)" : "To (my account)"}
               </p>
-              <NativeSelect
-                value={memberAccountId}
-                onChange={setMemberAccountId}
-                options={groupAccountOptions(
-                  accounts,
-                  direction === "SENT" ? amtNum : 0,
-                  ownerColors,
-                )}
+              <FundingSourcePicker
+                value={memberSource}
+                onChange={setMemberSource}
+                kinds={TRANSFER_SOURCE_KINDS}
+                direction={direction === "SENT" ? "out" : "in"}
+                amount={direction === "SENT" ? amtNum : 0}
               />
             </div>
             <div className="flex items-center justify-center py-2 bg-background">
@@ -2555,13 +2454,7 @@ const EMI_SOURCE_LABEL: Record<EmiLoan["source"], string> = {
   CARD_EMI: "Card EMI",
 };
 
-function LoanEmiForm({
-  accounts,
-  onClose,
-}: {
-  accounts: Account[];
-  onClose: () => void;
-}) {
+function LoanEmiForm({ onClose }: { onClose: () => void }) {
   // Loans are read-permission-gated per source, so fetch each source
   // separately — a no-source query falls back to the BANK feature check
   // and would silently filter out hand/card-EMI loans for users with
@@ -2602,7 +2495,8 @@ function LoanEmiForm({
   const [loanId, setLoanId] = useState("");
   const [amount, setAmount] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — EMIs are paid from a ledger account, never a card.
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   // Pre-mint the future txn id so attached receipts hit S3 instantly
   // and link cleanly when the loan-pay POST creates the row.
@@ -2628,11 +2522,6 @@ function LoanEmiForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loanId]);
 
-  const payable = accounts.filter((a) => a.kind !== "CARD");
-  // Colours come from the full list, not `payable`, so dropping the card
-  // rows can't shuffle who owns which colour.
-  const ownerColors = useMemo(() => memberColorsFor(accounts), [accounts]);
-
   async function submit() {
     setError(null);
     if (!loanId) {
@@ -2644,6 +2533,7 @@ function LoanEmiForm({
       setError("Enter an amount");
       return;
     }
+    const { accountId } = fundingSourceIds(source);
     if (!accountId) {
       setError("Pick an account");
       return;
@@ -2740,10 +2630,12 @@ function LoanEmiForm({
       <label className="block">
         <span className="text-xs font-medium">Pay from</span>
         <div className="mt-1">
-          <NativeSelect
-            value={accountId}
-            onChange={setAccountId}
-            options={groupAccountOptions(payable, Number(amount) || 0, ownerColors)}
+          <FundingSourcePicker
+            value={source}
+            onChange={setSource}
+            kinds={ACCOUNT_KINDS}
+            direction="out"
+            amount={Number(amount) || 0}
           />
         </div>
       </label>
@@ -2874,7 +2766,9 @@ function InvestmentForm({
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [date, setDate] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "Pay from" / "Deposit to" for everything but premiums and gold splits,
+  // encoded "account:<id>" / "card:<id>" like the other pickers.
+  const [fundingSource, setFundingSource] = useState("");
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3394,45 +3288,6 @@ function InvestmentForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-fill should fire once per fetched id
   }, [editingId]);
 
-  // Unified source list for the splits picker: spendable accounts +
-  // credit cards. Mirrors the income/expense form's "account:<id>" /
-  // "card:<id>" encoding (see IncomeExpenseForm.sources).
-  const goldSourceOptions = useMemo(() => {
-    type Item = { value: string; label: string; hint?: string };
-    const buckets: Record<"BANK" | "WALLET" | "CASH" | "CREDIT", Item[]> = {
-      BANK: [], WALLET: [], CASH: [], CREDIT: [],
-    };
-    for (const a of accounts) {
-      if (a.kind === "BANK" || a.kind === "WALLET" || a.kind === "CASH") {
-        buckets[a.kind].push({
-          value: `account:${a.id}`,
-          label: formatAccountLabel(a.name, a.kind),
-          hint: `₹${a.balance.toLocaleString("en-IN")}`,
-        });
-      }
-    }
-    for (const c of cards) {
-      if (c.kind !== "CREDIT") continue;
-      const baseLabel = formatAccountLabel(c.name, "CARD");
-      const label = c.last4 ? `${baseLabel} ••${c.last4}` : baseLabel;
-      buckets.CREDIT.push({
-        value: `card:${c.id}`,
-        label,
-        hint: c.availableLimit != null ? `₹${c.availableLimit.toLocaleString("en-IN")} avail` : undefined,
-      });
-    }
-    const order: { key: keyof typeof buckets; label: string }[] = [
-      { key: "BANK", label: "Bank" },
-      { key: "WALLET", label: "Wallet" },
-      { key: "CASH", label: "Cash" },
-      { key: "CREDIT", label: "Credit Card" },
-    ];
-    return order.filter((g) => buckets[g.key].length > 0).map((g) => ({
-      label: g.label,
-      options: buckets[g.key],
-    }));
-  }, [accounts, cards]);
-
   const goldSplitsTotal = goldSplits.reduce(
     (a, s) => a + (parseFloat(s.amount) || 0),
     0,
@@ -3554,15 +3409,24 @@ function InvestmentForm({
         }
       }
     } else if (isInsurancePremium) {
-      // Premium pays use the account-or-card source picker, not `accountId`.
+      // Premium pays use their own account-or-card picker, not `fundingSource`.
       if (!premiumSource) {
         setError("Pick an account or card to pay the premium from");
         return;
       }
-    } else if (!accountId) {
+    } else if (!fundingSource) {
       setError("Pick an account");
       return;
     }
+    // /api/investments only speaks in accounts, so a credit-card pick on a
+    // new holding posts through the card's companion ledger — the same
+    // account the old picker's CARD rows pointed at.
+    const fundingIds = fundingSourceIds(fundingSource);
+    const fundingAccountId =
+      fundingIds.accountId ??
+      (fundingIds.cardId
+        ? (cards.find((c) => c.id === fundingIds.cardId)?.accountId ?? null)
+        : null);
     if (creatingNew) {
       if (!newName.trim()) {
         setError("Enter a name for the new holding");
@@ -3762,7 +3626,7 @@ function InvestmentForm({
                 ? Number(exchangeRate)
                 : undefined,
             startedAt: date,
-            accountId: isGoldCreate ? undefined : accountId,
+            accountId: isGoldCreate ? undefined : (fundingAccountId ?? undefined),
             // Stamp the BUY transaction with the canonical GoldForm enum
             // for investment-grade gold (COIN / BAR / BISCUIT). SGB / DIGITAL
             // / ETF aren't physical gold and stay unstamped. ORNAMENTS is
@@ -3819,23 +3683,17 @@ function InvestmentForm({
         onClose();
         return;
       }
-      // Insurance premiums can be paid from a bank account OR a credit card.
-      // Decode the picked source into the account/card the API expects.
-      let payAccountId: string | undefined = accountId || undefined;
-      let payCardId: string | undefined;
-      if (isInsurancePremium) {
-        if (!premiumSource) {
-          setError("Pick an account or card to pay the premium from");
-          return;
-        }
-        const [srcKind, srcId] = premiumSource.split(":");
-        if (srcKind === "card") {
-          payCardId = srcId;
-          payAccountId = undefined;
-        } else {
-          payAccountId = srcId;
-        }
+      // Both pickers hand back "account:<id>" / "card:<id>"; /api/transactions
+      // routes a card pick through its companion account itself.
+      if (isInsurancePremium && !premiumSource) {
+        setError("Pick an account or card to pay the premium from");
+        return;
       }
+      const payIds = fundingSourceIds(
+        isInsurancePremium ? premiumSource : fundingSource,
+      );
+      const payAccountId = payIds.accountId ?? undefined;
+      const payCardId = payIds.cardId ?? undefined;
       const payload: Record<string, unknown> = {
         clientId: investClientId,
         type: "INVESTMENT",
@@ -4751,7 +4609,10 @@ function InvestmentForm({
                     <div key={i} className="space-y-1">
                       <div className="flex items-start gap-2">
                         <div className="flex-1">
-                          <NativeSelect
+                          {/* No `amount` here: overspend is judged per source
+                              across all rows (and net of the original
+                              allocation in edit mode) by goldSplitOverflow. */}
+                          <FundingSourcePicker
                             value={row.source}
                             onChange={(v) =>
                               setGoldSplits((rows) =>
@@ -4760,7 +4621,8 @@ function InvestmentForm({
                                 ),
                               )
                             }
-                            options={goldSourceOptions}
+                            kinds={INVESTMENT_PAY_KINDS}
+                            direction="out"
                             placeholder="Pick source"
                           />
                         </div>
@@ -4977,10 +4839,12 @@ function InvestmentForm({
           <label className="block">
             <span className="text-xs font-medium">Pay from</span>
             <div className="mt-1">
-              <NativeSelect
+              <FundingSourcePicker
                 value={premiumSource}
                 onChange={setPremiumSource}
-                options={goldSourceOptions}
+                kinds={INVESTMENT_PAY_KINDS}
+                direction="out"
+                amount={Number(amount) || 0}
                 placeholder="Pick account or credit card"
               />
             </div>
@@ -4994,13 +4858,12 @@ function InvestmentForm({
               {action === "BUY" ? "Pay from" : "Deposit to"}
             </span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={groupAccountOptions(
-                  accounts,
-                  action === "BUY" ? Number(amount) || 0 : 0,
-                )}
+              <FundingSourcePicker
+                value={fundingSource}
+                onChange={setFundingSource}
+                kinds={action === "BUY" ? INVESTMENT_PAY_KINDS : ACCOUNT_KINDS}
+                direction={action === "BUY" ? "out" : "in"}
+                amount={action === "BUY" ? Number(amount) || 0 : 0}
               />
             </div>
           </label>

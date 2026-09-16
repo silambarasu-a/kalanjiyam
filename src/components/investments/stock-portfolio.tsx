@@ -15,7 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,7 +33,8 @@ import {
   ArrowDownRight,
   ArrowLeft,
 } from "lucide-react";
-import { formatINR, cn, groupAccountOptions } from "@/lib/utils";
+import { formatINR, cn } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { mutateBalances } from "@/lib/mutate-balances";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { SymbolSearch } from "@/components/investments/symbol-search";
@@ -173,13 +175,14 @@ function SummaryCard({
   );
 }
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+/** Picker value for "Already owned" — no buy transaction is recorded. */
+const EXISTING_SOURCE = "__existing__";
+const EXISTING_GROUP: NativeSelectGroup[] = [
+  {
+    label: "Other",
+    options: [{ value: EXISTING_SOURCE, label: "Already owned (no transaction)" }],
+  },
+];
 
 export function StockPortfolio() {
   const router = useRouter();
@@ -235,16 +238,14 @@ export function StockPortfolio() {
     setQuotesLastRefreshed(new Date());
   }
 
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
-
   const [creatingHolding, setCreatingHolding] = useState(false);
   const [editingHoldingId, setEditingHoldingId] = useState<string | null>(null);
   const [holdingForm, setHoldingForm] = useState<HoldingForm>(emptyHoldingForm);
   const [savingHolding, setSavingHolding] = useState(false);
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [isExisting, setIsExisting] = useState(false);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [pendingFromWishlist, setPendingFromWishlist] = useState(false);
 
   const [creatingWishlist, setCreatingWishlist] = useState(false);
@@ -317,7 +318,7 @@ export function StockPortfolio() {
     setHoldingForm(emptyHoldingForm);
     setPendingFromWishlist(false);
     setIsExisting(false);
-    setAccountId("");
+    setSource("");
   }
 
   async function submitHolding(e: React.FormEvent) {
@@ -355,6 +356,7 @@ export function StockPortfolio() {
     };
     if (!editingHoldingId) {
       payload.isExisting = isExisting;
+      const accountId = fundingSourceIds(source).accountId;
       if (accountId) payload.accountId = accountId;
     }
 
@@ -750,29 +752,21 @@ export function StockPortfolio() {
                     return (
                     <div className="space-y-1.5">
                       <Label>Payment mode</Label>
-                      <NativeSelect
-                        value={isExisting ? "__existing__" : accountId}
+                      <FundingSourcePicker
+                        value={isExisting ? EXISTING_SOURCE : source}
                         onChange={(next) => {
-                          if (next === "__existing__") {
+                          if (next === EXISTING_SOURCE) {
                             setIsExisting(true);
-                            setAccountId("");
+                            setSource("");
                           } else {
                             setIsExisting(false);
-                            setAccountId(next);
+                            setSource(next);
                           }
                         }}
-                        options={[
-                          ...groupAccountOptions(accounts, investedNow),
-                          {
-                            label: "Other",
-                            options: [
-                              {
-                                value: "__existing__",
-                                label: "Already owned (no transaction)",
-                              },
-                            ],
-                          },
-                        ]}
+                        direction="out"
+                        kinds={["BANK", "WALLET", "CASH"]}
+                        amount={investedNow}
+                        appendGroups={EXISTING_GROUP}
                       />
                       {isExisting && (
                         <p className="text-[10px] text-amber-600">

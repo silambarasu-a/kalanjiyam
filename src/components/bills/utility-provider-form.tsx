@@ -1,19 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import useSWR from "swr";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-select";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { DescriptionField } from "@/components/ui/description-field";
 import { UTILITY_KINDS, type UtilityKindValue } from "@/components/bills/utility-kind";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = { id: string; name: string; kind: string };
-type Card = { id: string; name: string };
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceFromIds, fundingSourceIds } from "@/lib/funding-sources";
 
 type BillingCycle =
   | "MONTHLY"
@@ -21,6 +18,12 @@ type BillingCycle =
   | "QUARTERLY"
   | "HALF_YEARLY"
   | "YEARLY";
+
+// Value "" = no default source (the API treats a missing default as
+// optional). Offered as a row so a picked source can be cleared again.
+const NO_DEFAULT_SOURCE: NativeSelectGroup[] = [
+  { label: "None", options: [{ value: "", label: "No default" }] },
+];
 
 const CYCLE_OPTIONS: { value: BillingCycle; label: string }[] = [
   { value: "MONTHLY", label: "Every month" },
@@ -61,20 +64,17 @@ type Props = {
 
 export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const isEdit = !!initial;
-  const { data: accountsRes } = useSWR<{ accounts: Account[] }>(
-    "/api/accounts",
-    fetcher,
-  );
-  const { data: cardsRes } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   const [kind, setKind] = useState<UtilityKindValue>(initial?.kind ?? "ELECTRICITY");
   const [providerName, setProviderName] = useState(initial?.providerName ?? "");
   const [connectionNumber, setConnectionNumber] = useState(initial?.connectionNumber ?? "");
   const [addressLine, setAddressLine] = useState(initial?.addressLine ?? "");
-  const [sourceMode, setSourceMode] = useState<"none" | "account" | "card">(
-    initial?.cardId ? "card" : initial?.accountId ? "account" : "none",
+  // Default payment source: "account:<id>" | "card:<id>" | "" (no default).
+  const [source, setSource] = useState(() =>
+    fundingSourceFromIds({
+      accountId: initial?.accountId,
+      cardId: initial?.cardId,
+    }),
   );
-  const [accountId, setAccountId] = useState(initial?.accountId ?? "");
-  const [cardId, setCardId] = useState(initial?.cardId ?? "");
   const [autoPay, setAutoPay] = useState(initial?.autoPay ?? false);
   const [autoPayLeadDays, setAutoPayLeadDays] = useState(
     initial?.autoPayLeadDays?.toString() ?? "0",
@@ -127,25 +127,6 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const accountOptions = useMemo(
-    () =>
-      (accountsRes?.accounts ?? []).map((a) => ({
-        value: a.id,
-        label: a.name,
-        hint: a.kind,
-      })),
-    [accountsRes],
-  );
-  const cardOptions = useMemo(
-    () =>
-      (cardsRes?.cards ?? []).map((c) => ({ value: c.id, label: c.name })),
-    [cardsRes],
-  );
-  const effectiveAccountId =
-    accountId || (sourceMode === "account" ? accountOptions[0]?.value ?? "" : "");
-  const effectiveCardId =
-    cardId || (sourceMode === "card" ? cardOptions[0]?.value ?? "" : "");
-
   async function submit() {
     setError(null);
     if (!providerName.trim()) return setError("Provider name is required");
@@ -156,13 +137,14 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
     }
     setSubmitting(true);
     try {
+      const { accountId, cardId } = fundingSourceIds(source);
       const payload = {
         kind,
         providerName: providerName.trim(),
         connectionNumber: connectionNumber.trim() || null,
         addressLine: addressLine.trim() || null,
-        accountId: sourceMode === "account" ? effectiveAccountId || null : null,
-        cardId: sourceMode === "card" ? effectiveCardId || null : null,
+        accountId,
+        cardId,
         // Prepaid connections never autopay a bill (they're paid up front).
         autoPay: prepaid ? false : autoPay,
         autoPayLeadDays: !prepaid && autoPay ? Number(autoPayLeadDays) || 0 : 0,
@@ -305,36 +287,12 @@ export function UtilityProviderForm({ initial, onSaved, onCancel }: Props) {
 
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <div className="text-xs font-medium">Default payment source</div>
-        <div className="flex gap-2 text-xs">
-          {(["none", "account", "card"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setSourceMode(m)}
-              className={`rounded-md border px-3 py-1.5 capitalize ${
-                sourceMode === m ? "bg-foreground text-background" : "bg-background"
-              }`}
-            >
-              {m === "none" ? "No default" : m}
-            </button>
-          ))}
-        </div>
-        {sourceMode === "account" && (
-          <NativeSelect
-            value={effectiveAccountId}
-            onChange={setAccountId}
-            options={accountOptions}
-            placeholder="Select account"
-          />
-        )}
-        {sourceMode === "card" && (
-          <NativeSelect
-            value={effectiveCardId}
-            onChange={setCardId}
-            options={cardOptions}
-            placeholder="Select card"
-          />
-        )}
+        <FundingSourcePicker
+          value={source}
+          onChange={setSource}
+          placeholder="No default"
+          prependGroups={NO_DEFAULT_SOURCE}
+        />
         {!prepaid && (
           <label className="flex items-center gap-2 text-xs">
             <input

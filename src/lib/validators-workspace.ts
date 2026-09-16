@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { FEATURES } from "@/lib/permissions";
+import { FUNDING_SOURCE_KINDS } from "@/lib/funding-sources";
 
 const featureEnum = z.enum(FEATURES);
 const levelEnum = z.enum(["hidden", "own", "view", "full"]);
@@ -22,6 +23,9 @@ export const workspaceRenameSchema = z.object({
  * their date; 0 disables the window for this workspace.
  * `farmEnabled` toggles the whole farm module; turning it off hides farm
  * data rather than deleting it.
+ * `fundingSourceOrder` is the group order for every "Pay from" picker —
+ * a permutation of FUNDING_SOURCE_KINDS (missing kinds are appended in
+ * default order on read, so a partial list is accepted).
  */
 export const workspaceUpdateSchema = z
   .object({
@@ -33,6 +37,13 @@ export const workspaceUpdateSchema = z
       .max(365)
       .optional(),
     farmEnabled: z.boolean().optional(),
+    fundingSourceOrder: z
+      .array(z.enum(FUNDING_SOURCE_KINDS))
+      .max(FUNDING_SOURCE_KINDS.length)
+      .refine((arr) => new Set(arr).size === arr.length, {
+        message: "Each funding-source group may appear only once",
+      })
+      .optional(),
   })
   .refine((d) => Object.keys(d).length > 0, {
     message: "Provide at least one field to update",

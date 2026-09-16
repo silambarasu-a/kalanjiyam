@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import useSWR from "swr";
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -15,18 +14,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR } from "@/lib/utils";
 
 const DEFAULT_GRADES: { key: string; label: string }[] = [
   { key: "SMALL", label: "Small" },
@@ -66,14 +57,6 @@ export function LogEggDialog({
 }) {
   const isEdit = !!initial;
   const saleLocked = !!initial?.transactionId;
-  const { data: accountsRes } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = useMemo(
-    () => (accountsRes?.accounts ?? []).filter((a) => a.kind !== "CARD"),
-    [accountsRes],
-  );
 
   const initialGrades = (() => {
     if (!initial || initial.grades == null) return null;
@@ -103,7 +86,8 @@ export function LogEggDialog({
   const [salePricePerEgg, setSalePricePerEgg] = useState(
     initial?.salePricePerEgg != null ? String(initial.salePricePerEgg) : "",
   );
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +122,7 @@ export function LogEggDialog({
     if (collected <= 0) return setError("Enter at least one grade count");
     if (brokenN + soldN > collected)
       return setError("Sold + broken can't exceed collected");
+    const { accountId } = fundingSourceIds(source);
     if (hasSale && !accountId)
       return setError("Pick the account / wallet that receives the sale");
     setSubmitting(true);
@@ -322,11 +307,12 @@ export function LogEggDialog({
               {hasSale && (
                 <div className="mt-2 space-y-1">
                   <Label className="text-[10px]">Receive into</Label>
-                  <NativeSelect
-                    value={accountId}
-                    onChange={setAccountId}
-                    options={groupAccountOptions(accounts, 0)}
-                    searchable
+                  <FundingSourcePicker
+                    value={source}
+                    onChange={setSource}
+                    enabled={open}
+                    direction="in"
+                    kinds={["BANK", "WALLET", "CASH"]}
                     placeholder="— pick account —"
                   />
                 </div>

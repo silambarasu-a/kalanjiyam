@@ -574,6 +574,11 @@ model Workspace {
   // explicitly. Workspaces that predate this column were backfilled to
   // `true` by its migration and are unaffected by this default.
   farmEnabled               Boolean  @default(false)
+  // Order of the groups in every "Pay from" / "Receive into" picker —
+  // keys from FUNDING_SOURCE_KINDS in src/lib/funding-sources.ts
+  // (BANK, WALLET, CASH, DEBIT, CREDIT, CONTACT). Empty = default order;
+  // unknown or missing keys are tolerated and normalised on read.
+  fundingSourceOrder        String[] @default([])
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 

@@ -9,7 +9,14 @@ import { DateInput } from "@/components/ui/date-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import {
+  fundingSourceFromIds,
+  fundingSourceIds,
+  fundingSourceValue,
+} from "@/lib/funding-sources";
 import { fetcher } from "@/lib/swr-fetcher";
+import { useFundingSources } from "@/lib/use-funding-sources";
 import {
   InstantAttachmentUploader,
   useInstantAttachmentOwnerId,
@@ -23,9 +30,6 @@ const CYCLES = [
   { value: "HALF_YEARLY", label: "Half-yearly" },
   { value: "YEARLY", label: "Yearly" },
 ] as const;
-
-type Account = { id: string; name: string; kind: string };
-type Card = { id: string; name: string };
 
 type Props = {
   /** Optional subscription to edit. Omit for create. */
@@ -58,11 +62,9 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
   const ownerId = useInstantAttachmentOwnerId();
   const uploaderRef = useRef<InstantAttachmentUploaderHandle | null>(null);
 
-  const { data: accountsRes } = useSWR<{ accounts: (Account & { balance: number })[] }>(
-    "/api/accounts",
-    fetcher,
-  );
-  const { data: cardsRes } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
+  // Same SWR keys the picker uses, so this costs no extra request. Only
+  // needed for the first-account fallback below.
+  const { accounts } = useFundingSources();
 
   // Pre-existing attachments for edit mode — hand to the uploader so
   // the user sees them already attached.
@@ -101,37 +103,30 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
     initial?.startedOn?.slice(0, 10) ?? todayIso(),
   );
   const [endsOn, setEndsOn] = useState(initial?.endsOn?.slice(0, 10) ?? "");
-  const [sourceMode, setSourceMode] = useState<"account" | "card">(
-    initial?.cardId ? "card" : "account",
+  // "account:<id>" | "card:<id>" | "" — seeded from the subscription on edit.
+  const [source, setSource] = useState(() =>
+    fundingSourceFromIds({
+      accountId: initial?.accountId,
+      cardId: initial?.cardId,
+    }),
   );
-  const [accountId, setAccountId] = useState(initial?.accountId ?? "");
-  const [cardId, setCardId] = useState(initial?.cardId ?? "");
   const [autoPay, setAutoPay] = useState(initial?.autoPay ?? false);
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const accountOptions = useMemo(
+  // Render-time fallback: the API requires exactly one source, so if
+  // nothing is picked yet surface the first account. The user can change
+  // it; submit guards against there being none at all.
+  const defaultSource = useMemo(
     () =>
-      (accountsRes?.accounts ?? []).map((a) => ({
-        value: a.id,
-        label: a.name,
-        hint: a.kind,
-      })),
-    [accountsRes],
+      fundingSourceValue(
+        "account",
+        accounts.find((a) => a.kind !== "CARD")?.id,
+      ),
+    [accounts],
   );
-  const cardOptions = useMemo(
-    () =>
-      (cardsRes?.cards ?? []).map((c) => ({ value: c.id, label: c.name })),
-    [cardsRes],
-  );
-  // Render-time fallback: if nothing picked yet, surface the first
-  // option as a placeholder. The user can change it; submit guards
-  // against empty values.
-  const effectiveAccountId =
-    accountId || (sourceMode === "account" ? accountOptions[0]?.value ?? "" : "");
-  const effectiveCardId =
-    cardId || (sourceMode === "card" ? cardOptions[0]?.value ?? "" : "");
+  const effectiveSource = source || defaultSource;
 
   async function submit() {
     setError(null);
@@ -139,11 +134,10 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
     const amountNum = Number(amount);
     if (!Number.isFinite(amountNum) || amountNum <= 0)
       return setError("Enter a positive amount");
-    const finalAccountId = effectiveAccountId;
-    const finalCardId = effectiveCardId;
-    if (sourceMode === "account" && !finalAccountId)
-      return setError("Pick an account");
-    if (sourceMode === "card" && !finalCardId) return setError("Pick a card");
+    const { accountId: finalAccountId, cardId: finalCardId } =
+      fundingSourceIds(effectiveSource);
+    if (!finalAccountId && !finalCardId)
+      return setError("Pick an account or card");
 
     setSubmitting(true);
     try {
@@ -154,8 +148,8 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
         nextBillingDate,
         startedOn,
         endsOn: endsOn || null,
-        accountId: sourceMode === "account" ? finalAccountId : null,
-        cardId: sourceMode === "card" ? finalCardId : null,
+        accountId: finalAccountId,
+        cardId: finalCardId,
         autoPay,
         notes: notes.trim() || null,
       };
@@ -229,41 +223,7 @@ export function SubscriptionForm({ initial, onSaved, onCancel }: Props) {
 
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <div className="text-xs font-medium">Payment source</div>
-        <div className="flex gap-2 text-xs">
-          <button
-            type="button"
-            onClick={() => setSourceMode("account")}
-            className={`rounded-md border px-3 py-1.5 ${
-              sourceMode === "account" ? "bg-foreground text-background" : "bg-background"
-            }`}
-          >
-            Account
-          </button>
-          <button
-            type="button"
-            onClick={() => setSourceMode("card")}
-            className={`rounded-md border px-3 py-1.5 ${
-              sourceMode === "card" ? "bg-foreground text-background" : "bg-background"
-            }`}
-          >
-            Card
-          </button>
-        </div>
-        {sourceMode === "account" ? (
-          <NativeSelect
-            value={effectiveAccountId}
-            onChange={setAccountId}
-            options={accountOptions}
-            placeholder="Select account"
-          />
-        ) : (
-          <NativeSelect
-            value={effectiveCardId}
-            onChange={setCardId}
-            options={cardOptions}
-            placeholder="Select card"
-          />
-        )}
+        <FundingSourcePicker value={effectiveSource} onChange={setSource} />
         <label className="flex items-center gap-2 text-xs">
           <input
             type="checkbox"

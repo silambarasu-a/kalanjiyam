@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { workspaceUpdateSchema } from "@/lib/validators-workspace";
 import { requireMembership, WorkspaceMgmtError } from "@/lib/workspace-guard";
 import { TIMING } from "@/lib/timing";
+import { normalizeFundingSourceOrder } from "@/lib/funding-sources";
 
 function handleError(err: unknown) {
   if (err instanceof WorkspaceMgmtError) {
@@ -35,6 +36,7 @@ export async function GET(
         memberCount: ws._count.members,
         transactionEditWindowDays: ws.transactionEditWindowDays,
         farmEnabled: ws.farmEnabled,
+        fundingSourceOrder: normalizeFundingSourceOrder(ws.fundingSourceOrder),
         // Surface the env default so the UI can show "(default: N days)"
         // alongside the per-workspace override.
         editWindowDefaultDays: TIMING.defaultEditWindowDays,
@@ -69,6 +71,13 @@ export async function PATCH(
         ...(parsed.data.farmEnabled !== undefined
           ? { farmEnabled: parsed.data.farmEnabled }
           : {}),
+        ...(parsed.data.fundingSourceOrder !== undefined
+          ? {
+              fundingSourceOrder: normalizeFundingSourceOrder(
+                parsed.data.fundingSourceOrder,
+              ),
+            }
+          : {}),
       },
     });
     return NextResponse.json({
@@ -76,6 +85,7 @@ export async function PATCH(
       name: ws.name,
       transactionEditWindowDays: ws.transactionEditWindowDays,
       farmEnabled: ws.farmEnabled,
+      fundingSourceOrder: normalizeFundingSourceOrder(ws.fundingSourceOrder),
     });
   } catch (err) {
     return handleError(err);

@@ -11,7 +11,9 @@ import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { formatINR, formatDate, accountSpendable, groupAccountOptions } from "@/lib/utils";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { formatINR, formatDate, accountSpendable } from "@/lib/utils";
+import { fundingSourceIds, fundingSourceValue } from "@/lib/funding-sources";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -516,12 +518,18 @@ export default function WagesPage() {
                         />
                       </td>
                       <td className="py-2.5 px-2">
-                        <NativeSelect
-                          value={e.accountId}
-                          onChange={(next) => updatePay(w.id, { accountId: next })}
+                        <FundingSourcePicker
+                          value={fundingSourceValue("account", e.accountId)}
+                          onChange={(next) =>
+                            updatePay(w.id, {
+                              accountId: fundingSourceIds(next).accountId ?? "",
+                            })
+                          }
+                          direction="out"
+                          kinds={["BANK", "WALLET", "CASH"]}
+                          amount={amt}
                           disabled={!e.selected}
                           placeholder="No account"
-                          options={groupAccountOptions(accounts, amt)}
                         />
                         {insufficient && selectedAcc && selectedSpendable != null && (
                           <p className="text-[10px] text-rose-500 mt-0.5">

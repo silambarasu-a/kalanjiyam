@@ -12,6 +12,8 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { BankPicker } from "@/components/ui/bank-picker";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds, fundingSourceValue } from "@/lib/funding-sources";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { loanTotals, monthsPerCycle, type LoanFrequency } from "@/lib/loan-math";
 import {
@@ -19,7 +21,7 @@ import {
   INTEREST_CADENCE_OPTIONS,
   type LoanInterestCadence,
 } from "@/lib/hand-loan-interest";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { formatINR, formatDate } from "@/lib/utils";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -53,13 +55,6 @@ const FREQUENCY_OPTIONS: { value: LoanFrequency; label: string; tenureUnit: stri
   { value: "YEARLY", label: "Yearly", tenureUnit: "years" },
 ];
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
 type Card = {
   id: string;
   name: string;
@@ -161,7 +156,6 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   // Direction is fixed by the route on create and by the record on edit.
   const direction = editingLoan?.direction ?? directionProp ?? "BORROWED";
   const isLent = direction === "LENT";
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   // Contacts back the HAND_FORMAL lender picker AND the "Member" picker
   // (the family member whose name/account the loan is under), so fetch them
@@ -169,7 +163,6 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   const { data: contactsData, isLoading: contactsLoading } = useSWR<{
     members: Contact[];
   }>("/api/contacts", fetcher);
-  const bankAccounts = (accountsData?.accounts ?? []).filter((a) => a.kind === "BANK");
   const creditCards = (cardsData?.cards ?? []).filter((c) => c.kind === "CREDIT");
   // Show all active contacts, plus the currently-linked lender/member even if
   // archived so the edit form doesn't drop the selection silently.
@@ -238,7 +231,11 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         }))
       : [NEW_GOLD_ROW()]
   );
-  const [accountId, setAccountId] = useState(editingLoan?.accountId ?? "");
+  // Linked bank account as a picker value ("account:<id>" | "") — the
+  // state is named apart from the `source` prop (BANK / HAND_FORMAL / …).
+  const [accountSource, setAccountSource] = useState(
+    fundingSourceValue("account", editingLoan?.accountId),
+  );
   const [cardId, setCardId] = useState(
     editingLoan?.cardId ?? lockedCardId ?? ""
   );
@@ -447,7 +444,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
         interestCadence: adHoc ? interestCadence || null : undefined,
         accountId:
           source === "BANK" || source === "HAND_FORMAL"
-            ? accountId || null
+            ? fundingSourceIds(accountSource).accountId
             : null,
         cardId:
           source === "CARD_EMI" || kind === "CREDIT_CARD_LOAN"
@@ -1266,10 +1263,14 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                     : "Disbursed into (bank account)"}
             </span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={groupAccountOptions(bankAccounts, 0)}
+              {/* No `amount`: this links the account rather than posting
+                  against a typed figure, so nothing is greyed out. */}
+              <FundingSourcePicker
+                value={accountSource}
+                onChange={setAccountSource}
+                kinds={["BANK"]}
+                direction={!editing && isLent ? "out" : "in"}
+                placeholder="Pick a bank account"
               />
             </div>
             {!editing && source === "HAND_FORMAL" && (

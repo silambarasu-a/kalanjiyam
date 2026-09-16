@@ -7,8 +7,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
+import type { NativeSelectGroup } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR, formatDate } from "@/lib/utils";
 import {
   interestExpectedSince,
   formatInterestCadence,
@@ -37,14 +39,6 @@ export type LoanForSettlement = {
   interestRate: number | null;
   interestCadence: LoanInterestCadence | null;
   startedAt: string;
-};
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
 };
 
 type LedgerEntry = {
@@ -77,13 +71,6 @@ export function LoanSettleDialog({
   onSaved?: () => void | Promise<void>;
 }) {
   const isLent = loan?.direction === "LENT";
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
-    "/api/accounts",
-    fetcher,
-  );
-  const accounts = (accountsData?.accounts ?? []).filter(
-    (a) => a.kind !== "CARD",
-  );
   // The loan's own ledger, for the "expected since" estimate and to pre-fill
   // the period start from where the last settlement left off.
   const { data: detail } = useSWR<{ ledger: LedgerEntry[] }>(
@@ -101,7 +88,8 @@ export function LoanSettleDialog({
   // Cash-in-hand is a private-lending affordance; a bank settlement always
   // debits an account, so it starts unset there and must be picked.
   const cashAllowed = loan?.source !== "BANK";
-  const [accountId, setAccountId] = useState(CASH_IN_HAND);
+  // "account:<id>" | CASH_IN_HAND | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState(CASH_IN_HAND);
   const [closeLoan, setCloseLoan] = useState(false);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -117,7 +105,7 @@ export function LoanSettleDialog({
     setShowPeriod(false);
     setPeriodFrom("");
     setPeriodTo("");
-    setAccountId(cashAllowed ? CASH_IN_HAND : "");
+    setSource(cashAllowed ? CASH_IN_HAND : "");
     setCloseLoan(false);
     setNotes("");
     setError(null);
@@ -160,6 +148,25 @@ export function LoanSettleDialog({
     ? Math.max(0, Math.round((loan.outstanding - principalNum) * 100) / 100)
     : 0;
   const overPrincipal = !!loan && principalNum > loan.outstanding + 0.01;
+  const isCashInHand = source === CASH_IN_HAND;
+
+  // Hand loans are frequently settled in cash. Forcing an account would
+  // either block the entry or push the movement through a bank balance that
+  // never saw it. Its own group, prepended ahead of the funding groups. A
+  // bank settlement always clears through an account, so the option isn't
+  // offered there.
+  const offAccountGroups = useMemo<NativeSelectGroup[] | undefined>(
+    () =>
+      cashAllowed
+        ? [
+            {
+              label: "Off-account",
+              options: [{ value: CASH_IN_HAND, label: "Cash in hand (no account)" }],
+            },
+          ]
+        : undefined,
+    [cashAllowed],
+  );
 
   async function submit() {
     if (!loan) return;
@@ -172,7 +179,8 @@ export function LoanSettleDialog({
       setError(`Principal exceeds the outstanding (${formatINR(loan.outstanding)})`);
       return;
     }
-    if (!cashAllowed && (!accountId || accountId === CASH_IN_HAND)) {
+    const accountId = isCashInHand ? null : fundingSourceIds(source).accountId;
+    if (!cashAllowed && !accountId) {
       setError("Pick an account");
       return;
     }
@@ -187,7 +195,7 @@ export function LoanSettleDialog({
           paidAt,
           periodFrom: showPeriod && periodFrom ? periodFrom : null,
           periodTo: showPeriod && periodTo ? periodTo : null,
-          accountId: accountId === CASH_IN_HAND ? null : accountId,
+          accountId,
           closeLoan: newOutstanding === 0 ? closeLoan : false,
           notes: notes.trim() || undefined,
         }),
@@ -317,33 +325,18 @@ export function LoanSettleDialog({
                 {isLent ? "Received into" : "Paid from"}
               </span>
               <div className="mt-1">
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={[
-                    // Hand loans are frequently settled in cash. Forcing an
-                    // account would either block the entry or push the movement
-                    // through a bank balance that never saw it. Its own group
-                    // because NativeSelect takes flat OR grouped, not a mix.
-                    // A bank settlement always clears through an account, so
-                    // the option isn't offered there.
-                    ...(cashAllowed
-                      ? [
-                          {
-                            label: "Off-account",
-                            options: [
-                              { value: CASH_IN_HAND, label: "Cash in hand (no account)" },
-                            ],
-                          },
-                        ]
-                      : []),
-                    // Only an outgoing settlement can overdraw an account, so
-                    // the affordability hint uses the gross only when paying.
-                    ...groupAccountOptions(accounts, isLent ? 0 : gross),
-                  ]}
+                {/* Only an outgoing settlement can overdraw an account, so
+                    the affordability greying uses the gross only when paying. */}
+                <FundingSourcePicker
+                  value={source}
+                  onChange={setSource}
+                  direction={isLent ? "in" : "out"}
+                  kinds={["BANK", "WALLET", "CASH"]}
+                  amount={isLent ? 0 : gross}
+                  prependGroups={offAccountGroups}
                 />
               </div>
-              {accountId === CASH_IN_HAND && (
+              {isCashInHand && (
                 <span className="mt-1 block text-[11px] text-muted-foreground">
                   Recorded against the loan only — no account balance moves.
                 </span>

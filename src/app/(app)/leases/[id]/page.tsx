@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +24,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { formatINR, formatDate } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Lease = {
@@ -51,14 +52,6 @@ type ScheduleRow = {
   confirmedTxn: { id: string; description: string; date: string } | null;
 };
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
-
 
 export default function LeaseDetailPage() {
   const params = useParams<{ id: string }>();
@@ -67,8 +60,6 @@ export default function LeaseDetailPage() {
     id ? `/api/leases/${id}` : null,
     fetcher
   );
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
 
   const [confirmRow, setConfirmRow] = useState<ScheduleRow | null>(null);
   const router = useRouter();
@@ -220,7 +211,6 @@ export default function LeaseDetailPage() {
         leaseId={id ?? ""}
         direction={lease.direction}
         row={confirmRow}
-        accounts={accounts}
         onClose={() => setConfirmRow(null)}
       />
     </div>
@@ -262,17 +252,16 @@ function ConfirmPaymentDialog({
   leaseId,
   direction,
   row,
-  accounts,
   onClose,
 }: {
   leaseId: string;
   direction: "LEASED_OUT" | "LEASED_IN";
   row: ScheduleRow | null;
-  accounts: Account[];
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [date, setDate] = useState(today);
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
@@ -282,7 +271,7 @@ function ConfirmPaymentDialog({
   useEffect(() => {
     if (!row) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
-    setAccountId("");
+    setSource("");
     setDate(today);
     setAmount(String(row.amount));
     setNotes("");
@@ -293,6 +282,7 @@ function ConfirmPaymentDialog({
   async function submit() {
     if (!row) return;
     setError(null);
+    const accountId = fundingSourceIds(source).accountId;
     if (!accountId) return setError("Pick an account");
     setSubmitting(true);
     try {
@@ -352,13 +342,12 @@ function ConfirmPaymentDialog({
                 {direction === "LEASED_OUT" ? "Received into" : "Paid from"}
               </span>
               <div className="mt-1">
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={groupAccountOptions(
-                    accounts,
-                    direction === "LEASED_IN" ? Number(amount) || 0 : 0,
-                  )}
+                <FundingSourcePicker
+                  value={source}
+                  onChange={setSource}
+                  direction={direction === "LEASED_IN" ? "out" : "in"}
+                  kinds={["BANK", "WALLET", "CASH"]}
+                  amount={direction === "LEASED_IN" ? Number(amount) || 0 : 0}
                 />
               </div>
             </label>

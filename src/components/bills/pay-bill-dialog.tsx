@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import useSWR from "swr";
 import {
   Dialog,
   DialogContent,
@@ -11,11 +10,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceFromIds, fundingSourceIds } from "@/lib/funding-sources";
 import { formatINR } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
 
 type Props = {
   open: boolean;
@@ -41,14 +40,6 @@ function todayIso() {
 }
 
 export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
-  const { data: accountsRes } = useSWR<{
-    accounts: { id: string; name: string; kind: string }[];
-  }>(open ? "/api/accounts" : null, fetcher);
-  const { data: cardsRes } = useSWR<{ cards: { id: string; name: string }[] }>(
-    open ? "/api/cards" : null,
-    fetcher,
-  );
-
   const maxAdvance = useMemo(
     () => Math.min(bill.provider.advanceBalance, bill.billAmount),
     [bill.billAmount, bill.provider.advanceBalance],
@@ -56,11 +47,8 @@ export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
 
   const [advance, setAdvance] = useState(maxAdvance);
   const [paidOn, setPaidOn] = useState(todayIso());
-  const [sourceMode, setSourceMode] = useState<"account" | "card">(
-    bill.provider.cardId ? "card" : "account",
-  );
-  const [accountId, setAccountId] = useState(bill.provider.accountId ?? "");
-  const [cardId, setCardId] = useState(bill.provider.cardId ?? "");
+  // "account:<id>" | "card:<id>" | "" — seeded from the provider's default.
+  const [source, setSource] = useState(() => fundingSourceFromIds(bill.provider));
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +56,7 @@ export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
   // bill — state initializes fresh, no reset effect needed.
 
   const cashAmount = Math.max(0, +(bill.billAmount - advance).toFixed(2));
+  const sourceIds = fundingSourceIds(source);
 
   async function submit() {
     setError(null);
@@ -78,8 +67,8 @@ export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           advanceApplied: advance,
-          accountId: cashAmount > 0 && sourceMode === "account" ? accountId : null,
-          cardId: cashAmount > 0 && sourceMode === "card" ? cardId : null,
+          accountId: cashAmount > 0 ? sourceIds.accountId : null,
+          cardId: cashAmount > 0 ? sourceIds.cardId : null,
           paidOn,
           notes: notes.trim() || null,
         }),
@@ -161,7 +150,7 @@ export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
             </div>
             <div className="mt-1 flex items-center justify-between">
               <span className="text-muted-foreground">
-                + Source ({sourceMode === "card" ? "card" : "account"})
+                + Source ({sourceIds.cardId ? "card" : "account"})
               </span>
               <span className="font-medium tabular-nums">
                 {formatINR(cashAmount)}
@@ -180,52 +169,12 @@ export function PayBillDialog({ open, onOpenChange, bill, onPaid }: Props) {
               <div className="text-xs font-medium">
                 Pay cash portion from
               </div>
-              <div className="flex gap-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setSourceMode("account")}
-                  className={`rounded-md border px-3 py-1.5 ${
-                    sourceMode === "account"
-                      ? "bg-foreground text-background"
-                      : "bg-background"
-                  }`}
-                >
-                  Account
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceMode("card")}
-                  className={`rounded-md border px-3 py-1.5 ${
-                    sourceMode === "card"
-                      ? "bg-foreground text-background"
-                      : "bg-background"
-                  }`}
-                >
-                  Card
-                </button>
-              </div>
-              {sourceMode === "account" ? (
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={(accountsRes?.accounts ?? []).map((a) => ({
-                    value: a.id,
-                    label: a.name,
-                    hint: a.kind,
-                  }))}
-                  placeholder="Select account"
-                />
-              ) : (
-                <NativeSelect
-                  value={cardId}
-                  onChange={setCardId}
-                  options={(cardsRes?.cards ?? []).map((c) => ({
-                    value: c.id,
-                    label: c.name,
-                  }))}
-                  placeholder="Select card"
-                />
-              )}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                enabled={open}
+                amount={cashAmount}
+              />
             </div>
           )}
 

@@ -2,13 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -17,16 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR } from "@/lib/utils";
 
 
 /**
@@ -56,15 +47,11 @@ export function PayBillDialog({
 }) {
   const router = useRouter();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const sources = (accountsData?.accounts ?? []).filter(
-    (a) => a.kind !== "CARD" && a.id !== toAccountId,
-  );
+  // The card's own companion account can't pay its own bill.
+  const excludeAccountIds = useMemo(() => [toAccountId], [toAccountId]);
 
-  const [fromAccountId, setFromAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
@@ -74,7 +61,7 @@ export function PayBillDialog({
   useEffect(() => {
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
-    setFromAccountId("");
+    setSource("");
     setAmount(outstanding > 0 ? String(outstanding) : "");
     setDate(today);
     setNotes(
@@ -86,6 +73,7 @@ export function PayBillDialog({
 
   async function submit() {
     setError(null);
+    const fromAccountId = fundingSourceIds(source).accountId;
     if (!fromAccountId) return setError("Pick the account to pay from.");
     const amt = Number(amount);
     if (!amt || amt <= 0) return setError("Enter a payment amount.");
@@ -152,10 +140,14 @@ export function PayBillDialog({
           <label className="block">
             <span className="text-xs font-medium">Pay from</span>
             <div className="mt-1">
-              <NativeSelect
-                value={fromAccountId}
-                onChange={setFromAccountId}
-                options={groupAccountOptions(sources, Number(amount) || 0)}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                enabled={open}
+                direction="out"
+                kinds={["BANK", "WALLET", "CASH"]}
+                amount={Number(amount) || 0}
+                excludeAccountIds={excludeAccountIds}
               />
             </div>
           </label>

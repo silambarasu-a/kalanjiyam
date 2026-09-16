@@ -45,6 +45,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -53,6 +54,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Insurance = {
@@ -1205,17 +1207,13 @@ function DisposeVehicleDialog({
     (v) => v.id !== vehicle.id && !v.disposedAt,
   );
 
-  const { data: accountsData } = useSWR<{
-    accounts: { id: string; name: string; kind: string }[];
-  }>(open ? "/api/accounts" : null, fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
-
   const [kind, setKind] = useState<DisposalKind>("SOLD");
   const [date, setDate] = useState("");
   const [amount, setAmount] = useState("");
   const [buyerContactId, setBuyerContactId] = useState("");
   const [replacedById, setReplacedById] = useState("");
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1228,7 +1226,7 @@ function DisposeVehicleDialog({
     setAmount("");
     setBuyerContactId("");
     setReplacedById("");
-    setAccountId("");
+    setSource("");
     setNotes("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -1240,6 +1238,7 @@ function DisposeVehicleDialog({
     setError(null);
     setSubmitting(true);
     try {
+      const accountId = fundingSourceIds(source).accountId;
       const payload: Record<string, unknown> = {
         kind,
         date,
@@ -1388,18 +1387,15 @@ function DisposeVehicleDialog({
                   Credit to{" "}
                   <span className="font-normal text-muted-foreground">(optional)</span>
                 </span>
-                <select
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                >
-                  <option value="">— no transaction —</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} ({a.kind.toLowerCase()})
-                    </option>
-                  ))}
-                </select>
+                <div className="mt-1">
+                  <FundingSourcePicker
+                    value={source}
+                    onChange={setSource}
+                    direction="in"
+                    enabled={open}
+                    placeholder="— no transaction —"
+                  />
+                </div>
               </label>
             </div>
           )}

@@ -7,8 +7,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR, formatDate } from "@/lib/utils";
 import {
   splitPayment,
   calculateEMI,
@@ -38,14 +39,6 @@ export type LoanForPayment = {
   frequency: LoanFrequency | null;
 };
 
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
-
 
 export function LoanPayDialog({
   loan,
@@ -56,14 +49,6 @@ export function LoanPayDialog({
   onClose: () => void;
   onPaid?: () => void | Promise<void>;
 }) {
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
-    "/api/accounts",
-    fetcher,
-  );
-  const accounts = (accountsData?.accounts ?? []).filter(
-    (a) => a.kind !== "CARD",
-  );
-
   const today = new Date().toISOString().slice(0, 10);
   const [amount, setAmount] = useState("");
   const [overrideSplit, setOverrideSplit] = useState(false);
@@ -71,7 +56,8 @@ export function LoanPayDialog({
   const [interestPortion, setInterestPortion] = useState("");
   const [gstPortion, setGstPortion] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,6 +165,7 @@ export function LoanPayDialog({
       setError("Enter an amount");
       return;
     }
+    const { accountId } = fundingSourceIds(source);
     if (!accountId) {
       setError("Pick an account");
       return;
@@ -369,10 +356,12 @@ export function LoanPayDialog({
             <label className="block">
               <span className="text-xs font-medium">Pay from</span>
               <div className="mt-1">
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={groupAccountOptions(accounts, amt)}
+                <FundingSourcePicker
+                  value={source}
+                  onChange={setSource}
+                  direction="out"
+                  kinds={["BANK", "WALLET", "CASH"]}
+                  amount={amt}
                 />
               </div>
             </label>

@@ -122,8 +122,8 @@ export function rowOwner(row: OwnedRow): { id: string; name: string } | null {
  * all rather than a pointless dot on every row.
  *
  * Pass the *unfiltered* list where you have one, and hand the result to
- * `groupAccountOptions`' third argument for any filtered picker built from
- * it, so a member keeps the same colour in every dropdown.
+ * `buildFundingSourceGroups`' `ownerColors` option for any filtered picker
+ * built from it, so a member keeps the same colour in every dropdown.
  */
 export function memberColorsFor(rows: OwnedRow[]): Map<string, MemberColor> | undefined {
   const ids = rows.map((r) => rowOwner(r)?.id).filter((id): id is string => !!id);

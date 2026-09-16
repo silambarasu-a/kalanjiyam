@@ -10,7 +10,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -25,7 +25,8 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { formatINR, formatDate } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { BulkSettleDialog } from "@/components/contacts/bulk-settle-dialog";
 import { ContactStatement } from "@/components/contacts/contact-statement";
 import { TransactionDetailDialog } from "@/components/transactions/transaction-detail-dialog";
@@ -127,21 +128,12 @@ type Ledger = {
    *  Charges tab. */
   gold?: ContactGoldRow[];
 };
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
 
 
 export default function MemberLedgerDetail() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const { data } = useSWR<Ledger>(id ? `/api/contacts/${id}/ledger` : null, fetcher);
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = (accountsData?.accounts ?? []).filter((a) => a.kind !== "CARD");
   const { data: medicalData } = useSWR<{
     records: {
       id: string;
@@ -921,13 +913,11 @@ export default function MemberLedgerDetail() {
         contactId={id ?? ""}
         contactName={data.member.name}
         direction={transferOpen}
-        accounts={accounts}
         onClose={() => setTransferOpen(null)}
       />
 
       <SettleDialog
         charge={settleCharge}
-        accounts={accounts}
         contactName={data.member.name}
         onClose={() => setSettleCharge(null)}
       />
@@ -988,12 +978,10 @@ function Stat({
 
 function SettleDialog({
   charge,
-  accounts,
   contactName,
   onClose,
 }: {
   charge: Charge | null;
-  accounts: Account[];
   contactName: string;
   onClose: () => void;
 }) {
@@ -1005,7 +993,8 @@ function SettleDialog({
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1019,7 +1008,7 @@ function SettleDialog({
     /* eslint-disable react-hooks/set-state-in-effect -- reset on dialog open */
     setAmount(remaining.toFixed(2));
     setPaidAt(today);
-    setAccountId("");
+    setSource("");
     setNotes("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -1050,7 +1039,7 @@ function SettleDialog({
           amount: amt,
           paidAt,
           notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
+          accountId: fundingSourceIds(source).accountId ?? undefined,
         }),
       });
       const body = await res.json();
@@ -1123,15 +1112,17 @@ function SettleDialog({
                 : "Paid from account (optional)"}
             </span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                direction={isIncoming ? "in" : "out"}
+                kinds={["BANK", "WALLET", "CASH"]}
+                amount={isIncoming ? 0 : amtNum}
                 placeholder={
                   isIncoming
                     ? "— don't create income transaction —"
                     : "— don't create expense transaction —"
                 }
-                options={groupAccountOptions(accounts, isIncoming ? 0 : Number(amount) || 0)}
               />
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -1165,19 +1156,18 @@ function TransferDialog({
   contactId,
   contactName,
   direction,
-  accounts,
   onClose,
 }: {
   contactId: string;
   contactName: string;
   direction: "SEND" | "RECEIVE" | null;
-  accounts: Account[];
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [expectBack, setExpectBack] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1188,7 +1178,7 @@ function TransferDialog({
     /* eslint-disable react-hooks/set-state-in-effect -- reset on dialog open */
     setAmount("");
     setDate(today);
-    setAccountId("");
+    setSource("");
     setNotes("");
     setExpectBack(false);
     setError(null);
@@ -1203,6 +1193,7 @@ function TransferDialog({
       setError("Enter an amount");
       return;
     }
+    const accountId = fundingSourceIds(source).accountId;
     if (!accountId) {
       setError(direction === "SEND" ? "Pick an account to send from" : "Pick the receiving account");
       return;
@@ -1263,10 +1254,12 @@ function TransferDialog({
           <label className="block">
             <span className="text-xs font-medium">{accountLabel}</span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={groupAccountOptions(accounts, Number(amount) || 0)}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                direction={direction === "SEND" ? "out" : "in"}
+                kinds={["BANK", "WALLET", "CASH"]}
+                amount={direction === "SEND" ? Number(amount) || 0 : 0}
               />
             </div>
           </label>

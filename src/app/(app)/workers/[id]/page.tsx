@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, formatDate, groupAccountOptions } from "@/lib/utils";
+import { formatINR, formatDate } from "@/lib/utils";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { MarkAttendanceModal } from "@/components/workers/mark-attendance-modal";
 
 type Balance = {
@@ -85,13 +86,6 @@ type WorkerDetail = {
   repayments: Repayment[];
   settlements: Settlement[];
 };
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
 
 const fetcher = async (url: string) => {
   const r = await fetch(url);
@@ -109,8 +103,6 @@ export default function WorkerDetailPage() {
     id ? `/api/workers/${id}` : null,
     fetcher,
   );
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
-  const accounts = accountsData?.accounts ?? [];
 
   const [attendanceOpen, setAttendanceOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
@@ -400,7 +392,6 @@ export default function WorkerDetailPage() {
       <PayDialog
         workerId={id ?? ""}
         workerName={data.worker.name}
-        accounts={accounts}
         open={payOpen}
         onClose={() => setPayOpen(false)}
       />
@@ -408,13 +399,11 @@ export default function WorkerDetailPage() {
         workerId={id ?? ""}
         workerName={data.worker.name}
         outstanding={outstandingAdvance}
-        accounts={accounts}
         open={returnOpen}
         onClose={() => setReturnOpen(false)}
       />
       <SettleDialog
         settlement={settleOpen}
-        accounts={accounts}
         onClose={() => setSettleOpen(null)}
       />
     </div>
@@ -458,20 +447,19 @@ function Stat({
 function PayDialog({
   workerId,
   workerName,
-  accounts,
   open,
   onClose,
 }: {
   workerId: string;
   workerName: string;
-  accounts: Account[];
   open: boolean;
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [kind, setKind] = useState<"WAGE" | "ADVANCE" | "BONUS">("WAGE");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -482,7 +470,7 @@ function PayDialog({
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
     setAmount("");
     setPaidAt(today);
-    setAccountId("");
+    setSource("");
     setKind("WAGE");
     setNotes("");
     setError(null);
@@ -496,6 +484,7 @@ function PayDialog({
       setError("Enter an amount");
       return;
     }
+    const accountId = fundingSourceIds(source).accountId;
     if (!accountId) {
       setError("Pick an account");
       return;
@@ -571,10 +560,12 @@ function PayDialog({
           <label className="block">
             <span className="text-xs font-medium">Pay from</span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={groupAccountOptions(accounts, Number(amount) || 0)}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                direction="out"
+                kinds={["BANK", "WALLET", "CASH"]}
+                amount={Number(amount) || 0}
               />
             </div>
           </label>
@@ -599,14 +590,13 @@ function PayDialog({
 
 function SettleDialog({
   settlement,
-  accounts,
   onClose,
 }: {
   settlement: Settlement | null;
-  accounts: Account[];
   onClose: () => void;
 }) {
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -614,7 +604,7 @@ function SettleDialog({
   useEffect(() => {
     if (!settlement) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
-    setAccountId("");
+    setSource("");
     setNotes("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -630,7 +620,9 @@ function SettleDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           paymentAccountId:
-            settlement.amountDue > 0 ? accountId || undefined : undefined,
+            settlement.amountDue > 0
+              ? fundingSourceIds(source).accountId ?? undefined
+              : undefined,
           notes: notes.trim() || undefined,
         }),
       });
@@ -664,11 +656,13 @@ function SettleDialog({
                 <label className="block">
                   <span className="text-xs font-medium">Pay from</span>
                   <div className="mt-1">
-                    <NativeSelect
-                      value={accountId}
-                      onChange={setAccountId}
+                    <FundingSourcePicker
+                      value={source}
+                      onChange={setSource}
+                      direction="out"
+                      kinds={["BANK", "WALLET", "CASH"]}
+                      amount={settlement.amountDue}
                       placeholder="— don't pay now, mark settled —"
-                      options={groupAccountOptions(accounts, settlement.amountDue)}
                     />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -704,21 +698,20 @@ function ReturnAdvanceDialog({
   workerId,
   workerName,
   outstanding,
-  accounts,
   open,
   onClose,
 }: {
   workerId: string;
   workerName: string;
   outstanding: number;
-  accounts: Account[];
   open: boolean;
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [amount, setAmount] = useState("");
   const [receivedAt, setReceivedAt] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -728,7 +721,7 @@ function ReturnAdvanceDialog({
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open */
     setAmount("");
     setReceivedAt(today);
-    setAccountId("");
+    setSource("");
     setNotes("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -745,6 +738,7 @@ function ReturnAdvanceDialog({
       setError(`Cannot exceed outstanding advance (${formatINR(outstanding)})`);
       return;
     }
+    const accountId = fundingSourceIds(source).accountId;
     if (!accountId) {
       setError("Pick where the cash landed");
       return;
@@ -807,10 +801,10 @@ function ReturnAdvanceDialog({
           <label className="block">
             <span className="text-xs font-medium">Receive into</span>
             <div className="mt-1">
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={groupAccountOptions(accounts, 0)}
+              <FundingSourcePicker
+                value={source}
+                onChange={setSource}
+                direction="in"
               />
             </div>
           </label>

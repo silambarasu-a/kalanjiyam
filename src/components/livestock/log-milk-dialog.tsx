@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import useSWR from "swr";
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -17,16 +16,9 @@ import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR } from "@/lib/utils";
 
 const DEFAULT_SESSIONS: { key: string; label: string }[] = [
   { key: "MORNING", label: "Morning" },
@@ -71,14 +63,6 @@ export function LogMilkDialog({
 }) {
   const isEdit = !!initial;
   const saleLocked = !!initial?.transactionId;
-  const { data: accountsRes } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = useMemo(
-    () => (accountsRes?.accounts ?? []).filter((a) => a.kind !== "CARD"),
-    [accountsRes],
-  );
 
   const initialSessions = (() => {
     if (!initial || initial.sessions == null) return null;
@@ -113,7 +97,8 @@ export function LogMilkDialog({
   const [ratePerLitre, setRatePerLitre] = useState(
     initial?.ratePerLitre != null ? String(initial.ratePerLitre) : "",
   );
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +131,7 @@ export function LogMilkDialog({
   async function submit() {
     setError(null);
     if (totalLitres <= 0) return setError("Enter milk in at least one session");
+    const { accountId } = fundingSourceIds(source);
     if (hasSale && !accountId)
       return setError("Pick the account / wallet that receives the sale");
     setSubmitting(true);
@@ -379,11 +365,12 @@ export function LogMilkDialog({
                 </div>
                 <div className="mt-2 space-y-1">
                   <Label className="text-[10px]">Receive into</Label>
-                  <NativeSelect
-                    value={accountId}
-                    onChange={setAccountId}
-                    options={groupAccountOptions(accounts, 0)}
-                    searchable
+                  <FundingSourcePicker
+                    value={source}
+                    onChange={setSource}
+                    enabled={open}
+                    direction="in"
+                    kinds={["BANK", "WALLET", "CASH"]}
                     placeholder="— pick account —"
                   />
                 </div>

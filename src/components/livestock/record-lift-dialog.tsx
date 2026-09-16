@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { Truck } from "lucide-react";
 import {
@@ -14,18 +14,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
 
 type Analytics = {
   liveHead: number;
@@ -66,15 +59,6 @@ export function RecordLiftDialog({
   integratorName: string;
   onSaved: () => void;
 }) {
-  const { data: accountsRes } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = useMemo(
-    () => (accountsRes?.accounts ?? []).filter((a) => a.kind !== "CARD"),
-    [accountsRes],
-  );
-
   const [date, setDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
@@ -84,7 +68,8 @@ export function RecordLiftDialog({
       ? (latestAvgKg * liveHead).toFixed(2)
       : "",
   );
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [closeBatch, setCloseBatch] = useState(true);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -102,7 +87,7 @@ export function RecordLiftDialog({
         ? (latestAvgKg * liveHead).toFixed(2)
         : "",
     );
-    setAccountId("");
+    setSource("");
     setCloseBatch(true);
     setNotes("");
     setError(null);
@@ -141,6 +126,7 @@ export function RecordLiftDialog({
       return setError(`Only ${liveHead} live birds in this batch`);
     if (!Number.isFinite(w) || w <= 0)
       return setError("Total weight must be positive");
+    const { accountId } = fundingSourceIds(source);
     if (!accountId) return setError("Pick the account that receives the payout");
     setSubmitting(true);
     try {
@@ -279,11 +265,12 @@ export function RecordLiftDialog({
 
           <div className="space-y-1">
             <Label className="text-xs">Receive payout into</Label>
-            <NativeSelect
-              value={accountId}
-              onChange={setAccountId}
-              options={groupAccountOptions(accounts, 0)}
-              searchable
+            <FundingSourcePicker
+              value={source}
+              onChange={setSource}
+              enabled={open}
+              direction="in"
+              kinds={["BANK", "WALLET", "CASH"]}
               placeholder="— pick account —"
             />
           </div>

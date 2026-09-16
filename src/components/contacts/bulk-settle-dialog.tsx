@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import useSWR from "swr";
 import {
   Dialog,
   DialogContent,
@@ -12,11 +11,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds } from "@/lib/funding-sources";
 import { formatINR } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
 
 type Charge = {
   id: string;
@@ -46,7 +45,8 @@ type Props = {
 };
 
 type Line = { selected: boolean; amount: string };
-type SourceMode = "account" | "card" | "advance";
+/** Picker value for "apply held credit instead of cash". */
+const ADVANCE_SOURCE = "advance";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -96,20 +96,11 @@ export function BulkSettleDialog({
   );
   const [paidAt, setPaidAt] = useState(todayIso());
   const [notes, setNotes] = useState("");
-  const [sourceMode, setSourceMode] = useState<SourceMode>("account");
-  const [accountId, setAccountId] = useState("");
-  const [cardId, setCardId] = useState("");
+  // "account:<id>" | "card:<id>" | ADVANCE_SOURCE | "" (audit-only)
+  const [source, setSource] = useState("");
   const [leftoverKind, setLeftoverKind] = useState<LeftoverKind | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const { data: accountsRes } = useSWR<{
-    accounts: { id: string; name: string; kind: string }[];
-  }>(open ? "/api/accounts" : null, fetcher);
-  const { data: cardsRes } = useSWR<{ cards: { id: string; name: string }[] }>(
-    open ? "/api/cards" : null,
-    fetcher,
-  );
 
   const receivedNum = useMemo(() => {
     const n = Number(received);
@@ -145,7 +136,8 @@ export function BulkSettleDialog({
     return round2(sum);
   }, [payable, lines]);
 
-  const isAdvanceMode = sourceMode === "advance";
+  const isAdvanceMode = source === ADVANCE_SOURCE;
+  const sourceIds = fundingSourceIds(isAdvanceMode ? "" : source);
   const leftover = round2(receivedNum - allocated);
   const overAllocated = leftover < -0.005;
   const hasLeftover = leftover > 0.005;
@@ -216,9 +208,9 @@ export function BulkSettleDialog({
     }
     if (hasLeftover) {
       if (!leftoverKind) return "Say what the leftover is";
-      if (sourceMode === "card")
+      if (sourceIds.cardId)
         return "Pick a bank or cash account to record the leftover";
-      if (!accountId) return "Pick an account to record the leftover";
+      if (!sourceIds.accountId) return "Pick an account to record the leftover";
     }
     return null;
   })();
@@ -245,8 +237,8 @@ export function BulkSettleDialog({
           }
         : {
             lines: payloadLines,
-            accountId: sourceMode === "account" && accountId ? accountId : null,
-            cardId: sourceMode === "card" && cardId ? cardId : null,
+            accountId: sourceIds.accountId,
+            cardId: sourceIds.cardId,
             paidAt,
             notes: notes.trim() || null,
             receivedAmount: receivedNum,
@@ -447,57 +439,35 @@ export function BulkSettleDialog({
             <div className="text-xs font-medium">
               {isIncoming ? "Receive into" : "Pay from"}
             </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              {(
-                [
-                  { mode: "account" as const, label: "Account", show: true },
-                  { mode: "card" as const, label: "Card", show: true },
-                  {
-                    mode: "advance" as const,
-                    label: `Advance credit (${formatINR(advanceAvailable)})`,
-                    show: advanceAvailable > 0.005,
-                  },
-                ] as const
-              )
-                .filter((o) => o.show)
-                .map((o) => (
-                  <button
-                    key={o.mode}
-                    type="button"
-                    onClick={() => setSourceMode(o.mode)}
-                    className={`rounded-md border px-3 py-1.5 ${
-                      sourceMode === o.mode
-                        ? "bg-foreground text-background"
-                        : "bg-background"
-                    }`}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-            </div>
-            {sourceMode === "account" && (
-              <NativeSelect
-                value={accountId}
-                onChange={setAccountId}
-                options={(accountsRes?.accounts ?? []).map((a) => ({
-                  value: a.id,
-                  label: a.name,
-                  hint: a.kind,
-                }))}
-                placeholder="Select account (optional)"
-              />
-            )}
-            {sourceMode === "card" && (
-              <NativeSelect
-                value={cardId}
-                onChange={setCardId}
-                options={(cardsRes?.cards ?? []).map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                }))}
-                placeholder="Select card (optional)"
-              />
-            )}
+            <FundingSourcePicker
+              value={source}
+              onChange={setSource}
+              enabled={open}
+              direction={isIncoming ? "in" : "out"}
+              kinds={
+                isIncoming
+                  ? ["BANK", "WALLET", "CASH"]
+                  : ["BANK", "WALLET", "CASH", "DEBIT", "CREDIT"]
+              }
+              amount={isIncoming ? 0 : receivedNum}
+              placeholder="None — record without a transaction"
+              appendGroups={
+                advanceAvailable > 0.005
+                  ? [
+                      {
+                        label: "Held credit",
+                        options: [
+                          {
+                            value: ADVANCE_SOURCE,
+                            label: "Apply advance credit",
+                            hint: formatINR(advanceAvailable),
+                          },
+                        ],
+                      },
+                    ]
+                  : undefined
+              }
+            />
             <p className="text-[10px] text-muted-foreground">
               {isAdvanceMode
                 ? "Draws down credit already held. No cash moves and no transaction is recorded."

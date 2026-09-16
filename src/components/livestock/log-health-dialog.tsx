@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import useSWR from "swr";
+import { useState } from "react";
 import { Stethoscope } from "lucide-react";
 import {
   Dialog,
@@ -17,16 +16,8 @@ import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
-import { groupAccountOptions } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import { fundingSourceIds } from "@/lib/funding-sources";
 
 /**
  * Log (or edit) a health / disease incident. Distinct from
@@ -63,14 +54,6 @@ export function LogHealthDialog({
 }) {
   const isEdit = !!initial;
   const costLocked = !!initial?.transactionId;
-  const { data: accountsRes } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = useMemo(
-    () => (accountsRes?.accounts ?? []).filter((a) => a.kind !== "CARD"),
-    [accountsRes],
-  );
 
   const [date, setDate] = useState(
     () => initial?.date.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
@@ -81,7 +64,8 @@ export function LogHealthDialog({
   const [cost, setCost] = useState(
     initial?.cost != null ? String(initial.cost) : "",
   );
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [resolved, setResolved] = useState(initial?.resolved ?? false);
   const [resolvedAt, setResolvedAt] = useState(
     initial?.resolvedAt?.slice(0, 10) ?? "",
@@ -95,6 +79,7 @@ export function LogHealthDialog({
   async function submit() {
     setError(null);
     if (!condition.trim()) return setError("Condition is required");
+    const { accountId } = fundingSourceIds(source);
     if (hasCost && !accountId)
       return setError("Pick an account to pay from");
     setSubmitting(true);
@@ -224,11 +209,13 @@ export function LogHealthDialog({
             {hasCost && (
               <div className="space-y-1">
                 <Label className="text-xs">Pay from</Label>
-                <NativeSelect
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={groupAccountOptions(accounts, Number(cost) || 0)}
-                  searchable
+                <FundingSourcePicker
+                  value={source}
+                  onChange={setSource}
+                  enabled={open}
+                  direction="out"
+                  kinds={["BANK", "WALLET", "CASH"]}
+                  amount={Number(cost) || 0}
                 />
               </div>
             )}

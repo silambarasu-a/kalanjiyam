@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import useSWR, { mutate as globalMutate } from "swr";
+import { mutate as globalMutate } from "swr";
 import {
   Activity,
   Stethoscope,
@@ -20,19 +20,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
-import { NativeSelect } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
+import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { formatINR, groupAccountOptions } from "@/lib/utils";
-import { fetcher } from "@/lib/swr-fetcher";
-
-type Account = {
-  id: string;
-  name: string;
-  kind: string;
-  balance: number;
-  availableLimit: number | null;
-};
+import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatINR } from "@/lib/utils";
 
 export type BatchActionTab = "event" | "feed" | "vaccination";
 
@@ -69,13 +61,6 @@ export function BatchActionDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const { data: accountsData } = useSWR<{ accounts: Account[] }>(
-    open ? "/api/accounts" : null,
-    fetcher,
-  );
-  const accounts = (accountsData?.accounts ?? []).filter(
-    (a) => a.kind !== "CARD",
-  );
 
   const [eventType, setEventType] = useState<
     "PURCHASE" | "BIRTH" | "DEATH" | "SALE"
@@ -96,7 +81,8 @@ export function BatchActionDialog({
   const [nextDueDate, setNextDueDate] = useState("");
   const [vaccinationCost, setVaccinationCost] = useState("");
   const [date, setDate] = useState(today);
-  const [accountId, setAccountId] = useState("");
+  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +104,7 @@ export function BatchActionDialog({
     setNextDueDate("");
     setVaccinationCost("");
     setDate(today);
-    setAccountId("");
+    setSource("");
     setNotes("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -164,6 +150,7 @@ export function BatchActionDialog({
     setError(null);
     setSubmitting(true);
     try {
+      const accountId = fundingSourceIds(source).accountId ?? undefined;
       let url = "";
       let payload: Record<string, unknown> = {};
       if (tab === "event") {
@@ -177,7 +164,7 @@ export function BatchActionDialog({
           totalWeightKg:
             pricingMode === "per-kg" && totalKgN > 0 ? totalKgN : undefined,
           notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
+          accountId,
         };
       } else if (tab === "feed") {
         url = `/api/livestock-batches/${batch.id}/feed`;
@@ -187,7 +174,7 @@ export function BatchActionDialog({
           quantity: feedQuantity ? Number(feedQuantity) : null,
           unit: feedUnit || undefined,
           notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
+          accountId,
         };
       } else {
         url = `/api/livestock-batches/${batch.id}/vaccination`;
@@ -197,7 +184,7 @@ export function BatchActionDialog({
           nextDueDate: nextDueDate || null,
           cost: vaccinationCost ? Number(vaccinationCost) : null,
           notes: notes.trim() || undefined,
-          accountId: accountId || undefined,
+          accountId,
         };
       }
       const res = await fetch(url, {
@@ -483,11 +470,13 @@ export function BatchActionDialog({
                   <Label className="text-xs inline-flex items-center gap-1">
                     <Wallet className="h-3 w-3" /> Pay from / receive into
                   </Label>
-                  <NativeSelect
-                    value={accountId}
-                    onChange={setAccountId}
-                    options={groupAccountOptions(accounts, debitAmount)}
-                    searchable
+                  <FundingSourcePicker
+                    value={source}
+                    onChange={setSource}
+                    enabled={open}
+                    direction={isOutflow ? "out" : "in"}
+                    kinds={["BANK", "WALLET", "CASH"]}
+                    amount={debitAmount}
                   />
                 </div>
               );
