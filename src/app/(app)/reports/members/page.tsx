@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import useSWR from "swr";
+import { Star } from "lucide-react";
 import { ReportShell, ReportKpi } from "@/components/reports/report-shell";
 import { SortableTable, type Column } from "@/components/reports/sortable-table";
 import { formatINR } from "@/lib/utils";
@@ -12,6 +13,7 @@ type Row = {
   name: string;
   relationship: string | null;
   active: boolean;
+  favorite: boolean;
   totalCharged: number;
   totalSettled: number;
   outstanding: number;
@@ -43,6 +45,12 @@ export default function MembersReportPage() {
             className="font-medium hover:underline truncate block"
           >
             {r.name}
+            {r.favorite && (
+              <Star
+                aria-label="Favorite"
+                className="ml-1.5 inline-block h-3 w-3 align-[-1px] fill-amber-400 text-amber-400"
+              />
+            )}
           </Link>
           <div className="text-[11px] text-muted-foreground">
             {r.relationship ?? "—"}

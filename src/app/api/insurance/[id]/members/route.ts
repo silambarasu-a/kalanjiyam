@@ -46,9 +46,15 @@ export async function GET(
     }
     const members = await prisma.insuredMember.findMany({
       where: { investmentId: id },
-      orderBy: [{ active: "desc" }, { createdAt: "asc" }],
+      orderBy: [
+        { active: "desc" },
+        { contact: { favorite: "desc" } },
+        { createdAt: "asc" },
+      ],
       include: {
-        contact: { select: { id: true, name: true, relationship: true } },
+        contact: {
+          select: { id: true, name: true, relationship: true, favorite: true },
+        },
       },
     });
     return NextResponse.json({

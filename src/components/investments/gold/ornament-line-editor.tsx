@@ -110,7 +110,7 @@ export function OrnamentLineEditor({
   onChange: (next: OrnamentRow) => void;
   onRemove: () => void;
   canRemove: boolean;
-  contacts: { id: string; name: string }[];
+  contacts: { id: string; name: string; favorite?: boolean }[];
   acquisitionKind: "PURCHASE" | "GIFT_RECEIVED" | "OPENING_STOCK";
   expanded: boolean;
   onToggle: () => void;
@@ -120,7 +120,7 @@ export function OrnamentLineEditor({
   const isTheirs = !!ornament.boughtForContactId;
   const contactOptions = [
     { value: "", label: "— none —" },
-    ...contacts.map((c) => ({ value: c.id, label: c.name })),
+    ...contacts.map((c) => ({ value: c.id, label: c.name, favorite: c.favorite })),
   ];
 
   return (

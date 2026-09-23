@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { DateInput } from "@/components/ui/date-input";
 import { fetcher } from "@/lib/swr-fetcher";
+import { contactOptionLabel } from "@/lib/contact-label";
 import {
   Dialog,
   DialogContent,
@@ -190,7 +191,9 @@ function VehicleDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open ? "/api/contacts" : null,
     fetcher,
   );
@@ -296,7 +299,7 @@ function VehicleDialog({
                 <option value="">Select contact…</option>
                 {contacts.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {contactOptionLabel(c)}
                   </option>
                 ))}
               </select>

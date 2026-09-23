@@ -68,6 +68,7 @@ type Contact = {
   name: string;
   relationship: string | null;
   active: boolean;
+  favorite?: boolean;
 };
 
 const KIND_OPTIONS: LoanKind[] = [
@@ -546,6 +547,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                       value: c.id,
                       label: c.active ? c.name : `${c.name} (archived)`,
                       hint: c.relationship ?? undefined,
+                      favorite: c.favorite,
                     }))}
                     disabled={contactsLoading || contacts.length === 0}
                     autoFocus
@@ -638,6 +640,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
                   value: c.id,
                   label: c.active ? c.name : `${c.name} (archived)`,
                   hint: c.relationship ?? undefined,
+                  favorite: c.favorite,
                 })),
               ]}
             />

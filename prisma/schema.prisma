@@ -709,6 +709,9 @@ model Contact {
   user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   notes        String?
   active       Boolean   @default(true)
+  // Pinned to the top of every contact list / picker. Purely a display
+  // preference: no money semantics hang off it.
+  favorite     Boolean   @default(false)
   // Advance credit balances, kept as running counters rather than charges.
   // `advanceHeld` is THEIR money sitting with us (they overpaid a settlement
   // and asked us to hold it); `advancePaid` is OUR money sitting with them.

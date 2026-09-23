@@ -44,7 +44,7 @@ type LeaseRow = {
   };
 };
 
-type Contact = { id: string; name: string };
+type Contact = { id: string; name: string; favorite?: boolean };
 type CropBatch = { id: string; name: string; crop: { id: string; name: string } };
 type LivestockBatch = { id: string; name: string; livestock: { id: string; name: string } };
 
@@ -343,7 +343,11 @@ function CreateLeaseDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 value={memberId}
                 onChange={setMemberId}
                 placeholder="— pick member —"
-                options={contacts.map((m) => ({ value: m.id, label: m.name }))}
+                options={contacts.map((m) => ({
+                  value: m.id,
+                  label: m.name,
+                  favorite: m.favorite,
+                }))}
               />
             ) : (
               <Input

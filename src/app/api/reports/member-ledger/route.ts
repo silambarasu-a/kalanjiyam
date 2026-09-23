@@ -25,7 +25,7 @@ export async function GET() {
           },
         },
       },
-      orderBy: { name: "asc" },
+      orderBy: [{ favorite: "desc" }, { name: "asc" }],
     });
 
     const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -54,6 +54,7 @@ export async function GET() {
         name: m.name,
         relationship: m.relationship,
         active: m.active,
+        favorite: m.favorite,
         totalCharged: round2(totalCharged),
         totalSettled: round2(totalSettled),
         // Legacy alias — "outstanding" historically meant "what others

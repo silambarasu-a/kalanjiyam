@@ -17,9 +17,9 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn, formatINR } from "@/lib/utils";
-import { Check, ChevronsUpDown, X } from "lucide-react";
+import { Check, ChevronsUpDown, Star, X } from "lucide-react";
 
-export type ContactOption = { id: string; name: string };
+export type ContactOption = { id: string; name: string; favorite?: boolean };
 
 export type SplitDraft = {
   contactId: string;
@@ -32,8 +32,12 @@ export type SplitDraft = {
 export type SplitMode = "equal" | "custom";
 export type SplitUnit = "amount" | "percent";
 
+// A fresh split is "tag only" until the user ticks "Recover this share":
+// tagging a contact on an expense is far more common than raising a
+// receivable against them, and an accidental receivable is the costlier
+// mistake to clean up.
 export function makeEmptySplit(): SplitDraft {
-  return { contactId: "", amount: 0, sharePercent: null, isRecoverable: true, notes: null };
+  return { contactId: "", amount: 0, sharePercent: null, isRecoverable: false, notes: null };
 }
 
 /**
@@ -62,6 +66,13 @@ type Props = {
   onModeChange: (mode: SplitMode) => void;
   unit: SplitUnit;
   onUnitChange: (unit: SplitUnit) => void;
+  /**
+   * Open the first row's contact picker as soon as the editor appears, so
+   * "+ Split this expense with contacts?" lands the user straight in the
+   * contact search. Only kicks in when that first row has no contact yet —
+   * an editor mounted over saved splits (edit dialog) stays quiet.
+   */
+  autoFocus?: boolean;
 };
 
 export function TransactionSplitEditor({
@@ -73,7 +84,15 @@ export function TransactionSplitEditor({
   onModeChange,
   unit,
   onUnitChange,
+  autoFocus = false,
 }: Props) {
+  // Index of the row whose picker should open itself on mount: row 0 when
+  // the editor was just opened, then each row added via "+ Add contact".
+  // A picker reads this once, at mount, so index reuse after removing a
+  // row never re-opens an existing picker.
+  const [autoOpenIndex, setAutoOpenIndex] = useState<number | null>(() =>
+    autoFocus && splits.length > 0 && !splits[0].contactId ? 0 : null,
+  );
   const sum = useMemo(
     () => splits.reduce((acc, s) => acc + (Number.isFinite(s.amount) ? s.amount : 0), 0),
     [splits],
@@ -88,6 +107,7 @@ export function TransactionSplitEditor({
 
   function addRow() {
     const next = [...splits, makeEmptySplit()];
+    setAutoOpenIndex(next.length - 1);
     onChange(mode === "equal" ? recalcEqual(next, totalAmount) : next);
   }
   function removeRow(i: number) {
@@ -193,6 +213,7 @@ export function TransactionSplitEditor({
                       value={s.contactId}
                       onChange={(v) => handleContactChange(i, v)}
                       options={opts}
+                      autoOpen={autoOpenIndex === i}
                     />
                   </div>
                   {mode === "custom" ? (
@@ -298,12 +319,19 @@ function ContactPicker({
   value,
   onChange,
   options,
+  autoOpen = false,
 }: {
   value: string;
   onChange: (id: string) => void;
   options: ContactOption[];
+  /**
+   * Start open. Base UI moves focus to the popup's first tabbable element
+   * (the search input) on open, so the user can type a name immediately.
+   * Read once at mount — later changes don't re-open the picker.
+   */
+  autoOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(autoOpen);
   const [search, setSearch] = useState("");
   const selected = options.find((c) => c.id === value);
 
@@ -330,7 +358,15 @@ function ContactPicker({
               !selected && "text-muted-foreground",
             )}
           >
-            <span className="truncate">{selected?.name ?? "— pick a contact —"}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate">{selected?.name ?? "— pick a contact —"}</span>
+              {selected?.favorite && (
+                <Star
+                  aria-label="Favorite"
+                  className="size-3.5 shrink-0 fill-amber-400 text-amber-400"
+                />
+              )}
+            </span>
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         }
@@ -364,6 +400,12 @@ function ContactPicker({
                     )}
                   />
                   {c.name}
+                  {c.favorite && (
+                    <Star
+                      aria-label="Favorite"
+                      className="size-3.5 fill-amber-400 text-amber-400"
+                    />
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>

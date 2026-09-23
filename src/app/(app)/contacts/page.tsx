@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Pencil, Plus, Trash2, Users, Wallet, CheckCircle2 } from "lucide-react";
+import { Pencil, Plus, Star, Trash2, Users, Wallet, CheckCircle2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { DateInput } from "@/components/ui/date-input";
 import {
   Dialog,
@@ -14,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatINR } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type Contact = {
@@ -24,9 +26,62 @@ type Contact = {
   dob: string | null;
   notes: string | null;
   active: boolean;
+  favorite: boolean;
   linkedUser: { id: string; email: string; name: string } | null;
   totals: { outstanding: number; youOwe: number; settled: number };
 };
+
+type ContactsPayload = { members: Contact[] };
+
+// Mirror the server order (active → favorite → name) so an optimistic
+// favorite toggle moves the row to where revalidation will land it.
+function sortContacts(list: Contact[]): Contact[] {
+  return [...list].sort(
+    (a, b) =>
+      Number(b.active) - Number(a.active) ||
+      Number(b.favorite) - Number(a.favorite) ||
+      a.name.localeCompare(b.name),
+  );
+}
+
+function withFavorite(
+  current: ContactsPayload | undefined,
+  id: string,
+  favorite: boolean,
+): ContactsPayload {
+  return {
+    members: sortContacts(
+      (current?.members ?? []).map((m) => (m.id === id ? { ...m, favorite } : m)),
+    ),
+  };
+}
+
+async function toggleFavorite(member: Contact) {
+  const favorite = !member.favorite;
+  try {
+    await globalMutate<ContactsPayload>(
+      "/api/contacts",
+      async (current) => {
+        const res = await fetch(`/api/contacts/${member.id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ favorite }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error ?? "Could not update favorite");
+        }
+        return withFavorite(current, member.id, favorite);
+      },
+      {
+        optimisticData: (current) => withFavorite(current, member.id, favorite),
+        rollbackOnError: true,
+      },
+    );
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Could not update favorite");
+  }
+}
 
 
 export default function ContactsPage() {
@@ -213,6 +268,25 @@ function MemberRow({
           </div>
         )}
       </Link>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => toggleFavorite(member)}
+        aria-label={member.favorite ? "Remove from favorites" : "Mark as favorite"}
+        aria-pressed={member.favorite}
+        title={
+          member.favorite
+            ? "Favorite — listed first everywhere"
+            : "Mark as favorite to list first everywhere"
+        }
+      >
+        <Star
+          className={cn(
+            "h-4 w-4",
+            member.favorite ? "fill-amber-400 text-amber-400" : "text-muted-foreground",
+          )}
+        />
+      </Button>
       <Button variant="ghost" size="icon" onClick={onEdit} aria-label="Edit">
         <Pencil className="h-4 w-4" />
       </Button>
@@ -245,6 +319,7 @@ function ContactDialog({
   const [relationship, setRelationship] = useState("");
   const [notes, setNotes] = useState("");
   const [dob, setDob] = useState("");
+  const [favorite, setFavorite] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -255,6 +330,7 @@ function ContactDialog({
     setRelationship(member?.relationship ?? "");
     setNotes(member?.notes ?? "");
     setDob(member?.dob ? member.dob.slice(0, 10) : "");
+    setFavorite(member?.favorite ?? false);
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, member]);
@@ -268,6 +344,7 @@ function ContactDialog({
         relationship: relationship.trim() || undefined,
         notes: notes.trim() || undefined,
         dob: dob || undefined,
+        favorite,
       };
       const res = await fetch(member ? `/api/contacts/${member.id}` : "/api/contacts", {
         method: member ? "PATCH" : "POST",
@@ -315,6 +392,18 @@ function ContactDialog({
             <span className="text-xs font-medium">Notes</span>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
           </label>
+          <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div>
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                Favorite
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Listed first in every contact list and picker.
+              </p>
+            </div>
+            <Switch checked={favorite} onCheckedChange={setFavorite} aria-label="Favorite" />
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

@@ -179,7 +179,7 @@ export type FundingCard = OwnedRow & {
   active?: boolean;
 };
 
-export type FundingContact = { id: string; name: string };
+export type FundingContact = { id: string; name: string; favorite?: boolean };
 
 /* ------------------------------------------------------------------ */
 /* Group builder                                                        */
@@ -307,6 +307,7 @@ export function buildFundingSourceGroups(
         value: fundingSourceValue("contact", c.id),
         label: c.name,
         hint: contactHint,
+        favorite: c.favorite,
         disabled: false,
       });
     }

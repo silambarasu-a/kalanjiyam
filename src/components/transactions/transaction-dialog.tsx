@@ -16,6 +16,7 @@ import {
   Check,
   Gift,
   Wallet,
+  Star,
 } from "lucide-react";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,7 @@ import { fundingSourceIds } from "@/lib/funding-sources";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
+import { contactOptionLabel } from "@/lib/contact-label";
 import { PREMIUM_FREQUENCY_OPTIONS } from "@/lib/reminder-schedule";
 import {
   useTransactionDialog,
@@ -107,7 +109,7 @@ type Category = {
   types: string[];
   parentCategoryId: string | null;
 };
-type Contact = { id: string; name: string };
+type Contact = { id: string; name: string; favorite?: boolean };
 type Worker = { id: string; name: string; dailyRate: number | null; balance: number };
 type CropBatch = {
   id: string;
@@ -580,7 +582,7 @@ function IncomeExpenseForm({
   >("DURING");
   const [medicalPatientFilter, setMedicalPatientFilter] = useState<string>("");
   const { data: contactsForMedical } = useSWR<{
-    members: { id: string; name: string }[];
+    members: { id: string; name: string; favorite?: boolean }[];
   }>(isMedicalMode ? "/api/contacts" : null, fetcher);
   const medicalContacts = contactsForMedical?.members ?? [];
   const { data: medicalRecordsData } = useSWR<{
@@ -1272,7 +1274,7 @@ function IncomeExpenseForm({
               <option value="">— patient —</option>
               {medicalContacts.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {contactOptionLabel(c)}
                 </option>
               ))}
             </select>
@@ -1398,8 +1400,13 @@ function IncomeExpenseForm({
             <>
               <TransactionSplitEditor
                 totalAmount={totalForSplits}
-                contacts={contacts.map((m) => ({ id: m.id, name: m.name }))}
+                contacts={contacts.map((m) => ({
+                  id: m.id,
+                  name: m.name,
+                  favorite: m.favorite,
+                }))}
                 splits={displaySplits}
+                autoFocus
                 onChange={setSplits}
                 mode={expenseSplitMode}
                 onModeChange={setExpenseSplitMode}
@@ -2327,13 +2334,19 @@ function TransferForm({ cards, onClose }: { cards: Card[]; onClose: () => void }
                           setPersonName(m.name);
                         }}
                         className={cn(
-                          "px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
+                          "inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-xs font-medium transition-all",
                           isSelected
                             ? "border-primary bg-primary text-primary-foreground"
                             : "border-border bg-background text-muted-foreground hover:border-muted-foreground/40",
                         )}
                       >
                         {m.name}
+                        {m.favorite && (
+                          <Star
+                            aria-label="Favorite"
+                            className="size-3 fill-amber-400 text-amber-400"
+                          />
+                        )}
                       </button>
                     );
                   })}
@@ -2825,7 +2838,7 @@ function InvestmentForm({
   // FD/SIP/Stock creators don't pay the round-trip.
   const isInsuranceCreate = creatingNew && newKind === "INSURANCE";
   const { data: insuranceContactsData } = useSWR<{
-    members: { id: string; name: string }[];
+    members: { id: string; name: string; favorite?: boolean }[];
   }>(isInsuranceCreate ? "/api/contacts" : null, fetcher);
   const insuranceContacts = insuranceContactsData?.members ?? [];
   const { data: insuranceVehiclesData } = useSWR<{

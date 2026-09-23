@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, Loader2, Search, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type NativeSelectOption = {
@@ -17,6 +17,8 @@ export type NativeSelectOption = {
   dotClassName?: string;
   /** Small muted text right after the label (e.g. the owning member's name). */
   meta?: string;
+  /** Renders a filled star after the label — used for favorite contacts. */
+  favorite?: boolean;
   disabled?: boolean;
 };
 
@@ -211,6 +213,12 @@ export function NativeSelect({
           )}
           <span className="flex-1 whitespace-nowrap">
             {o.label}
+            {o.favorite && (
+              <Star
+                aria-label="Favorite"
+                className="ml-1.5 inline-block h-3 w-3 align-[-1px] fill-amber-400 text-amber-400"
+              />
+            )}
             {o.meta && <span className="ml-1.5 text-muted-foreground">· {o.meta}</span>}
           </span>
           {o.hint && (
@@ -252,6 +260,12 @@ export function NativeSelect({
             )}
           >
             {loading ? loadingMessage : display || placeholder}
+            {!loading && display && selected?.favorite && (
+              <Star
+                aria-label="Favorite"
+                className="ml-1.5 inline-block h-3 w-3 align-[-1px] fill-amber-400 text-amber-400"
+              />
+            )}
             {!loading && display && selected?.meta && (
               <span className="ml-1.5 text-muted-foreground">· {selected.meta}</span>
             )}

@@ -176,7 +176,9 @@ export function EditTransactionDialog({
   // alias from when contacts were called "members"). Easy to typo:
   // the wrong field name silently returns `[]`, and the split editor
   // renders blank dropdowns with no error.
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open && isExpense ? "/api/contacts" : null,
     fetcher,
   );
@@ -569,6 +571,7 @@ export function EditTransactionDialog({
                       onModeChange={setExpenseSplitMode}
                       unit={expenseSplitUnit}
                       onUnitChange={setExpenseSplitUnit}
+                      autoFocus
                     />
                     <button
                       type="button"

@@ -17,7 +17,10 @@ export async function GET() {
     const [members, charges] = await Promise.all([
       prisma.contact.findMany({
         where: { workspaceId: ctx.workspaceId },
-        orderBy: [{ active: "desc" }, { name: "asc" }],
+        // Every contact picker in the app renders this list in the order it
+        // arrives, so this is the one place that pins favorites to the top.
+        // Archived contacts still sink below active ones, favorite or not.
+        orderBy: [{ active: "desc" }, { favorite: "desc" }, { name: "asc" }],
         include: { user: { select: { id: true, email: true, name: true } } },
       }),
       // One round-trip for all charges in the workspace, then group in
@@ -77,6 +80,7 @@ export async function GET() {
           dob: m.dob?.toISOString() ?? null,
           notes: m.notes,
           active: m.active,
+          favorite: m.favorite,
           linkedUser: m.user ? { id: m.user.id, email: m.user.email, name: m.user.name } : null,
           // Advance credit rides alongside the owe/owed pair rather than
           // inside it — it's money parked, not money owed.
@@ -109,6 +113,7 @@ export async function POST(request: Request) {
         dob: parsed.data.dob ? new Date(parsed.data.dob) : null,
         notes: parsed.data.notes,
         userId: parsed.data.userId ?? null,
+        favorite: parsed.data.favorite ?? false,
       },
     });
     return NextResponse.json({ id: member.id });

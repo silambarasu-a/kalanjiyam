@@ -56,6 +56,7 @@ import {
 import { formatINR, formatDate } from "@/lib/utils";
 import { fundingSourceIds } from "@/lib/funding-sources";
 import { fetcher } from "@/lib/swr-fetcher";
+import { contactOptionLabel } from "@/lib/contact-label";
 
 type Insurance = {
   id: string;
@@ -880,7 +881,9 @@ function EditVehicleDialog({
   onClose: () => void;
   vehicle: Vehicle;
 }) {
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open ? "/api/contacts" : null,
     fetcher,
   );
@@ -995,7 +998,7 @@ function EditVehicleDialog({
                 <option value="">Select contact…</option>
                 {contacts.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {contactOptionLabel(c)}
                   </option>
                 ))}
               </select>
@@ -1190,7 +1193,9 @@ function DisposeVehicleDialog({
   vehicle: Vehicle;
 }) {
   const router = useRouter();
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open ? "/api/contacts" : null,
     fetcher,
   );
@@ -1324,7 +1329,7 @@ function DisposeVehicleDialog({
                 <option value="">Select contact…</option>
                 {contacts.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {contactOptionLabel(c)}
                   </option>
                 ))}
               </select>

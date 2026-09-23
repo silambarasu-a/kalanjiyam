@@ -35,6 +35,7 @@ export async function PATCH(
         dob: parsed.data.dob ? new Date(parsed.data.dob) : existing.dob,
         notes: parsed.data.notes ?? existing.notes,
         active: parsed.data.active ?? existing.active,
+        favorite: parsed.data.favorite ?? existing.favorite,
         userId: parsed.data.userId ?? existing.userId,
       },
     });

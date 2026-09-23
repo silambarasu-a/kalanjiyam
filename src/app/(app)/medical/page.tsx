@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { Stethoscope, Plus } from "lucide-react";
+import { Stethoscope, Plus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NavigatingCard } from "@/components/ui/navigating-card";
 import { MedicalRecordDialog } from "@/components/medical/record-dialog";
@@ -10,7 +10,12 @@ import { formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
 
 type PatientSummary = {
-  contact: { id: string; name: string; relationship: string | null };
+  contact: {
+    id: string;
+    name: string;
+    relationship: string | null;
+    favorite: boolean;
+  };
   checkupCount: number;
   hospitalizationCount: number;
   lastOccurredAt: string;
@@ -88,6 +93,12 @@ function PatientRow({ p }: { p: PatientSummary }) {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{p.contact.name}</span>
+            {p.contact.favorite && (
+              <Star
+                aria-label="Favorite"
+                className="h-3.5 w-3.5 fill-amber-400 text-amber-400"
+              />
+            )}
             {p.contact.relationship && (
               <span className="text-xs text-muted-foreground">
                 {p.contact.relationship}

@@ -283,7 +283,9 @@ function NewPolicyDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open ? "/api/contacts" : null,
     fetcher,
   );

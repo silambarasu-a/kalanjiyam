@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Plus, Trash2 } from "lucide-react";
+import { contactOptionLabel } from "@/lib/contact-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
@@ -200,7 +201,7 @@ export function InsurancePolicyExtrasFields({
   premiumFrequency: string;
   value: InsurancePolicyExtras;
   onChange: (next: InsurancePolicyExtras) => void;
-  contacts: { id: string; name: string }[];
+  contacts: { id: string; name: string; favorite?: boolean }[];
   vehicles: {
     id: string;
     name: string;
@@ -409,7 +410,7 @@ export function InsurancePolicyExtrasFields({
                       <option value="">— pick contact —</option>
                       {contacts.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {c.name}
+                          {contactOptionLabel(c)}
                         </option>
                       ))}
                     </select>

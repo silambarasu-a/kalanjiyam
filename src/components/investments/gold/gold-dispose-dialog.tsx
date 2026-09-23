@@ -22,7 +22,7 @@ import { fetcher } from "@/lib/swr-fetcher";
 import { fundingSourceIds } from "@/lib/funding-sources";
 import { formatINR, cn } from "@/lib/utils";
 
-type Contact = { id: string; name: string };
+type Contact = { id: string; name: string; favorite?: boolean };
 
 /** Sale proceeds can land in an account or be credited to a card. */
 const PROCEEDS_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
@@ -155,7 +155,11 @@ export function GoldDisposeDialog({
                   onChange={setContactId}
                   options={[
                     { value: "", label: "— not a contact —" },
-                    ...contacts.map((c) => ({ value: c.id, label: c.name })),
+                    ...contacts.map((c) => ({
+                      value: c.id,
+                      label: c.name,
+                      favorite: c.favorite,
+                    })),
                   ]}
                   searchable
                 />
@@ -194,7 +198,11 @@ export function GoldDisposeDialog({
                 <NativeSelect
                   value={contactId}
                   onChange={setContactId}
-                  options={contacts.map((c) => ({ value: c.id, label: c.name }))}
+                  options={contacts.map((c) => ({
+                    value: c.id,
+                    label: c.name,
+                    favorite: c.favorite,
+                  }))}
                   searchable
                   placeholder="Who received it"
                 />

@@ -11,7 +11,12 @@ function err(e: unknown) {
 }
 
 type PatientSummary = {
-  contact: { id: string; name: string; relationship: string | null };
+  contact: {
+    id: string;
+    name: string;
+    relationship: string | null;
+    favorite: boolean;
+  };
   checkupCount: number;
   hospitalizationCount: number;
   /**
@@ -35,7 +40,9 @@ export async function GET() {
       where: { workspaceId: ctx.workspaceId },
       orderBy: { occurredAt: "desc" },
       include: {
-        patientContact: { select: { id: true, name: true, relationship: true } },
+        patientContact: {
+          select: { id: true, name: true, relationship: true, favorite: true },
+        },
         claim: { select: { status: true } },
       },
     });
@@ -68,8 +75,11 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      patients: [...byPatient.values()].sort((a, b) =>
-        a.contact.name.localeCompare(b.contact.name),
+      // Favorite contacts first, then by name — same order as /api/contacts.
+      patients: [...byPatient.values()].sort(
+        (a, b) =>
+          Number(b.contact.favorite) - Number(a.contact.favorite) ||
+          a.contact.name.localeCompare(b.contact.name),
       ),
     });
   } catch (e) {

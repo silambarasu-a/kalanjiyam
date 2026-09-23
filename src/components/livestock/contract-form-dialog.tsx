@@ -52,7 +52,7 @@ export function ContractFormDialog({
   onSaved: (contractId?: string) => void;
 }) {
   const { data: contactsRes } = useSWR<{
-    members: { id: string; name: string }[];
+    members: { id: string; name: string; favorite?: boolean }[];
   }>(open ? "/api/contacts" : null, fetcher);
 
   const isEdit = !!initial?.id;
@@ -215,6 +215,7 @@ export function ContractFormDialog({
                 ...(contactsRes?.members ?? []).map((c) => ({
                   value: c.id,
                   label: c.name,
+                  favorite: c.favorite,
                 })),
               ]}
               searchable

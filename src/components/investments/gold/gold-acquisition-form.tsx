@@ -34,7 +34,7 @@ import { fetcher } from "@/lib/swr-fetcher";
 import { formatINR } from "@/lib/utils";
 import { round2 } from "@/lib/gold";
 
-type Contact = { id: string; name: string };
+type Contact = { id: string; name: string; favorite?: boolean };
 
 const KIND_OPTIONS = [
   { value: "PURCHASE", label: "Bought from a jeweller" },
@@ -487,7 +487,11 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
             <NativeSelect
               value={giftedByContactId}
               onChange={setGiftedByContactId}
-              options={contacts.map((c) => ({ value: c.id, label: c.name }))}
+              options={contacts.map((c) => ({
+                value: c.id,
+                label: c.name,
+                favorite: c.favorite,
+              }))}
               searchable
               placeholder="Who gave it to you"
             />

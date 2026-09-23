@@ -6,6 +6,7 @@ export const familyCreateSchema = z.object({
   dob: z.string().optional(),
   userId: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
+  favorite: z.boolean().optional(),
 });
 
 export const familyUpdateSchema = familyCreateSchema.partial().extend({

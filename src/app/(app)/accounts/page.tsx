@@ -47,6 +47,7 @@ type FamilyMember = {
   name: string;
   relationship: string | null;
   active: boolean;
+  favorite?: boolean;
 };
 
 const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
@@ -260,6 +261,7 @@ function AccountDialog({
           value: m.id,
           label: m.name,
           hint: m.relationship ?? undefined,
+          favorite: m.favorite,
         })),
     ],
     [contactsData],

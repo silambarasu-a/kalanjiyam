@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import { contactOptionLabel } from "@/lib/contact-label";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import {
   PREMIUM_FREQUENCY_OPTIONS,
@@ -578,7 +579,9 @@ function MemberDialog({
   policyType: string | null;
   onClose: () => void;
 }) {
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open ? "/api/contacts" : null,
     fetcher,
   );
@@ -674,7 +677,7 @@ function MemberDialog({
               <option value="">Select contact…</option>
               {contacts.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {contactOptionLabel(c)}
                 </option>
               ))}
             </select>

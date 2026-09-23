@@ -36,6 +36,7 @@ type FamilyMember = {
   name: string;
   relationship: string | null;
   active: boolean;
+  favorite?: boolean;
 };
 
 type CardRow = {
@@ -110,6 +111,7 @@ export function CardForm({
           value: m.id,
           label: m.name,
           hint: m.relationship ?? undefined,
+          favorite: m.favorite,
         })),
     ],
     [contactsData],

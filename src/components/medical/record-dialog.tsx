@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { fetcher } from "@/lib/swr-fetcher";
+import { contactOptionLabel } from "@/lib/contact-label";
 
 export type MedicalRecordKind = "CHECKUP" | "HOSPITALIZATION";
 
@@ -36,7 +37,9 @@ export function MedicalRecordDialog({
   onClose: () => void;
   patientContactId?: string;
 }) {
-  const { data: contactsData } = useSWR<{ members: { id: string; name: string }[] }>(
+  const { data: contactsData } = useSWR<{
+    members: { id: string; name: string; favorite?: boolean }[];
+  }>(
     open && !patientContactId ? "/api/contacts" : null,
     fetcher,
   );
@@ -134,7 +137,7 @@ export function MedicalRecordDialog({
                 <option value="">Select contact…</option>
                 {contacts.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {contactOptionLabel(c)}
                   </option>
                 ))}
               </select>
