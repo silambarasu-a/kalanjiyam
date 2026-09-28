@@ -962,16 +962,20 @@ function IncomeExpenseForm({
             {type === "INCOME" ? "To account" : "Pay from"}
           </span>
           <div className="mt-1">
-            {/* EXPENSE additionally offers "Paid by contact": the transaction
-                is still recorded in my books but no balance moves, and the
-                toggle below decides whether I owe them back or it's a gift. */}
+            {/* Both directions offer cards: a debit card lands the money in
+                its linked bank account, a credit card takes cashback /
+                reward credits that shrink the outstanding (the statement
+                math already subtracts INCOME). EXPENSE additionally offers
+                "Paid by contact": the transaction is still recorded in my
+                books but no balance moves, and the toggle below decides
+                whether I owe them back or it's a gift. */}
             <FundingSourcePicker
               value={effectivePaymentSource}
               onChange={setPaymentSource}
               direction={type === "INCOME" ? "in" : "out"}
               kinds={
                 type === "INCOME"
-                  ? undefined
+                  ? ["BANK", "WALLET", "CASH", "DEBIT", "CREDIT"]
                   : ["BANK", "WALLET", "CASH", "DEBIT", "CREDIT", "CONTACT"]
               }
               amount={amtNum}
