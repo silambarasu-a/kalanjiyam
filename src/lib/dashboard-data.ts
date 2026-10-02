@@ -533,7 +533,12 @@ export async function getDashboardCashflow(args: {
       where: {
         workspaceId: wsId,
         active: true,
-        nextDueDate: { gte: today, lte: windowEnd },
+        // No lower bound. An EMI whose due date has passed is still owed, and
+        // the Overdue group on the dashboard exists to show it — with
+        // `gte: today` a missed (or stale) due silently dropped off the list
+        // instead. Reminders, card statements and the notifications bell
+        // already keep their overdue rows; ascending order puts these first.
+        nextDueDate: { lte: windowEnd },
       },
       orderBy: { nextDueDate: "asc" },
       take: 20,

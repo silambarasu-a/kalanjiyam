@@ -177,6 +177,43 @@ export function nextStatementDueDate(
   return new Date(lastDue);
 }
 
+/**
+ * A credit-card loan's next due date when the loan is edited (the form never
+ * sends one, so the PATCH route recomputes it).
+ *
+ * `nextStatementDueDate(now)` alone is wrong once the current statement's EMI
+ * is paid: /pay has already rolled `nextDueDate` one cycle on, and recomputing
+ * from today rewinds it onto the instalment just settled. Editing a loan on its
+ * due date after paying it put that paid EMI back on the books, a cycle
+ * behind, where it dropped off the dashboard as soon as the date passed.
+ *
+ * So a stored due date that is LATER than today's and still sits on this
+ * billing cycle is kept. One that is behind today's, or no longer on the cycle
+ * (the statement day or grace period just changed), is replaced as before.
+ */
+export function statementDueDateAfterEdit(args: {
+  stored: Date | null;
+  now: Date;
+  statementDate: number;
+  gracePeriod: number;
+}): Date {
+  const fromToday = nextStatementDueDate(
+    args.now,
+    args.statementDate,
+    args.gracePeriod,
+  );
+  const stored = args.stored;
+  if (
+    stored &&
+    stored.getTime() > fromToday.getTime() &&
+    nextStatementDueDate(stored, args.statementDate, args.gracePeriod).getTime() ===
+      stored.getTime()
+  ) {
+    return stored;
+  }
+  return fromToday;
+}
+
 /** Parse a period id from the URL search param into a {start, end} pair. */
 export function parsePeriodId(id: string | null | undefined): { start: Date; end: Date } | null {
   if (!id) return null;

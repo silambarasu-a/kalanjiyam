@@ -19,7 +19,7 @@ import {
 } from "@/lib/loan-math";
 import { nextInterestDueDate } from "@/lib/hand-loan-interest";
 import { counterpartyName } from "@/lib/loan-direction";
-import { nextStatementDueDate } from "@/lib/statement-period";
+import { statementDueDateAfterEdit } from "@/lib/statement-period";
 import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
@@ -474,11 +474,12 @@ export async function PATCH(
               )
             : effectiveKind === "CREDIT_CARD_LOAN" &&
               effectiveStatementDate != null
-            ? nextStatementDueDate(
-                new Date(),
-                effectiveStatementDate,
-                effectiveGracePeriod,
-              )
+            ? statementDueDateAfterEdit({
+                stored: loan.nextDueDate,
+                now: new Date(),
+                statementDate: effectiveStatementDate,
+                gracePeriod: effectiveGracePeriod,
+              })
             : newEmiNum && newTenure
               ? (() => {
                   const start = new Date(newStartedAt);
