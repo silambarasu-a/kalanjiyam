@@ -227,6 +227,39 @@ export function isEmiPrepayment(args: {
 }
 
 /**
+ * Whether a payment retires the instalment scheduled for `nextDueDate` — the
+ * test /pay uses to decide if the due date rolls one cycle on.
+ *
+ * Cash: at least a full instalment (1% tolerance for a rounded EMI). Time: the
+ * payment lands in the second half of the cycle that `nextDueDate` closes, or
+ * any time after it. A full instalment's worth of cash early in the cycle,
+ * right after the previous due date, is a prepayment and leaves the schedule
+ * alone; a late payment still retires the instalment it was for.
+ *
+ * Measured against the SCHEDULE, never the accrual anchor. The anchor is the
+ * previous payment's date, so one instalment recorded a day late (paid on the
+ * 3rd, due on the 2nd) dragged it forward, and the next instalment paid on its
+ * own due date then spanned only 30 of 31 days — short of the old `fraction
+ * >= 0.99` test. The due date never rolled, the loan sat in the dashboard's
+ * Overdue group fully paid, and every later payment landed one cycle behind
+ * for good.
+ */
+export function retiresScheduledInstalment(args: {
+  amount: number;
+  emiAmount: number;
+  nextDueDate: Date;
+  frequency: LoanFrequency;
+  paidAt: Date;
+}): boolean {
+  if (args.amount < args.emiAmount * 0.99) return false;
+  const cycleStart = advanceByCycle(new Date(args.nextDueDate), args.frequency, -1);
+  const cycleMs = args.nextDueDate.getTime() - cycleStart.getTime();
+  if (cycleMs <= 0) return true;
+  const elapsed = (args.paidAt.getTime() - cycleStart.getTime()) / cycleMs;
+  return elapsed >= 0.5;
+}
+
+/**
  * The EMI that clears `outstanding` by maturity with the tenure unchanged.
  * Returns null when the loan has no schedule to re-amortize (no rate, no
  * maturity, nothing left owing), so callers can leave `emiAmount` untouched.

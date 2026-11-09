@@ -10,6 +10,7 @@ import {
   applyPaymentBankStyle,
   isEmiPrepayment,
   recalculatedEmi,
+  retiresScheduledInstalment,
 } from "@/lib/loan-accrual";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import {
@@ -260,14 +261,27 @@ export async function POST(
       // portion — is meaningless once the split is time-aware: an early
       // part-payment accrues little interest and so lands a large principal
       // portion, which would have rolled the due date forward for a payment
-      // that settled nothing. Now it takes both a full instalment's worth of
-      // cash AND a full cycle of elapsed time. A part-prepayment leaves the due
-      // date where it is, which is what banks do.
+      // that settled nothing. Now it takes a full instalment's worth of cash
+      // landing in the back half of the cycle this due date closes (or after
+      // it). A part-prepayment leaves the due date where it is, which is what
+      // banks do.
+      //
+      // The time test is against the schedule, NOT `accrued.fraction`: that
+      // runs from the previous payment's date, so a previous instalment
+      // recorded a day late made the next on-time one measure 30/31 of a
+      // cycle, the roll was refused, and the loan stuck a cycle behind (see
+      // `retiresScheduledInstalment`).
       //
       // CARD_EMI has no accrual (fixed statement instalment), so it keeps the
       // original principal-based test.
       const fullEmiPaid = accrued
-        ? data.amount >= emiHint * 0.99 && accrued.fraction >= 0.99
+        ? retiresScheduledInstalment({
+            amount: data.amount,
+            emiAmount: emiHint,
+            nextDueDate: loan.nextDueDate,
+            frequency,
+            paidAt: paidAtDate,
+          })
         : principalDrop >= suggested.principal * 0.99;
       if (!fullEmiPaid) return loan.nextDueDate;
       if (

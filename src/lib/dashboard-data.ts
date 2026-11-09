@@ -919,6 +919,12 @@ export async function getDashboardCashflow(args: {
       : 0;
     const outstanding =
       emi == null ? null : Math.max(0, emi - paidThisMonth);
+    // Fully covered and the due date has passed: that instalment is history,
+    // already listed under "Paid this month". Keeping it here put a ₹0 "Paid"
+    // row in the Overdue group under a red "7d overdue" label. A settled
+    // instalment whose date is still ahead keeps its row — the Paid tick is
+    // what tells the user the coming debit is covered.
+    if (emi != null && paidThisMonth >= emi && l.nextDueDate < today) continue;
     dues.push({
       id: `loan:${l.id}`,
       source: "LOAN",

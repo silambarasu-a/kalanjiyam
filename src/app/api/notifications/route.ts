@@ -212,6 +212,10 @@ export async function GET(request: Request) {
         : 0;
       const outstanding =
         emi == null ? null : Math.max(0, emi - paidThisMonth);
+      // Fully covered and past its date: nothing left to act on, and it
+      // would otherwise sit in the bell as an "overdue" item marked Paid and
+      // inflate the overdue count. Same rule as the dashboard's dues list.
+      if (emi != null && paidThisMonth >= emi && l.nextDueDate < today) continue;
       items.push({
         id: `loan:${l.id}`,
         source: "LOAN",
