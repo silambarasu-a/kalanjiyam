@@ -8,6 +8,8 @@ Predecessor repo for reference only: `../kanakkan` — do not modify. See `/User
 
 ## Commands
 
+Requires Node 26 (current LTS; pinned in `.nvmrc` and `engines.node`). Run `nvm use` before any npm, tsc or Prisma command — the shell default may be an older Node that breaks Prisma 7.
+
 ```bash
 npm run dev          # Start dev server (localhost:3003)
 npm run build        # prisma generate + next build
