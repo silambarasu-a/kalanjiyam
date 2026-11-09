@@ -18,6 +18,10 @@ import {
   type PeriodValue,
 } from "@/components/transactions/list-filter-bar";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -119,6 +123,7 @@ export default function TransactionsPage() {
     pagination: { total: number; offset: number; limit: number };
   }>(url, fetcher);
   const { openDialog } = useTransactionDialog();
+  const confirmOverride = useLockOverride();
   const [editingTxn, setEditingTxn] = useState<EditableTransaction | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   // Detail (read-only) view — separate state from edit so we can hand
@@ -457,43 +462,31 @@ export default function TransactionsPage() {
                                   },
                                   { revalidate: false },
                                 );
-                                let res = await fetch(
-                                  `/api/transactions/${t.id}`,
-                                  { method: "DELETE" },
-                                );
+                                // 423 with canForce → Owners and Admins
+                                // get a confirmation dialog and the DELETE
+                                // is re-sent with ?force=1 if they agree.
+                                const { res, body, cancelled } =
+                                  await requestWithLockOverride(
+                                    (force) =>
+                                      fetch(
+                                        `/api/transactions/${t.id}${force ? "?force=1" : ""}`,
+                                        { method: "DELETE" },
+                                      ),
+                                    confirmOverride,
+                                    {
+                                      title: "Delete a locked transaction?",
+                                      confirmLabel: "Delete anyway",
+                                    },
+                                  );
+                                if (cancelled) {
+                                  // Roll back the optimistic delete.
+                                  mutateList();
+                                  return;
+                                }
                                 if (!res.ok) {
-                                  const body = await res
-                                    .json()
-                                    .catch(() => ({}));
-                                  // 423 with canForce → offer to bypass the
-                                  // statement-close / loan-closed lock for
-                                  // Owners and Admins. Same override path the
-                                  // Edit dialog surfaces via "Edit anyway".
-                                  if (
-                                    res.status === 423 &&
-                                    body.canForce &&
-                                    window.confirm(
-                                      `${body.error ?? "Locked."}\n\nDelete anyway?`,
-                                    )
-                                  ) {
-                                    res = await fetch(
-                                      `/api/transactions/${t.id}?force=1`,
-                                      { method: "DELETE" },
-                                    );
-                                    if (!res.ok) {
-                                      const body2 = await res
-                                        .json()
-                                        .catch(() => ({}));
-                                      toast.error(body2.error ?? "Failed");
-                                      // Roll back the optimistic delete.
-                                      mutateList();
-                                      throw new Error(body2.error ?? "Failed");
-                                    }
-                                  } else {
-                                    toast.error(body.error ?? "Failed");
-                                    mutateList();
-                                    throw new Error(body.error ?? "Failed");
-                                  }
+                                  toast.error(body.error ?? "Failed");
+                                  mutateList();
+                                  throw new Error(body.error ?? "Failed");
                                 }
                                 toast.success("Transaction deleted");
                                 // Server may have cascade-reverted linked

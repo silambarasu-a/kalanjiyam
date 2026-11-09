@@ -19,6 +19,10 @@ import { NativeSelect, type NativeSelectGroup } from "@/components/ui/native-sel
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 
 type Worker = {
   id: string;
@@ -73,6 +77,7 @@ export function MarkAttendanceModal({
   initialDate?: string;
 }) {
   const today = todayIso();
+  const confirmOverride = useLockOverride();
 
   const { data: cropBatchesData } = useSWR<{ batches: CropBatch[] }>(
     open ? "/api/crop-batches?active=true" : null,
@@ -239,30 +244,60 @@ export function MarkAttendanceModal({
       : null;
 
     setSaving(true);
+    let saved = 0;
     let failed = 0;
+    let cancelled = false;
+    // A date past the workspace edit window comes back 423. Owners and
+    // Admins confirm once in a dialog; after that every remaining date in
+    // this batch is sent with `force: true` rather than asking per date.
+    let forceAll = false;
     for (const date of dates) {
-      const res = await fetch("/api/attendance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date,
-          cropBatchId,
-          livestockBatchId,
-          notes: notes.trim() || undefined,
-          entries: selEntries,
-        }),
-      });
-      if (!res.ok) failed++;
+      const outcome = await requestWithLockOverride(
+        (force) => {
+          if (force) forceAll = true;
+          return fetch("/api/attendance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              date,
+              cropBatchId,
+              livestockBatchId,
+              notes: notes.trim() || undefined,
+              entries: selEntries,
+              ...(forceAll ? { force: true } : {}),
+            }),
+          });
+        },
+        confirmOverride,
+        {
+          title: "Mark attendance on a locked date?",
+          confirmLabel: "Save anyway",
+        },
+      );
+      if (outcome.cancelled) {
+        cancelled = true;
+        break;
+      }
+      if (outcome.res.ok) saved++;
+      else failed++;
     }
     setSaving(false);
-    if (failed === 0) {
-      toast.success(
-        `Attendance saved — ${selEntries.length} worker(s) × ${dates.length} date(s)`
-      );
+    if (saved > 0) {
       globalMutate((k) => typeof k === "string" && k.startsWith("/api/workers"));
       globalMutate((k) => typeof k === "string" && k.startsWith("/api/attendance"));
       await mutateBalances();
       onSaved?.();
+    }
+    if (cancelled) {
+      if (saved > 0) {
+        toast.success(`Attendance saved for ${saved} of ${dates.length} date(s)`);
+      }
+      return;
+    }
+    if (failed === 0) {
+      toast.success(
+        `Attendance saved — ${selEntries.length} worker(s) × ${dates.length} date(s)`
+      );
       onOpenChange(false);
     } else {
       toast.error(`${failed} date(s) failed to save`);

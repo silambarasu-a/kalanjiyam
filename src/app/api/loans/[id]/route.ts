@@ -200,9 +200,9 @@ export async function PATCH(
       if (!force || !isAdmin) {
         return NextResponse.json(
           {
-            error: isAdmin
-              ? "This loan is closed. Re-submit with force=true to override."
-              : "This loan is closed and locked. Ask an Owner or Admin to override.",
+            error:
+              "This loan is closed and its record is locked." +
+              (isAdmin ? "" : " Ask an Owner or Admin to override."),
             canForce: isAdmin,
           },
           { status: 423 },

@@ -7,6 +7,10 @@ import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 import { mutateBalances } from "@/lib/mutate-balances";
 
 type InvestmentLite = {
@@ -38,6 +42,7 @@ export function InvestmentActions({
 }) {
   const router = useRouter();
   const { openDialog } = useTransactionDialog();
+  const confirmOverride = useLockOverride();
   const [deleting, setDeleting] = useState(false);
 
   function guard(e: React.MouseEvent | React.SyntheticEvent) {
@@ -50,10 +55,17 @@ export function InvestmentActions({
   async function handleDelete() {
     setDeleting(true);
     try {
-      const res = await fetch(`/api/investments/${investment.id}`, {
-        method: "DELETE",
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      // Edit-window lock → 423. Owners and Admins confirm in a dialog
+      // and the DELETE is re-sent with ?force=1.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(`/api/investments/${investment.id}${force ? "?force=1" : ""}`, {
+            method: "DELETE",
+          }),
+        confirmOverride,
+        { title: "Delete a locked investment?", confirmLabel: "Delete anyway" },
+      );
+      if (cancelled) return;
       if (!res.ok) {
         toast.error(body.error ?? "Failed to delete");
         return;

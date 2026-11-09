@@ -22,7 +22,10 @@
  *
  * OWNER / ADMIN / SUPER_ADMIN can bypass any rule by passing a
  * `force: true` flag (PATCH body) or `?force=1` query parameter (DELETE).
- * MEMBER role gets no override.
+ * MEMBER role gets no override. The 423 body carries `canForce` so the
+ * client can show a confirmation and re-send with force (see
+ * `src/contexts/lock-override.tsx`); the message itself never mentions
+ * the flag.
  */
 
 import { prisma } from "@/lib/prisma";
@@ -48,6 +51,11 @@ export type EditLockResult =
 
 function canBypass(role: EditLockRole): boolean {
   return role === "OWNER" || role === "ADMIN" || role === "SUPER_ADMIN";
+}
+
+/** Appended to lock messages for roles that cannot override. */
+function overrideHint(role: EditLockRole): string {
+  return canBypass(role) ? "" : " Ask an Owner or Admin to override.";
 }
 
 export async function checkTransactionEditAllowed(args: {
@@ -124,14 +132,12 @@ export async function checkTransactionEditAllowed(args: {
         isLatestEmi && ageDaysSincePaid <= TIMING.loanEmiGraceDays;
       if (!inGrace) {
         if (force && canBypass(role)) return { ok: true };
-        const overrideHint = canBypass(role)
-          ? " Re-submit with force=true to override."
-          : " Ask an Owner or Admin to override.";
+        const hint = overrideHint(role);
         const message = !isEmiPayment
-          ? `This loan is closed; its disbursement and charges are locked.${overrideHint}`
+          ? `This loan is closed; its disbursement and charges are locked.${hint}`
           : isLatestEmi
-            ? `The closing payment is past its ${TIMING.loanEmiGraceDays}-day grace window (paid ${ageDaysSincePaid} days ago).${overrideHint}`
-            : `This loan is closed. Only the closing payment can be reversed, and only within ${TIMING.loanEmiGraceDays} days of payment.${overrideHint}`;
+            ? `The closing payment is past its ${TIMING.loanEmiGraceDays}-day grace window (paid ${ageDaysSincePaid} days ago).${hint}`
+            : `This loan is closed. Only the closing payment can be reversed, and only within ${TIMING.loanEmiGraceDays} days of payment.${hint}`;
         return {
           ok: false,
           status: 423,
@@ -162,10 +168,8 @@ export async function checkTransactionEditAllowed(args: {
           ok: false,
           status: 423,
           message:
-            "This transaction's billing cycle has been closed and statement archived. " +
-            (canBypass(role)
-              ? "Re-submit with force=true to override."
-              : "Ask an Owner or Admin to override."),
+            "This transaction's billing cycle has been closed and its statement archived." +
+            overrideHint(role),
           canForce: canBypass(role),
         };
       }
@@ -195,10 +199,9 @@ export async function checkTransactionEditAllowed(args: {
     return {
       ok: false,
       status: 423,
-      message: `This transaction is ${ageDays} days old; the workspace allows edits only within ${window} days. ` +
-        (canBypass(role)
-          ? "Re-submit with force=true to override."
-          : "Ask an Owner or Admin to override."),
+      message:
+        `This transaction is ${ageDays} days old; the workspace allows edits only within ${window} days.` +
+        overrideHint(role),
       canForce: canBypass(role),
     };
   }
@@ -239,10 +242,8 @@ export async function checkDayWindowEditAllowed(args: {
     ok: false,
     status: 423,
     message:
-      `This ${entityName} is ${ageDays} days old; the workspace allows edits only within ${window} days. ` +
-      (canBypass(role)
-        ? "Re-submit with force=true to override."
-        : "Ask an Owner or Admin to override."),
+      `This ${entityName} is ${ageDays} days old; the workspace allows edits only within ${window} days.` +
+      overrideHint(role),
     canForce: canBypass(role),
   };
 }

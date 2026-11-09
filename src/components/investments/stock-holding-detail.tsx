@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
 import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
+import {
   EditTransactionDialog,
   type EditableTransaction,
 } from "@/components/transactions/edit-transaction-dialog";
@@ -69,6 +73,7 @@ function fmtPrice(val: number, currency: string | null) {
 export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   const { mutate: globalMutate } = useSWRConfig();
   const { openDialog } = useTransactionDialog();
+  const confirmOverride = useLockOverride();
   const [deletingTxnId, setDeletingTxnId] = useState<string | null>(null);
   const [editingTxn, setEditingTxn] = useState<EditableTransaction | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -87,24 +92,32 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
   async function handleDeleteTransaction(txnId: string) {
     setDeletingTxnId(txnId);
     try {
-      const res = await fetch(`/api/transactions/${txnId}`, { method: "DELETE" });
-      if (res.ok) {
-        toast.success("Transaction deleted");
-        mutateDetail();
-        globalMutate(
-          (k) =>
-            typeof k === "string" &&
-            (k.startsWith("/api/investments") ||
-              k.startsWith("/api/dashboard") ||
-              k === "/api/accounts"),
-          undefined,
-          { revalidate: true },
-        );
-      } else {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.error || "Failed to delete");
-        throw new Error(d.error || "Failed");
+      // Edit-window lock → 423. Owners and Admins confirm in a dialog
+      // and the DELETE is re-sent with ?force=1.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(`/api/transactions/${txnId}${force ? "?force=1" : ""}`, {
+            method: "DELETE",
+          }),
+        confirmOverride,
+        { title: "Delete a locked transaction?", confirmLabel: "Delete anyway" },
+      );
+      if (cancelled) return;
+      if (!res.ok) {
+        toast.error(body.error || "Failed to delete");
+        throw new Error(body.error || "Failed");
       }
+      toast.success("Transaction deleted");
+      mutateDetail();
+      globalMutate(
+        (k) =>
+          typeof k === "string" &&
+          (k.startsWith("/api/investments") ||
+            k.startsWith("/api/dashboard") ||
+            k === "/api/accounts"),
+        undefined,
+        { revalidate: true },
+      );
     } finally {
       setDeletingTxnId(null);
     }

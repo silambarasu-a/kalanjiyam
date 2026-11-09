@@ -7,10 +7,15 @@ import useSWR, { mutate as globalMutate } from "swr";
 import { toast } from "sonner";
 import { Check, X, Trash2, CalendarDays, Wallet2, Undo2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
 import { AmountInput } from "@/components/ui/amount-input";
 import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 import {
   Dialog,
   DialogContent,
@@ -99,6 +104,7 @@ const fetcher = async (url: string) => {
 export default function WorkerDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
+  const confirmOverride = useLockOverride();
   const { data, error } = useSWR<WorkerDetail>(
     id ? `/api/workers/${id}` : null,
     fetcher,
@@ -260,18 +266,41 @@ export default function WorkerDetailPage() {
                 {a.present && (
                   <div className="text-sm font-medium">{formatINR(Number(earned) || 0)}</div>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={async () => {
-                    if (!confirm(`Delete this attendance row?`)) return;
-                    await fetch(`/api/attendance/${a.id}`, { method: "DELETE" });
+                <ConfirmPopover
+                  title="Delete this attendance row?"
+                  description="The day's earnings come off the worker's balance."
+                  confirmLabel="Delete"
+                  busyLabel="Deleting…"
+                  onConfirm={async () => {
+                    // Edit-window lock → 423. Owners and Admins confirm
+                    // in a dialog and the DELETE is re-sent with ?force=1.
+                    const { res, body, cancelled } =
+                      await requestWithLockOverride(
+                        (force) =>
+                          fetch(
+                            `/api/attendance/${a.id}${force ? "?force=1" : ""}`,
+                            { method: "DELETE" },
+                          ),
+                        confirmOverride,
+                        {
+                          title: "Delete a locked attendance entry?",
+                          confirmLabel: "Delete anyway",
+                        },
+                      );
+                    if (cancelled) return;
+                    if (!res.ok) {
+                      toast.error(body.error ?? "Failed to delete");
+                      throw new Error(body.error ?? "Failed");
+                    }
+                    toast.success("Attendance deleted");
                     globalMutate(`/api/workers/${id}`);
                   }}
-                  aria-label="Delete"
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                </Button>
+                  trigger={
+                    <Button variant="ghost" size="icon" aria-label="Delete">
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
+                  }
+                />
               </div>
             );
           })}

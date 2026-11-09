@@ -10,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { AttachmentList } from "@/components/attachments/attachment-list";
 import { fetcher } from "@/lib/swr-fetcher";
 import { formatINR, formatDate, cn } from "@/lib/utils";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 
 type Bill = {
   acquisition: {
@@ -79,6 +83,7 @@ const KIND_LABEL: Record<Bill["acquisition"]["kind"], string> = {
 
 export function GoldBillDetail({ billId }: { billId: string }) {
   const router = useRouter();
+  const confirmOverride = useLockOverride();
   const { data, isLoading } = useSWR<Bill>(
     `/api/gold/acquisitions/${billId}`,
     fetcher,
@@ -102,12 +107,19 @@ export function GoldBillDetail({ billId }: { billId: string }) {
     .reduce((a, o) => a + o.lineTotal, 0);
 
   async function remove() {
-    const res = await fetch(`/api/gold/acquisitions/${billId}`, {
-      method: "DELETE",
-    });
-    const json = await res.json();
+    // Edit-window lock → 423. Owners and Admins confirm in a dialog and
+    // the DELETE is re-sent with ?force=1.
+    const { res, body, cancelled } = await requestWithLockOverride(
+      (force) =>
+        fetch(`/api/gold/acquisitions/${billId}${force ? "?force=1" : ""}`, {
+          method: "DELETE",
+        }),
+      confirmOverride,
+      { title: "Delete a locked bill?", confirmLabel: "Delete anyway" },
+    );
+    if (cancelled) return;
     if (!res.ok) {
-      toast.error(json.error ?? "Couldn't delete this bill");
+      toast.error(body.error ?? "Couldn't delete this bill");
       return;
     }
     toast.success("Bill deleted");

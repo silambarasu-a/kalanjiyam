@@ -22,6 +22,10 @@ import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { fetcher } from "@/lib/swr-fetcher";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
+import {
   TransactionSplitEditor,
   recalcEqual,
   makeEmptySplit,
@@ -100,6 +104,7 @@ export function EditTransactionDialog({
   onSaved?: () => void | Promise<void>;
 }) {
   const { data: session } = useSession();
+  const confirmOverride = useLockOverride();
   const farmOn = session?.user.farmEnabled !== false;
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
@@ -112,10 +117,6 @@ export function EditTransactionDialog({
   const [editNote, setEditNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set when the server returns 423 with `canForce: true` — surface an
-  // "Edit anyway" button so an Owner/Admin can re-submit with force=true
-  // instead of dead-ending on the lock message.
-  const [canOverride, setCanOverride] = useState(false);
   // Splits state — only meaningful for EXPENSE rows. Hydrated from the
   // detail GET when the dialog opens; `splitsTouched` guards against
   // sending a stale [] on PATCH for unrelated edits.
@@ -251,10 +252,9 @@ export function EditTransactionDialog({
     setSplitsTouched(true);
   }
 
-  async function submit(force = false) {
+  async function submit() {
     if (!transaction) return;
     setError(null);
-    setCanOverride(false);
     const amt = Number(amount);
     if (!amt || amt <= 0) {
       setError("Enter an amount");
@@ -278,68 +278,73 @@ export function EditTransactionDialog({
         transaction.fuelOdometer != null ||
         transaction.fuelUnit != null;
       const shouldWriteFuel = hadFuel || (isFuelCategory && !!vehicleId);
-      const res = await fetch(`/api/transactions/${transaction.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          amount: amt,
-          date,
-          description: description.trim(),
-          categoryId: categoryId || null,
-          // Only echo vehicleId back if it was originally set — same
-          // reason as fuel fields. Don't silently tag an untagged row.
-          // A vehicle actively picked in this dialog is always sent:
-          // some callers (loan payment history) hydrate without a
-          // vehicleId key, and omitting it would drop the pick.
-          ...(transaction.vehicleId !== undefined || vehicleId
-            ? { vehicleId: vehicleId || null }
-            : {}),
-          eventId: eventId || null,
-          ...(shouldWriteFuel
-            ? {
-                fuelQuantity: fuelQuantity ? Number(fuelQuantity) : null,
-                fuelOdometer: fuelOdometer ? Number(fuelOdometer) : null,
-                // For new-fuel-on-edit, write the unit derived from
-                // the vehicle's fuelType. For existing fuel rows we
-                // leave the unit alone (omit the key) so a converted
-                // vehicle doesn't rewrite history.
-                ...(hadFuel
-                  ? {}
-                  : {
-                      fuelUnit: fuelUnitForVehicle?.unit ?? "L",
-                    }),
-              }
-            : {}),
-          editNote: editNote.trim() || undefined,
-          ...(force ? { force: true } : {}),
-          ...(splitsTouched && isExpense
-            ? {
-                splits: (() => {
-                  const totalNum = parseFloat(amount) || 0;
-                  const finalized =
-                    expenseSplitMode === "equal"
-                      ? recalcEqual(splits, totalNum)
-                      : splits;
-                  return finalized
-                    .filter((s) => s.contactId && s.amount > 0)
-                    .map((s) => ({
-                      contactId: s.contactId,
-                      amount: s.amount,
-                      sharePercent: s.sharePercent,
-                      isRecoverable: s.isRecoverable,
-                      notes: s.notes ?? undefined,
-                    }));
-                })(),
-              }
-            : {}),
-        }),
-      });
-      const body = await res
-        .json()
-        .catch(() => ({}) as { error?: string; canForce?: boolean });
+      const payload = {
+        amount: amt,
+        date,
+        description: description.trim(),
+        categoryId: categoryId || null,
+        // Only echo vehicleId back if it was originally set — same
+        // reason as fuel fields. Don't silently tag an untagged row.
+        // A vehicle actively picked in this dialog is always sent:
+        // some callers (loan payment history) hydrate without a
+        // vehicleId key, and omitting it would drop the pick.
+        ...(transaction.vehicleId !== undefined || vehicleId
+          ? { vehicleId: vehicleId || null }
+          : {}),
+        eventId: eventId || null,
+        ...(shouldWriteFuel
+          ? {
+              fuelQuantity: fuelQuantity ? Number(fuelQuantity) : null,
+              fuelOdometer: fuelOdometer ? Number(fuelOdometer) : null,
+              // For new-fuel-on-edit, write the unit derived from
+              // the vehicle's fuelType. For existing fuel rows we
+              // leave the unit alone (omit the key) so a converted
+              // vehicle doesn't rewrite history.
+              ...(hadFuel
+                ? {}
+                : {
+                    fuelUnit: fuelUnitForVehicle?.unit ?? "L",
+                  }),
+            }
+          : {}),
+        editNote: editNote.trim() || undefined,
+        ...(splitsTouched && isExpense
+          ? {
+              splits: (() => {
+                const totalNum = parseFloat(amount) || 0;
+                const finalized =
+                  expenseSplitMode === "equal"
+                    ? recalcEqual(splits, totalNum)
+                    : splits;
+                return finalized
+                  .filter((s) => s.contactId && s.amount > 0)
+                  .map((s) => ({
+                    contactId: s.contactId,
+                    amount: s.amount,
+                    sharePercent: s.sharePercent,
+                    isRecoverable: s.isRecoverable,
+                    notes: s.notes ?? undefined,
+                  }));
+              })(),
+            }
+          : {}),
+      };
+      // Past the edit window / closed statement / closed loan → 423.
+      // Owners and Admins get a confirmation dialog and the PATCH is
+      // re-sent with `force: true` if they agree.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(`/api/transactions/${transaction.id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(force ? { ...payload, force: true } : payload),
+          }),
+        confirmOverride,
+        { title: "Edit a locked transaction?", confirmLabel: "Edit anyway" },
+      );
+      if (cancelled) return;
       if (!res.ok) {
         setError(body.error ?? "Failed to update");
-        if (res.status === 423 && body.canForce) setCanOverride(true);
         return;
       }
       toast.success("Transaction updated");
@@ -620,20 +625,9 @@ export function EditTransactionDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
             Cancel
           </Button>
-          {canOverride ? (
-            <Button
-              variant="destructive"
-              onClick={() => submit(true)}
-              disabled={submitting}
-              title="Bypass the closed-statement lock and save anyway. The bill snapshot won't follow this edit — regenerate the affected statement if you need it back in sync."
-            >
-              {submitting ? "Saving…" : "Edit anyway"}
-            </Button>
-          ) : (
-            <Button onClick={() => submit()} disabled={submitting}>
-              {submitting ? "Saving…" : "Save"}
-            </Button>
-          )}
+          <Button onClick={() => submit()} disabled={submitting}>
+            {submitting ? "Saving…" : "Save"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

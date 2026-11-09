@@ -226,7 +226,10 @@ export async function PATCH(
       entityName: "gold bill",
     });
     if (!lock.ok) {
-      return NextResponse.json({ error: lock.message }, { status: lock.status });
+      return NextResponse.json(
+        { error: lock.message, canForce: lock.canForce },
+        { status: lock.status },
+      );
     }
 
     // Refuse before touching anything: money already settled against a
@@ -775,7 +778,10 @@ export async function DELETE(
       entityName: "gold bill",
     });
     if (!lock.ok) {
-      return NextResponse.json({ error: lock.message }, { status: lock.status });
+      return NextResponse.json(
+        { error: lock.message, canForce: lock.canForce },
+        { status: lock.status },
+      );
     }
 
     const settled = blockingSettledCharge(acq.ornaments);

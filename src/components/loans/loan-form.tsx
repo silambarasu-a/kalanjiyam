@@ -25,6 +25,10 @@ import { formatINR, formatDate } from "@/lib/utils";
 import { nextStatementDueDate } from "@/lib/statement-period";
 import type { LoanKind } from "@/generated/prisma/client";
 import { fetcher } from "@/lib/swr-fetcher";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 
 type ChargeRow = { label: string; amount: string };
 const DEFAULT_CHARGE_ROWS: ChargeRow[] = [
@@ -157,6 +161,7 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
   // Direction is fixed by the route on create and by the record on edit.
   const direction = editingLoan?.direction ?? directionProp ?? "BORROWED";
   const isLent = direction === "LENT";
+  const confirmOverride = useLockOverride();
   const { data: cardsData } = useSWR<{ cards: Card[] }>("/api/cards", fetcher);
   // Contacts back the HAND_FORMAL lender picker AND the "Member" picker
   // (the family member whose name/account the loan is under), so fetch them
@@ -482,15 +487,19 @@ export const LoanForm = forwardRef<LoanFormHandle, LoanFormProps>(function LoanF
               : undefined,
       };
 
-      const res = await fetch(
-        editing ? `/api/loans/${editingLoan!.id}` : "/api/loans",
-        {
-          method: editing ? "PATCH" : "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        }
+      // A closed loan answers 423 on PATCH. Owners and Admins confirm in
+      // a dialog and the request is re-sent with `force: true`.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(editing ? `/api/loans/${editingLoan!.id}` : "/api/loans", {
+            method: editing ? "PATCH" : "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(force ? { ...payload, force: true } : payload),
+          }),
+        confirmOverride,
+        { title: "Edit a closed loan?", confirmLabel: "Save anyway" },
       );
-      const body = await res.json();
+      if (cancelled) return;
       if (!res.ok) {
         setError(body.error ?? "Failed");
         return;

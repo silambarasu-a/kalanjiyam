@@ -12,6 +12,10 @@ import {
 } from "@/components/transactions/edit-transaction-dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { formatINR, formatDate } from "@/lib/utils";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 
 export type InvestmentTxnRow = {
   id: string;
@@ -40,6 +44,7 @@ export function InvestmentTransactionHistory({
   transactions: InvestmentTxnRow[];
 }) {
   const router = useRouter();
+  const confirmOverride = useLockOverride();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditableTransaction | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -47,8 +52,17 @@ export function InvestmentTransactionHistory({
   async function handleDelete(t: InvestmentTxnRow) {
     setDeletingId(t.id);
     try {
-      const res = await fetch(`/api/transactions/${t.id}`, { method: "DELETE" });
-      const body = await res.json().catch(() => ({}) as { error?: string });
+      // Edit-window lock → 423. Owners and Admins confirm in a dialog
+      // and the DELETE is re-sent with ?force=1.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(`/api/transactions/${t.id}${force ? "?force=1" : ""}`, {
+            method: "DELETE",
+          }),
+        confirmOverride,
+        { title: "Delete a locked transaction?", confirmLabel: "Delete anyway" },
+      );
+      if (cancelled) return;
       if (!res.ok) {
         toast.error(body.error ?? "Failed to delete");
         return;

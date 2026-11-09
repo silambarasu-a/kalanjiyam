@@ -6,6 +6,10 @@ import useSWR from "swr";
 import { Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateInput } from "@/components/ui/date-input";
@@ -122,6 +126,7 @@ type GoldBillPayload = {
 export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
   const isEditing = !!billId;
   const router = useRouter();
+  const confirmOverride = useLockOverride();
   const acquisitionId = useInstantAttachmentOwnerId();
   const uploaderRef = useRef<InstantAttachmentUploaderHandle>(null);
 
@@ -317,12 +322,7 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
     }
     setSaving(true);
     try {
-      const res = await fetch(
-        isEditing ? `/api/gold/acquisitions/${billId}` : "/api/gold/acquisitions",
-        {
-        method: isEditing ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const payload = {
           ...(isEditing ? {} : { clientId: acquisitionId }),
           kind,
           name: name.trim(),
@@ -398,10 +398,23 @@ export function GoldAcquisitionForm({ billId }: { billId?: string } = {}) {
                     notes: e.notes.trim() || null,
                   }))
               : [],
-        }),
-        },
+      };
+      // Editing a bill past the edit window → 423. Owners and Admins
+      // confirm in a dialog and the PATCH is re-sent with `force: true`.
+      const { res, body: json, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(
+            isEditing ? `/api/gold/acquisitions/${billId}` : "/api/gold/acquisitions",
+            {
+              method: isEditing ? "PATCH" : "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(force ? { ...payload, force: true } : payload),
+            },
+          ),
+        confirmOverride,
+        { title: "Edit a locked bill?", confirmLabel: "Save anyway" },
       );
-      const json = await res.json();
+      if (cancelled) return;
       if (!res.ok) {
         toast.error(json.error ?? "Couldn't save this bill");
         return;

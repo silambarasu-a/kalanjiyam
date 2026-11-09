@@ -36,6 +36,10 @@ import {
 import { formatINR, cn } from "@/lib/utils";
 import { fundingSourceIds } from "@/lib/funding-sources";
 import { mutateBalances } from "@/lib/mutate-balances";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { SymbolSearch } from "@/components/investments/symbol-search";
 
@@ -186,6 +190,7 @@ const EXISTING_GROUP: NativeSelectGroup[] = [
 
 export function StockPortfolio() {
   const router = useRouter();
+  const confirmOverride = useLockOverride();
 
   const {
     data: holdingsData,
@@ -366,11 +371,19 @@ export function StockPortfolio() {
     const method = editingHoldingId ? "PATCH" : "POST";
 
     try {
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      // Editing past the edit window → 423. Owners and Admins confirm in
+      // a dialog and the PATCH is re-sent with `force: true`.
+      const { res, body, cancelled } = await requestWithLockOverride(
+        (force) =>
+          fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(force ? { ...payload, force: true } : payload),
+          }),
+        confirmOverride,
+        { title: "Edit a locked holding?", confirmLabel: "Save anyway" },
+      );
+      if (cancelled) return;
       if (res.ok) {
         toast.success(editingHoldingId ? "Holding updated" : "Holding added");
         cancelHoldingForm();
@@ -378,8 +391,7 @@ export function StockPortfolio() {
         mutateQuotes();
         mutateBalances();
       } else {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.error || "Failed to save holding");
+        toast.error(body.error || "Failed to save holding");
       }
     } finally {
       setSavingHolding(false);
@@ -387,15 +399,22 @@ export function StockPortfolio() {
   }
 
   async function deleteHolding(id: string) {
-    const res = await fetch(`/api/investments/${id}`, { method: "DELETE" });
+    const { res, body, cancelled } = await requestWithLockOverride(
+      (force) =>
+        fetch(`/api/investments/${id}${force ? "?force=1" : ""}`, {
+          method: "DELETE",
+        }),
+      confirmOverride,
+      { title: "Remove a locked holding?", confirmLabel: "Remove anyway" },
+    );
+    if (cancelled) return;
     if (res.ok) {
       toast.success("Holding removed");
       mutateHoldings();
       mutateBalances();
     } else {
-      const d = await res.json().catch(() => ({}));
-      toast.error(d.error || "Failed");
-      throw new Error(d.error || "Failed");
+      toast.error(body.error || "Failed");
+      throw new Error(body.error || "Failed");
     }
   }
 

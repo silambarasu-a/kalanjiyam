@@ -78,6 +78,10 @@ import { fetcher } from "@/lib/swr-fetcher";
 import { contactOptionLabel } from "@/lib/contact-label";
 import { PREMIUM_FREQUENCY_OPTIONS } from "@/lib/reminder-schedule";
 import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
+import {
   useTransactionDialog,
   type TransactionDefault,
   type PremiumPaymentContext,
@@ -2756,6 +2760,7 @@ function InvestmentForm({
   onClose: () => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const confirmOverride = useLockOverride();
   const { data: invData } = useSWR<{ investments: InvestmentHolding[] }>(
     "/api/investments",
     fetcher
@@ -3493,12 +3498,7 @@ function InvestmentForm({
         const metadataKind = isEditing
           ? (editingData?.investment.kind ?? null)
           : newKind;
-        const res = await fetch(
-          isEditing ? `/api/investments/${editingInvestmentId}` : "/api/investments",
-          {
-            method: isEditing ? "PATCH" : "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
+        const investmentPayload = {
             // Pass clientId on CREATE only — the seed BUY transaction
             // adopts this id so any receipts uploaded under it link
             // automatically. PATCH doesn't create a transaction.
@@ -3667,10 +3667,28 @@ function InvestmentForm({
                 })
               : undefined,
             isExisting: false,
-            }),
-          },
+        };
+        // Editing a holding past the edit window → 423. Owners and
+        // Admins confirm in a dialog and the PATCH is re-sent with
+        // `force: true`.
+        const { res, body, cancelled } = await requestWithLockOverride<{
+          id?: string;
+        }>(
+          (force) =>
+            fetch(
+              isEditing ? `/api/investments/${editingInvestmentId}` : "/api/investments",
+              {
+                method: isEditing ? "PATCH" : "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(
+                  force ? { ...investmentPayload, force: true } : investmentPayload,
+                ),
+              },
+            ),
+          confirmOverride,
+          { title: "Edit a locked investment?", confirmLabel: "Save anyway" },
         );
-        const body = await res.json();
+        if (cancelled) return;
         if (!res.ok) {
           setError(body.error ?? "Failed");
           return;

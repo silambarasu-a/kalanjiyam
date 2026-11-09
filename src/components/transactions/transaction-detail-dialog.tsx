@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Download, FileText, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmPopover } from "@/components/ui/confirm-popover";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { formatINR, formatDate } from "@/lib/utils";
 import { fetcher } from "@/lib/swr-fetcher";
+import {
+  requestWithLockOverride,
+  useLockOverride,
+} from "@/contexts/lock-override";
 
 /**
  * Read-only detail view for a single transaction. Opened by the View
@@ -125,6 +130,8 @@ export function TransactionDetailDialog({
    * surrounding list / detail view. */
   onDeleted?: () => void;
 }) {
+  const confirmOverride = useLockOverride();
+  const [deleting, setDeleting] = useState(false);
   const { data, isLoading } = useSWR<DetailResponse>(
     open && transactionId ? `/api/transactions/${transactionId}` : null,
     fetcher,
@@ -382,54 +389,49 @@ export function TransactionDetailDialog({
             Close
           </Button>
           {onDeleted && tx && (
-            <Button
-              variant="outline"
-              className="text-destructive"
-              onClick={async () => {
-                if (
-                  !confirm(
-                    "Delete this transaction? Linked subscription / bill / advance state will be reverted.",
-                  )
-                ) {
-                  return;
-                }
-                const res = await fetch(`/api/transactions/${tx.id}`, {
-                  method: "DELETE",
-                });
-                if (res.ok) {
+            <ConfirmPopover
+              title="Delete this transaction?"
+              description="Linked subscription / bill / advance state will be reverted."
+              confirmLabel="Delete"
+              busyLabel="Deleting…"
+              busy={deleting}
+              onConfirm={async () => {
+                setDeleting(true);
+                try {
+                  // Locked rows (edit window, closed statement, closed
+                  // loan) come back 423; Owners/Admins confirm in a
+                  // dialog and the DELETE is re-sent with ?force=1.
+                  const { res, body, cancelled } =
+                    await requestWithLockOverride(
+                      (force) =>
+                        fetch(
+                          `/api/transactions/${tx.id}${force ? "?force=1" : ""}`,
+                          { method: "DELETE" },
+                        ),
+                      confirmOverride,
+                      {
+                        title: "Delete a locked transaction?",
+                        confirmLabel: "Delete anyway",
+                      },
+                    );
+                  if (cancelled) return;
+                  if (!res.ok) {
+                    toast.error(body.error ?? "Delete failed");
+                    throw new Error(body.error ?? "Delete failed");
+                  }
                   toast.success("Transaction deleted");
                   onOpenChange(false);
                   onDeleted();
-                  return;
+                } finally {
+                  setDeleting(false);
                 }
-                if (res.status === 423) {
-                  const body = await res.json().catch(() => ({}));
-                  if (
-                    body.canForce &&
-                    confirm(
-                      `${body.error}\n\nForce delete anyway? (admin/owner only)`,
-                    )
-                  ) {
-                    const force = await fetch(
-                      `/api/transactions/${tx.id}?force=1`,
-                      { method: "DELETE" },
-                    );
-                    if (force.ok) {
-                      toast.success("Transaction deleted");
-                      onOpenChange(false);
-                      onDeleted();
-                      return;
-                    }
-                  }
-                  toast.error(body.error ?? "Edit window has closed");
-                  return;
-                }
-                const body = await res.json().catch(() => ({}));
-                toast.error(body.error ?? "Delete failed");
               }}
-            >
-              Delete
-            </Button>
+              trigger={
+                <Button variant="outline" className="text-destructive">
+                  Delete
+                </Button>
+              }
+            />
           )}
           {onEdit && tx && (
             <Button onClick={onEdit} variant="outline">
