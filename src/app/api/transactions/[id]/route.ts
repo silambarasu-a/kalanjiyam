@@ -1247,34 +1247,44 @@ export async function DELETE(
 
       // ── "Contact paid for me" obligation: when this EXPENSE was
       // recorded with paidByContactId + memberChargeType=RECOVERABLE,
-      // a MemberCharge with direction=USER_OWES was created. We can't
-      // pinpoint it by id (there's no sourceTransactionId FK), so we
-      // match on (contact, direction, OUTSTANDING/PARTIAL, amount).
+      // a MemberCharge with direction=USER_OWES was created. Newer writers
+      // (loan /pay and /settle) link it by sourceTransactionId, so look for
+      // that first; older rows have no link, so fall back to matching on
+      // (contact, direction, OUTSTANDING/PARTIAL, amount).
       // If the user has already partially settled it, write-off rather
       // than delete so settlement history survives.
       if (
         t.paidByContactId &&
         t.memberChargeType === MemberChargeType.RECOVERABLE
       ) {
-        const candidate = await tx.memberCharge.findFirst({
-          where: {
-            workspaceId: ctx.workspaceId,
-            beneficiaryContactId: t.paidByContactId,
-            direction: "USER_OWES",
-            amount: t.amount,
-            status: {
-              in: [
-                MemberChargeStatus.OUTSTANDING,
-                MemberChargeStatus.PARTIAL,
-              ],
+        const openStatuses = {
+          in: [MemberChargeStatus.OUTSTANDING, MemberChargeStatus.PARTIAL],
+        };
+        const candidateSelect = {
+          id: true,
+          _count: { select: { settlements: true } },
+        } as const;
+        const candidate =
+          (await tx.memberCharge.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              sourceTransactionId: t.id,
+              direction: "USER_OWES",
+              status: openStatuses,
             },
-          },
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true,
-            _count: { select: { settlements: true } },
-          },
-        });
+            select: candidateSelect,
+          })) ??
+          (await tx.memberCharge.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              beneficiaryContactId: t.paidByContactId,
+              direction: "USER_OWES",
+              amount: t.amount,
+              status: openStatuses,
+            },
+            orderBy: { createdAt: "desc" },
+            select: candidateSelect,
+          }));
         if (candidate) {
           if (candidate._count.settlements === 0) {
             await tx.memberCharge.delete({ where: { id: candidate.id } });

@@ -119,6 +119,9 @@ export default async function LoanDetailPage({
         loanLedgerEntry: {
           select: { kind: true, principalAmount: true, interestAmount: true },
         },
+        // Set when someone else covered this payment for the owner; the
+        // history shows who, since no account of ours moved.
+        paidByContact: { select: { name: true } },
       },
     }),
     prisma.loanLedgerEntry.findMany({
@@ -1111,6 +1114,7 @@ export default async function LoanDetailPage({
               // Null for pre-ledger rows; the component then falls back to the
               // type/kind heuristic, exactly like the API guards do.
               ledgerKind: p.loanLedgerEntry?.kind ?? null,
+              paidBy: p.paidByContact?.name ?? null,
             }))}
             totalRepaid={totalRepaid}
             direction={loan.direction}

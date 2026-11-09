@@ -11,6 +11,10 @@ import type { NativeSelectGroup } from "@/components/ui/native-select";
 import { DescriptionField } from "@/components/ui/description-field";
 import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
+  ContactRepaymentToggle,
+  contactChargeType,
+} from "@/components/shared/contact-repayment-toggle";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -18,7 +22,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
-import { fundingSourceIds } from "@/lib/funding-sources";
+import { fundingSourceIds, type FundingSourceKind } from "@/lib/funding-sources";
+import { useFundingSources } from "@/lib/use-funding-sources";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   interestExpectedSince,
@@ -88,12 +93,38 @@ export function LoanSettleDialog({
   // Cash-in-hand is a private-lending affordance; a bank settlement always
   // debits an account, so it starts unset there and must be picked.
   const cashAllowed = loan?.source !== "BANK";
-  // "account:<id>" | CASH_IN_HAND | "" — see src/lib/funding-sources.ts
+  // "account:<id>" | "contact:<id>" | CASH_IN_HAND | "" — see
+  // src/lib/funding-sources.ts
   const [source, setSource] = useState(CASH_IN_HAND);
+  // When a contact paid a BORROWED settlement for the owner: true → "I'll
+  // repay them" (raises a USER_OWES charge); false → gift, history only.
+  const [oweContactBack, setOweContactBack] = useState(true);
   const [closeLoan, setCloseLoan] = useState(false);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A contact can cover what the owner pays out, never what comes back in,
+  // so the CONTACT group is offered on borrowed loans only (the route
+  // rejects it on a lent one).
+  const contactAllowed = !isLent;
+  const pickerKinds = useMemo<FundingSourceKind[]>(
+    () =>
+      contactAllowed
+        ? ["BANK", "WALLET", "CASH", "CONTACT"]
+        : ["BANK", "WALLET", "CASH"],
+    [contactAllowed],
+  );
+  // Only for the contact's name on the toggle — SWR dedupes this into the
+  // picker's own fetch of the same key.
+  const { contacts } = useFundingSources({
+    enabled: loan !== null && contactAllowed,
+    withCards: false,
+    withContacts: true,
+  });
+  const pickedContactId = contactAllowed ? fundingSourceIds(source).contactId : null;
+  const pickedContactName =
+    contacts.find((c) => c.id === pickedContactId)?.name ?? null;
 
   const loanId = loan?.id;
   useEffect(() => {
@@ -106,6 +137,7 @@ export function LoanSettleDialog({
     setPeriodFrom("");
     setPeriodTo("");
     setSource(cashAllowed ? CASH_IN_HAND : "");
+    setOweContactBack(true);
     setCloseLoan(false);
     setNotes("");
     setError(null);
@@ -180,8 +212,9 @@ export function LoanSettleDialog({
       return;
     }
     const accountId = isCashInHand ? null : fundingSourceIds(source).accountId;
-    if (!cashAllowed && !accountId) {
-      setError("Pick an account");
+    const contactId = isCashInHand ? null : pickedContactId;
+    if (!cashAllowed && !accountId && !contactId) {
+      setError("Pick an account, or the contact who paid");
       return;
     }
     setSubmitting(true);
@@ -196,6 +229,8 @@ export function LoanSettleDialog({
           periodFrom: showPeriod && periodFrom ? periodFrom : null,
           periodTo: showPeriod && periodTo ? periodTo : null,
           accountId,
+          paidByContactId: contactId,
+          memberChargeType: contactId ? contactChargeType(oweContactBack) : undefined,
           closeLoan: newOutstanding === 0 ? closeLoan : false,
           notes: notes.trim() || undefined,
         }),
@@ -331,7 +366,7 @@ export function LoanSettleDialog({
                   value={source}
                   onChange={setSource}
                   direction={isLent ? "in" : "out"}
-                  kinds={["BANK", "WALLET", "CASH"]}
+                  kinds={pickerKinds}
                   amount={isLent ? 0 : gross}
                   prependGroups={offAccountGroups}
                 />
@@ -342,6 +377,14 @@ export function LoanSettleDialog({
                 </span>
               )}
             </label>
+
+            {pickedContactId && (
+              <ContactRepaymentToggle
+                contactName={pickedContactName}
+                value={oweContactBack}
+                onChange={setOweContactBack}
+              />
+            )}
 
             {gross > 0 && (
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs">

@@ -13,9 +13,6 @@ import {
   HandCoins,
   RefreshCw,
   RotateCcw,
-  Check,
-  Gift,
-  Wallet,
   Star,
 } from "lucide-react";
 import type { StockQuote } from "@/app/api/market/quote/route";
@@ -46,6 +43,10 @@ import {
   type InsurancePolicyExtras,
 } from "@/components/insurance/policy-extras-fields";
 import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
+import {
+  ContactRepaymentToggle,
+  contactChargeType,
+} from "@/components/shared/contact-repayment-toggle";
 import { CategoryCombobox } from "@/components/categories/category-combobox";
 import { CategoryQuickCreateDialog } from "@/components/categories/category-quick-create-dialog";
 import { uploadReceiptsToAttachment } from "@/components/transactions/receipt-stager";
@@ -72,6 +73,7 @@ import {
 } from "@/components/transactions/split-rows";
 import { cn, formatINR } from "@/lib/utils";
 import { fundingSourceIds } from "@/lib/funding-sources";
+import { useFundingSources } from "@/lib/use-funding-sources";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fetcher } from "@/lib/swr-fetcher";
@@ -1938,118 +1940,13 @@ function formatPeriod(s: { periodStart: string; periodEnd: string }) {
   return `${fmt(s.periodStart)} – ${fmt(s.periodEnd)}`;
 }
 
-/**
- * Full-width segmented control shown when "Pay from" is a contact. Two
- * mutually-exclusive options:
- *   `true`  → contact paid for me and I'll repay (creates USER_OWES MemberCharge).
- *   `false` → contact paid as a gift / treat (no obligation, history only).
- *
- * Spans the form width so the choice reads at a glance and so the
- * Category column above isn't left visually empty.
- */
-function ContactRepaymentToggle({
-  contactName,
-  value,
-  onChange,
-}: {
-  contactName: string | null;
-  value: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  const opts: {
-    key: boolean;
-    icon: React.ComponentType<{ className?: string }>;
-    label: string;
-    sub: string;
-  }[] = [
-    {
-      key: true,
-      icon: Wallet,
-      label: "I'll repay them",
-      sub: contactName
-        ? `Adds to "You owe ${contactName}"`
-        : "Adds to 'You owe' on their page",
-    },
-    {
-      key: false,
-      icon: Gift,
-      label: "Gift / treat",
-      sub: "History only, no obligation",
-    },
-  ];
-
-  return (
-    <fieldset className="space-y-2 rounded-xl border bg-muted/20 p-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <legend className="text-xs font-medium">
-          How will this be settled?
-        </legend>
-        <span className="text-[10px] text-muted-foreground">
-          {contactName ? `Paid by ${contactName}` : "Paid by contact"}
-        </span>
-      </div>
-      <div
-        role="radiogroup"
-        aria-label="How will this be settled?"
-        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-      >
-        {opts.map((o) => {
-          const active = value === o.key;
-          const Icon = o.icon;
-          return (
-            <button
-              key={String(o.key)}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onChange(o.key)}
-              className={cn(
-                "group relative flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all outline-none",
-                "focus-visible:ring-2 focus-visible:ring-ring/40",
-                active
-                  ? "border-primary bg-background shadow-sm ring-1 ring-primary/20"
-                  : "border-input bg-background/60 hover:border-input/80 hover:bg-background",
-              )}
-            >
-              <span
-                className={cn(
-                  "mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-                  active
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted text-muted-foreground",
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-              <span className="min-w-0 flex-1 space-y-0.5">
-                <span
-                  className={cn(
-                    "block text-sm font-medium leading-tight",
-                    active ? "text-foreground" : "text-foreground/80",
-                  )}
-                >
-                  {o.label}
-                </span>
-                <span className="block text-[11px] leading-snug text-muted-foreground">
-                  {o.sub}
-                </span>
-              </span>
-              {active && (
-                <Check className="absolute right-2.5 top-2.5 h-3.5 w-3.5 text-primary" />
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </fieldset>
-  );
-}
-
 /** Transfers move between ledger accounts; a credit card is offered so a
  *  bill payment can target it, and resolves to its companion account. */
 const TRANSFER_SOURCE_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
 /** Ledger accounts only — where money lands, or an EMI is paid from. */
 const ACCOUNT_KINDS = ["BANK", "WALLET", "CASH"] as const;
+/** EMI "Pay from": a ledger account, or the contact who covered it. */
+const EMI_PAY_KINDS = [...ACCOUNT_KINDS, "CONTACT"] as const;
 /** Investment buys, premiums and gold splits: accounts or a credit card. */
 const INVESTMENT_PAY_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
 
@@ -2516,8 +2413,16 @@ function LoanEmiForm({ onClose }: { onClose: () => void }) {
   const [loanId, setLoanId] = useState("");
   const [amount, setAmount] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  // "account:<id>" | "" — EMIs are paid from a ledger account, never a card.
+  // "account:<id>" | "contact:<id>" | "" — EMIs are paid from a ledger
+  // account (never a card), or by a contact on the owner's behalf.
   const [source, setSource] = useState("");
+  // When a contact paid: true → "I'll repay them" (USER_OWES charge);
+  // false → gift, history only.
+  const [oweContactBack, setOweContactBack] = useState(true);
+  const { contacts } = useFundingSources({ withCards: false, withContacts: true });
+  const pickedContactId = fundingSourceIds(source).contactId;
+  const pickedContactName =
+    contacts.find((c) => c.id === pickedContactId)?.name ?? null;
   const [notes, setNotes] = useState("");
   // Pre-mint the future txn id so attached receipts hit S3 instantly
   // and link cleanly when the loan-pay POST creates the row.
@@ -2554,9 +2459,9 @@ function LoanEmiForm({ onClose }: { onClose: () => void }) {
       setError("Enter an amount");
       return;
     }
-    const { accountId } = fundingSourceIds(source);
-    if (!accountId) {
-      setError("Pick an account");
+    const { accountId, contactId } = fundingSourceIds(source);
+    if (!accountId && !contactId) {
+      setError("Pick an account, or the contact who paid");
       return;
     }
     setSubmitting(true);
@@ -2569,6 +2474,8 @@ function LoanEmiForm({ onClose }: { onClose: () => void }) {
           amount: amt,
           paidAt,
           accountId,
+          paidByContactId: contactId,
+          memberChargeType: contactId ? contactChargeType(oweContactBack) : undefined,
           notes: notes.trim() || undefined,
         }),
       });
@@ -2654,12 +2561,20 @@ function LoanEmiForm({ onClose }: { onClose: () => void }) {
           <FundingSourcePicker
             value={source}
             onChange={setSource}
-            kinds={ACCOUNT_KINDS}
+            kinds={EMI_PAY_KINDS}
             direction="out"
             amount={Number(amount) || 0}
           />
         </div>
       </label>
+
+      {pickedContactId && (
+        <ContactRepaymentToggle
+          contactName={pickedContactName}
+          value={oweContactBack}
+          onChange={setOweContactBack}
+        />
+      )}
 
       <label className="block">
         <span className="text-xs font-medium">Notes</span>

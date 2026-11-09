@@ -10,6 +10,8 @@ import {
   LoanLedgerKind,
   TransactionType,
   TransactionKind,
+  MemberChargeStatus,
+  MemberChargeType,
 } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -140,6 +142,32 @@ export async function POST(
       }
     }
 
+    // A contact paid this settlement for the owner. Only meaningful on a
+    // BORROWED loan — on a lent loan the money comes back to the owner, so
+    // nobody can pay it "on their behalf"; the schema's EXPENSE-only rule on
+    // paidByContactId, enforced here since the type is derived.
+    const paidByContactId = data.paidByContactId ?? null;
+    if (paidByContactId && isLent) {
+      return NextResponse.json(
+        { error: "A contact can't pay a receipt on your behalf — this is money owed to you." },
+        { status: 400 },
+      );
+    }
+    if (paidByContactId) {
+      const contact = await prisma.contact.findUnique({
+        where: { id: paidByContactId },
+        select: { workspaceId: true },
+      });
+      if (!contact || contact.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
+    }
+    const chargeType: MemberChargeType = paidByContactId
+      ? data.memberChargeType === "GIFT"
+        ? MemberChargeType.GIFT
+        : MemberChargeType.RECOVERABLE
+      : MemberChargeType.NONE;
+
     // The next settlement rolls one cadence past the period this entry covered,
     // falling back to the payment date when the user didn't record a period.
     // Never an EMI cycle — there isn't one.
@@ -154,9 +182,17 @@ export async function POST(
       ? null
       : nextInterestDueDate(anchor, loan.interestCadence, loan.maturityAt);
 
+    const description = `Loan ${isLent ? "receipt" : "payment"} · ${counterpartyName(loan)}${
+      data.notes ? ` · ${data.notes}` : ""
+    }`;
+
     const created = await prisma.$transaction(async (tx) => {
       let txnId: string | null = null;
-      if (accountId) {
+      // A contact-paid settlement posts a Transaction even though no account
+      // is involved: the account-less row (paidByContactId set) is what the
+      // contact's page and the transactions list render as "Paid by …", and
+      // what the repayment obligation below points back at.
+      if (accountId || paidByContactId) {
         const txn = await tx.transaction.create({
           data: {
             ...(data.clientId ? { id: data.clientId } : {}),
@@ -173,17 +209,32 @@ export async function POST(
                 ? TransactionKind.LOAN_PAYMENT
                 : TransactionKind.INTEREST,
             amount: gross,
-            description: `Loan ${isLent ? "receipt" : "payment"} · ${counterpartyName(loan)}${
-              data.notes ? ` · ${data.notes}` : ""
-            }`,
+            description,
             date: new Date(data.paidAt),
             accountId,
+            paidByContactId,
+            memberChargeType: chargeType,
             loanId: id,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
           },
         });
         txnId = txn.id;
+        // Same obligation POST /api/transactions and /pay raise for a
+        // contact-paid expense the owner intends to repay.
+        if (paidByContactId && chargeType === MemberChargeType.RECOVERABLE) {
+          await tx.memberCharge.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              beneficiaryContactId: paidByContactId,
+              amount: gross,
+              status: MemberChargeStatus.OUTSTANDING,
+              direction: "USER_OWES",
+              sourceTransactionId: txn.id,
+              notes: description,
+            },
+          });
+        }
       }
       const entry = await tx.loanLedgerEntry.create({
         data: {

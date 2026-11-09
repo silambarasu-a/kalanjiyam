@@ -26,6 +26,8 @@ export type LoanPaymentRow = {
   description: string;
   /** The persisted ledger classification; null for pre-ledger rows. */
   ledgerKind?: "DISBURSEMENT" | "REPAYMENT" | "CHARGE" | "WRITE_OFF" | null;
+  /** Name of the contact who paid this on the owner's behalf, if any. */
+  paidBy?: string | null;
 };
 
 export function LoanPaymentHistory({
@@ -126,6 +128,11 @@ export function LoanPaymentHistory({
                   </td>
                   <td className="px-5 py-2.5">
                     <div className="font-medium truncate">{p.description}</div>
+                    {p.paidBy && (
+                      <div className="text-[11px] text-muted-foreground">
+                        Paid by {p.paidBy}
+                      </div>
+                    )}
                   </td>
                   <td
                     className={`px-5 py-2.5 text-right font-semibold tabular-nums ${

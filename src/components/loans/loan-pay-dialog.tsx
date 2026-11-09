@@ -10,6 +10,10 @@ import { AmountInput } from "@/components/ui/amount-input";
 import { DescriptionField } from "@/components/ui/description-field";
 import { FundingSourcePicker } from "@/components/shared/funding-source-picker";
 import {
+  ContactRepaymentToggle,
+  contactChargeType,
+} from "@/components/shared/contact-repayment-toggle";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -18,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { mutateBalances } from "@/lib/mutate-balances";
 import { fundingSourceIds } from "@/lib/funding-sources";
+import { useFundingSources } from "@/lib/use-funding-sources";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   splitPayment,
@@ -56,11 +61,25 @@ export function LoanPayDialog({
   const [interestPortion, setInterestPortion] = useState("");
   const [gstPortion, setGstPortion] = useState("");
   const [paidAt, setPaidAt] = useState(today);
-  // "account:<id>" | "" — see src/lib/funding-sources.ts
+  // "account:<id>" | "contact:<id>" | "" — see src/lib/funding-sources.ts
   const [source, setSource] = useState("");
+  // When a contact paid: true → "I'll repay them" (raises a USER_OWES
+  // charge on their page); false → gift, history only.
+  const [oweContactBack, setOweContactBack] = useState(true);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Only for the contact's name on the toggle — the picker fetches the same
+  // key itself, so SWR dedupes this into that request.
+  const { contacts } = useFundingSources({
+    enabled: loan !== null,
+    withCards: false,
+    withContacts: true,
+  });
+  const pickedContactId = fundingSourceIds(source).contactId;
+  const pickedContactName =
+    contacts.find((c) => c.id === pickedContactId)?.name ?? null;
 
   // Pre-fill the amount when the dialog opens so a one-tap "Confirm"
   // posts the standard EMI. Capped at outstanding so the last (smaller)
@@ -80,6 +99,7 @@ export function LoanPayDialog({
     setInterestPortion("");
     setGstPortion("");
     setNotes("");
+    setOweContactBack(true);
     setError(null);
     setPaidAt(today);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -165,9 +185,9 @@ export function LoanPayDialog({
       setError("Enter an amount");
       return;
     }
-    const { accountId } = fundingSourceIds(source);
-    if (!accountId) {
-      setError("Pick an account");
+    const { accountId, contactId } = fundingSourceIds(source);
+    if (!accountId && !contactId) {
+      setError("Pick an account, or the contact who paid");
       return;
     }
     setSubmitting(true);
@@ -179,6 +199,8 @@ export function LoanPayDialog({
           amount: amt,
           paidAt,
           accountId,
+          paidByContactId: contactId,
+          memberChargeType: contactId ? contactChargeType(oweContactBack) : undefined,
           principalPortion:
             overrideSplit && principalPortion ? Number(principalPortion) : null,
           interestPortion:
@@ -360,11 +382,18 @@ export function LoanPayDialog({
                   value={source}
                   onChange={setSource}
                   direction="out"
-                  kinds={["BANK", "WALLET", "CASH"]}
+                  kinds={["BANK", "WALLET", "CASH", "CONTACT"]}
                   amount={amt}
                 />
               </div>
             </label>
+            {pickedContactId && (
+              <ContactRepaymentToggle
+                contactName={pickedContactName}
+                value={oweContactBack}
+                onChange={setOweContactBack}
+              />
+            )}
             <DescriptionField
               value={notes}
               onChange={setNotes}

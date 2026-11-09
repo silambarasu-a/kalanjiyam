@@ -1091,6 +1091,13 @@ export const loanPaymentSchema = z
     paidAt: z.string(),
     accountId: z.string().uuid().optional().nullable(),
     cardId: z.string().uuid().optional().nullable(),
+    // Someone else paid this instalment for the workspace owner. Same
+    // contract as `transactionSchema`: no account or card moves, the row
+    // carries `paidByContactId`, and RECOVERABLE raises a USER_OWES
+    // MemberCharge so the contact's page shows what the owner owes back.
+    // GIFT records who paid with no obligation.
+    paidByContactId: z.string().uuid().optional().nullable(),
+    memberChargeType: z.enum(["RECOVERABLE", "GIFT"]).optional().nullable(),
     principalPortion: z.number().nonnegative().optional().nullable(),
     interestPortion: z.number().nonnegative().optional().nullable(),
     gstPortion: z.number().nonnegative().optional().nullable(),
@@ -1108,7 +1115,13 @@ export const loanPaymentSchema = z
       message: "Principal + interest + GST cannot exceed the amount paid",
       path: ["principalPortion"],
     },
-  );
+  )
+  // A contact-paid instalment moved none of the owner's money, so it can't
+  // also name an account or card to debit.
+  .refine((d) => !d.paidByContactId || (!d.accountId && !d.cardId), {
+    message: "Pick either an account/card or a contact, not both",
+    path: ["paidByContactId"],
+  });
 
 /**
  * An ad-hoc settlement on a hand loan: interest (whatever actually changed
@@ -1134,6 +1147,13 @@ export const loanSettleSchema = z
     // account the ledger entry is still written but no Transaction posts, so
     // no account balance moves.
     accountId: z.string().uuid().optional().nullable(),
+    // A contact paid this settlement for the owner (BORROWED loans only — the
+    // route rejects it on a lent loan, where nothing is paid on the owner's
+    // behalf). Posts an account-less Transaction so the contact's page can
+    // show it, and RECOVERABLE raises a USER_OWES MemberCharge for the
+    // repayment. Mirrors loanPaymentSchema.
+    paidByContactId: z.string().uuid().optional().nullable(),
+    memberChargeType: z.enum(["RECOVERABLE", "GIFT"]).optional().nullable(),
     // The principal can hit zero while interest is still owed, so closing is
     // an explicit user choice and never inferred from outstanding === 0.
     closeLoan: z.boolean().optional().default(false),
@@ -1146,6 +1166,10 @@ export const loanSettleSchema = z
   .refine((d) => !d.periodFrom || !d.periodTo || d.periodFrom <= d.periodTo, {
     message: "Period end must be on or after the period start",
     path: ["periodTo"],
+  })
+  .refine((d) => !d.paidByContactId || !d.accountId, {
+    message: "Pick either an account or a contact, not both",
+    path: ["paidByContactId"],
   });
 
 /** Writing off unrecovered principal on a lent hand loan. */

@@ -16,6 +16,8 @@ import {
   TransactionType,
   TransactionKind,
   LoanLedgerKind,
+  MemberChargeStatus,
+  MemberChargeType,
 } from "@/generated/prisma/client";
 
 function err(e: unknown) {
@@ -97,9 +99,32 @@ export async function POST(
       }
       resolvedAccountId = card.accountId ?? resolvedAccountId;
     }
-    if (!resolvedAccountId) {
-      return NextResponse.json({ error: "Pick an account or card" }, { status: 400 });
+    // Someone else paid this instalment. Same workspace-scope check as
+    // POST /api/transactions — without it a contact id from another
+    // workspace would raise a MemberCharge that bridges workspaces.
+    const paidByContactId = data.paidByContactId ?? null;
+    if (paidByContactId) {
+      const contact = await prisma.contact.findUnique({
+        where: { id: paidByContactId },
+        select: { workspaceId: true },
+      });
+      if (!contact || contact.workspaceId !== ctx.workspaceId) {
+        return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+      }
     }
+    if (!resolvedAccountId && !paidByContactId) {
+      return NextResponse.json(
+        { error: "Pick an account, card, or the contact who paid" },
+        { status: 400 },
+      );
+    }
+    // Defaults to "I'll repay them" — the common case when a friend covers
+    // an EMI — unless the client explicitly marked it a gift.
+    const chargeType: MemberChargeType = paidByContactId
+      ? data.memberChargeType === "GIFT"
+        ? MemberChargeType.GIFT
+        : MemberChargeType.RECOVERABLE
+      : MemberChargeType.NONE;
 
     // Auto-split when the client didn't supply principal/interest portions.
     //
@@ -285,6 +310,8 @@ export async function POST(
           })
         : null;
 
+    const description = `Loan payment · ${loan.lenderContact?.name ?? loan.lender}${data.notes ? ` · ${data.notes}` : ""}`;
+
     const created = await prisma.$transaction(async (tx) => {
       const txn = await tx.transaction.create({
         data: {
@@ -293,15 +320,38 @@ export async function POST(
           type: TransactionType.EXPENSE,
           kind: TransactionKind.LOAN_PAYMENT,
           amount: data.amount,
-          description: `Loan payment · ${loan.lenderContact?.name ?? loan.lender}${data.notes ? ` · ${data.notes}` : ""}`,
+          description,
           date: new Date(data.paidAt),
+          // Null when a contact paid: none of the owner's money moved, so no
+          // balance may change. The contact link is what the transactions
+          // list and the contact's page render in place of the account.
           accountId: resolvedAccountId,
           cardId: data.cardId ?? null,
+          paidByContactId,
+          memberChargeType: chargeType,
           loanId: id,
           userId: ctx.userId,
           createdByUserId: ctx.userId,
         },
       });
+      // "Contact paid my EMI and I'll pay them back" → a USER_OWES charge, the
+      // same obligation POST /api/transactions raises for any contact-paid
+      // expense, so it settles through the contact's page like the rest.
+      // Linked by sourceTransactionId so deleting this payment can find it
+      // exactly instead of matching on amount.
+      if (paidByContactId && chargeType === MemberChargeType.RECOVERABLE) {
+        await tx.memberCharge.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            beneficiaryContactId: paidByContactId,
+            amount: data.amount,
+            status: MemberChargeStatus.OUTSTANDING,
+            direction: "USER_OWES",
+            sourceTransactionId: txn.id,
+            notes: description,
+          },
+        });
+      }
       // Persist the split. Until this table existed the principal/interest
       // breakdown was computed here, returned in the response, and thrown
       // away — so reversal had to re-derive the principal with
