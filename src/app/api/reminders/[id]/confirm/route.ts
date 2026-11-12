@@ -181,6 +181,14 @@ export async function POST(
       }
     }
 
+    // Units allotted for a SIP instalment, and the NAV they imply. The
+    // price is only derived for a rupee holding — `amount` is always INR,
+    // so dividing it by units of a USD fund would not be that fund's NAV.
+    const units =
+      reminder.kind === ReminderKind.SIP_BUY ? (parsed.data.quantity ?? null) : null;
+    const unitPrice =
+      units != null && (inv?.currency ?? "INR") === "INR" ? amount / units : null;
+
     await prisma.$transaction(async (tx) => {
       let createdTxnId: string | null = null;
 
@@ -199,25 +207,41 @@ export async function POST(
             cardId: parsed.data.cardId ?? null,
             investmentId: inv?.id ?? null,
             investmentAction: InvestmentAction.BUY,
+            investmentQty: units,
+            investmentPrice: unitPrice,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
           },
         });
         createdTxnId = txn.id;
         // Advance the investment's nextDueDate by its frequency and track
-        // cumulative amount invested.
-        if (inv?.premiumFrequency && inv.nextDueDate) {
+        // cumulative amount invested — and, when the units allotted were
+        // given, the units and their weighted-average NAV, exactly as a
+        // BUY recorded through /api/transactions does.
+        if (inv) {
+          const oldQty = Number(inv.quantity ?? 0);
+          const oldPrice = Number(inv.purchasePrice ?? 0);
           await tx.investment.update({
             where: { id: inv.id },
             data: {
               amount: Number(inv.amount) + amount,
-              nextDueDate: advanceDate(inv.nextDueDate, inv.premiumFrequency),
+              ...(inv.premiumFrequency && inv.nextDueDate
+                ? { nextDueDate: advanceDate(inv.nextDueDate, inv.premiumFrequency) }
+                : {}),
+              ...(units != null
+                ? {
+                    quantity: oldQty + units,
+                    ...(unitPrice != null
+                      ? {
+                          purchasePrice:
+                            oldQty > 0 && oldPrice > 0
+                              ? (oldQty * oldPrice + units * unitPrice) / (oldQty + units)
+                              : unitPrice,
+                        }
+                      : {}),
+                  }
+                : {}),
             },
-          });
-        } else if (inv) {
-          await tx.investment.update({
-            where: { id: inv.id },
-            data: { amount: Number(inv.amount) + amount },
           });
         }
       } else if (reminder.kind === ReminderKind.FD_INTEREST) {

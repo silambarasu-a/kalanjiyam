@@ -3,6 +3,7 @@ import { computeAccountBalance } from "@/lib/account-balance";
 import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
 import { counterpartyName } from "@/lib/loan-direction";
 import { interestExpectedSince } from "@/lib/hand-loan-interest";
+import { isDepositKind, valueHolding } from "@/lib/investment-valuation";
 
 export type Due = {
   id: string;
@@ -208,10 +209,21 @@ export async function getDashboardStats(args: {
       where: { workspaceId, active: true },
       _sum: { outstanding: true },
     }),
-    prisma.investment.groupBy({
-      by: ["kind"],
+    // Row by row rather than grouped: a deposit's value has to be worked
+    // out from its own rate and dates (see below).
+    prisma.investment.findMany({
       where: { workspaceId, active: true },
-      _sum: { amount: true, currentValue: true },
+      select: {
+        kind: true,
+        amount: true,
+        currentValue: true,
+        interestRate: true,
+        compoundingFrequency: true,
+        startedAt: true,
+        maturityAt: true,
+        maturityValue: true,
+        premiumAmount: true,
+      },
     }),
     // Aggregate by direction so net worth can treat OWED_TO_USER as an
     // asset (people owe me) and USER_OWES as a liability (I owe them).
@@ -295,8 +307,26 @@ export async function getDashboardStats(args: {
   let otherHoldingsAmount = 0;
   let otherHoldingsCurrent = 0;
   for (const row of investmentsTotal) {
-    const amt = Number(row._sum.amount ?? 0);
-    const cur = Number(row._sum.currentValue ?? row._sum.amount ?? 0);
+    const amt = Number(row.amount);
+    const stored = row.currentValue == null ? null : Number(row.currentValue);
+    // A deposit's interest accrues every day but no stored column tracks
+    // it, so it is valued with the module the investments page uses —
+    // this tile and net worth then agree with that page. Everything else
+    // is its stored value, else cost; stocks and funds are marked to
+    // market on the client.
+    const cur = isDepositKind(row.kind)
+      ? valueHolding({
+          kind: row.kind,
+          amount: amt,
+          currentValue: stored,
+          interestRate: row.interestRate == null ? null : Number(row.interestRate),
+          compoundingFrequency: row.compoundingFrequency,
+          startedAt: row.startedAt,
+          maturityAt: row.maturityAt,
+          maturityValue: row.maturityValue == null ? null : Number(row.maturityValue),
+          premiumAmount: row.premiumAmount == null ? null : Number(row.premiumAmount),
+        }).current
+      : (stored ?? amt);
     if (MARKET_KINDS.has(row.kind)) {
       investedAmount += amt;
       investedCurrent += cur;

@@ -31,6 +31,8 @@ import { formatINR, formatDate } from "@/lib/utils";
 import { calendarMonthPeriods } from "@/lib/statement-period";
 import { PeriodFilter } from "@/components/transactions/period-filter";
 import type { StockQuote } from "@/app/api/market/quote/route";
+import type { MfNavResponse } from "@/app/api/market/mf-nav/route";
+import { amfiSchemeCode, isFundKind, valueHolding } from "@/lib/investment-valuation";
 
 type Due = {
   id: string;
@@ -109,12 +111,18 @@ type Cashflow = {
   };
 };
 
-type StockLite = {
+/** The slice of `GET /api/investments` the live-marking below reads. */
+type HoldingLite = {
   id: string;
+  kind: string;
   symbol: string | null;
   quantity: number | null;
+  purchasePrice: number | null;
   amount: number;
+  currentValue: number | null;
   currency: string | null;
+  startedAt: string;
+  metadata: Record<string, unknown> | null;
   active: boolean;
 };
 
@@ -272,15 +280,24 @@ export default function DashboardPage() {
   // the Invested tile reflects today's market price + USD/INR rate
   // instead of cost basis. Same pattern as the dedicated /investments
   // page.
-  const { data: stocksData } = useSWR<{ investments: StockLite[] }>(
-    "/api/investments?kind=STOCK",
+  const { data: holdingsData } = useSWR<{ investments: HoldingLite[] }>(
+    "/api/investments",
     fetcher,
   );
   const { data: rateData } = useSWR<{ rate: number }>(
     "/api/market/rate",
     fetcher,
   );
-  const stocks = (stocksData?.investments ?? []).filter((s) => s.active);
+  const stocks = useMemo(
+    () =>
+      (holdingsData?.investments ?? []).filter((h) => h.active && h.kind === "STOCK"),
+    [holdingsData],
+  );
+  const funds = useMemo(
+    () =>
+      (holdingsData?.investments ?? []).filter((h) => h.active && isFundKind(h.kind)),
+    [holdingsData],
+  );
   const usdInrRate = rateData?.rate ?? 84;
   const stockSymbols = useMemo(() => {
     const set = new Set<string>();
@@ -318,8 +335,32 @@ export default function DashboardPage() {
     return total;
   }, [stocks, quoteMap, usdInrRate]);
 
+  // Same idea for mutual funds and SIPs: units × the latest AMFI NAV,
+  // over whatever the server summed them at (cost, normally).
+  const schemeCodes = useMemo(() => {
+    const set = new Set<string>();
+    funds.forEach((f) => {
+      const code = amfiSchemeCode(f.metadata);
+      if (code) set.add(code);
+    });
+    return [...set].sort();
+  }, [funds]);
+  const { data: navs } = useSWR<MfNavResponse>(
+    schemeCodes.length > 0 ? `/api/market/mf-nav?codes=${schemeCodes.join(",")}` : null,
+    fetcher,
+  );
+  const fundLiveGain = useMemo(() => {
+    let total = 0;
+    for (const f of funds) {
+      const code = amfiSchemeCode(f.metadata);
+      const value = valueHolding(f, { nav: code ? navs?.[code] : null });
+      if (value.basis === "NAV") total += value.current - (f.currentValue ?? f.amount);
+    }
+    return total;
+  }, [funds, navs]);
+
   const investedCurrentLive =
-    stats != null ? stats.investedCurrent + stockLiveGain : null;
+    stats != null ? stats.investedCurrent + stockLiveGain + fundLiveGain : null;
 
   const [liquidExpanded, setLiquidExpanded] = useState(false);
 

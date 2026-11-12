@@ -9,6 +9,19 @@ import {
   type InvestmentTxnRow,
 } from "@/components/investments/investment-transaction-history";
 import { InvestmentActions } from "@/components/investments/investment-actions";
+import { getFundNavs, type FundNav } from "@/lib/amfi";
+import {
+  COMPOUNDING_LABEL,
+  amfiSchemeCode,
+  depositValuation,
+  formatDaysAway,
+  formatTenure,
+  fundValuation,
+  isDepositKind,
+  isFundKind,
+  valueHolding,
+  type HoldingForValuation,
+} from "@/lib/investment-valuation";
 
 const KIND_LABEL: Record<string, string> = {
   STOCK: "Stock",
@@ -38,8 +51,15 @@ const FREQUENCY_LABEL: Record<string, string> = {
   QUARTERLY: "Quarterly",
   HALF_YEARLY: "Half-yearly",
   YEARLY: "Yearly",
+  EVERY_2_YEARS: "Every 2 years",
+  EVERY_3_YEARS: "Every 3 years",
+  EVERY_5_YEARS: "Every 5 years",
   ONE_TIME: "One-time",
 };
+
+/** A per-unit rupee price — NAVs are quoted to four decimals. */
+const formatNav = (n: number) =>
+  `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 
 export default async function InvestmentDetailPage({
   params,
@@ -111,6 +131,62 @@ export default async function InvestmentDetailPage({
     .reduce((s, t) => s + Number(t.amount), 0);
 
   const today = new Date();
+
+  // ── What it is worth today ───────────────────────────────────────────
+  // Same module the investments list uses, so the two always agree.
+  const holding: HoldingForValuation = {
+    kind: inv.kind,
+    amount,
+    currentValue,
+    interestRate,
+    compoundingFrequency: inv.compoundingFrequency,
+    startedAt: inv.startedAt,
+    maturityAt: inv.maturityAt,
+    maturityValue: inv.maturityValue != null ? Number(inv.maturityValue) : null,
+    quantity: inv.quantity != null ? Number(inv.quantity) : null,
+    purchasePrice: inv.purchasePrice != null ? Number(inv.purchasePrice) : null,
+    premiumAmount,
+    metadata: inv.metadata,
+  };
+  const isDeposit = isDepositKind(inv.kind);
+  const isFund = isFundKind(inv.kind);
+  const schemeCode = isFund ? amfiSchemeCode(inv.metadata) : null;
+  let nav: FundNav | null = null;
+  if (schemeCode) {
+    try {
+      nav = (await getFundNavs([schemeCode]))[schemeCode] ?? null;
+    } catch {
+      // AMFI unreachable — the page still renders, at cost.
+    }
+  }
+  const value = valueHolding(holding, { now: today, nav });
+  const deposit = isDeposit ? depositValuation(holding, today) : null;
+  const fund = isFund ? fundValuation(holding, nav, today) : null;
+  const costLabel =
+    inv.kind === "FD"
+      ? "principal"
+      : inv.kind === "RD"
+        ? "deposited"
+        : inv.kind === "INSURANCE"
+          ? "premiums paid"
+          : "invested";
+  const heroLabel =
+    value.basis === "NAV"
+      ? "Current value"
+      : value.basis === "ACCRUED"
+        ? "Value today"
+        : value.basis === "MATURED"
+          ? "Matured — value"
+          : value.basis === "STORED"
+            ? "Current value"
+            : inv.kind === "INSURANCE"
+              ? "Premiums paid"
+              : "Amount invested";
+  const showGain =
+    value.basis !== "COST" &&
+    value.invested > 0 &&
+    Math.abs(value.gain) >= 0.5 &&
+    inv.kind !== "INSURANCE";
   const daysToMaturity =
     inv.maturityAt
       ? Math.round(
@@ -192,62 +268,122 @@ export default async function InvestmentDetailPage({
         <div className="grid gap-6 md:grid-cols-[1.4fr_1fr]">
           <div>
             <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              {currentValue != null ? "Current value" : "Amount invested"}
+              {heroLabel}
             </div>
             <div className="mt-1 text-4xl font-bold tabular-nums">
-              {formatINR(currentValue ?? amount)}
+              {formatINR(value.current)}
             </div>
-            {currentValue != null && currentValue !== amount && (
+            {showGain && (
               <div
                 className={`mt-0.5 text-xs tabular-nums ${
-                  currentValue > amount
+                  value.gain > 0
                     ? "text-emerald-700 dark:text-emerald-400"
                     : "text-destructive"
                 }`}
               >
-                {currentValue > amount ? "+" : "−"}
-                {formatINR(Math.abs(currentValue - amount))} ·{" "}
-                {((Math.abs(currentValue - amount) / amount) * 100).toFixed(1)}%
+                {value.gain > 0 ? "+" : "−"}
+                {formatINR(Math.abs(value.gain))} · {value.gain > 0 ? "+" : "−"}
+                {Math.abs(value.gainPct).toFixed(2)}%
+                {deposit ? " interest earned so far" : ""}
               </div>
             )}
             <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-              {formatINR(amount)} principal
+              {formatINR(amount)} {costLabel}
               {totalPaid > amount
                 ? ` · ${formatINR(totalPaid)} paid in`
                 : ""}
             </div>
+            {value.basis === "NAV" && fund?.nav != null && (
+              <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                At the latest NAV of {formatNav(fund.nav)}
+                {fund.navDate ? ` (${fund.navDate.replace(/-/g, " ")})` : ""}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
-            <SubStat label="Started" value={formatDate(inv.startedAt)} />
-            <SubStat
-              label={inv.kind === "INSURANCE" ? "Maturity / expiry" : "Maturity"}
-              value={
-                inv.maturityAt
-                  ? `${formatDate(inv.maturityAt)}${
-                      daysToMaturity != null && daysToMaturity > 0
-                        ? ` · ${daysToMaturity}d`
-                        : daysToMaturity != null && daysToMaturity <= 0
-                          ? " · due"
-                          : ""
-                    }`
-                  : "—"
-              }
-            />
-            <SubStat
-              label="Next due"
-              value={
-                inv.nextDueDate
-                  ? `${formatDate(inv.nextDueDate)}${
-                      daysToNextDue != null && daysToNextDue > 0
-                        ? ` · in ${daysToNextDue}d`
-                        : daysToNextDue != null && daysToNextDue <= 0
-                          ? " · overdue"
-                          : ""
-                    }`
-                  : "—"
-              }
-            />
+            {fund ? (
+              <>
+                <SubStat
+                  label="Units"
+                  value={
+                    fund.units != null
+                      ? fund.units.toLocaleString("en-IN", { maximumFractionDigits: 4 })
+                      : "—"
+                  }
+                />
+                <SubStat
+                  label="Latest NAV"
+                  value={
+                    fund.nav != null
+                      ? `${formatNav(fund.nav)}${
+                          fund.navDate ? ` · ${fund.navDate.replace(/-/g, " ")}` : ""
+                        }`
+                      : "—"
+                  }
+                />
+                {inv.kind === "SIP" && inv.nextDueDate ? (
+                  <SubStat
+                    label="Next instalment"
+                    value={`${formatDate(inv.nextDueDate)} · ${formatDaysAway(daysToNextDue ?? 0)}`}
+                  />
+                ) : (
+                  <SubStat label="Started" value={formatDate(inv.startedAt)} />
+                )}
+              </>
+            ) : deposit ? (
+              <>
+                <SubStat label="Opened" value={formatDate(inv.startedAt)} />
+                <SubStat
+                  label={deposit.matured ? "Matured" : "Matures"}
+                  value={
+                    inv.maturityAt && deposit.daysToMaturity != null
+                      ? `${formatDate(inv.maturityAt)} · ${formatDaysAway(deposit.daysToMaturity)}`
+                      : "—"
+                  }
+                />
+                <SubStat
+                  label={
+                    deposit.maturityStated ? "Maturity amount" : "Maturity amount (est.)"
+                  }
+                  value={
+                    deposit.maturityAmount != null ? formatINR(deposit.maturityAmount) : "—"
+                  }
+                />
+              </>
+            ) : (
+              <>
+                <SubStat label="Started" value={formatDate(inv.startedAt)} />
+                <SubStat
+                  label={inv.kind === "INSURANCE" ? "Maturity / expiry" : "Maturity"}
+                  value={
+                    inv.maturityAt
+                      ? `${formatDate(inv.maturityAt)}${
+                          daysToMaturity != null && daysToMaturity > 0
+                            ? ` · ${daysToMaturity}d`
+                            : daysToMaturity != null && daysToMaturity <= 0
+                              ? " · due"
+                              : ""
+                        }`
+                      : "—"
+                  }
+                />
+                <SubStat
+                  label="Next due"
+                  value={
+                    inv.nextDueDate
+                      ? `${formatDate(inv.nextDueDate)}${
+                          daysToNextDue != null && daysToNextDue > 0
+                            ? ` · in ${daysToNextDue}d`
+                            : daysToNextDue != null && daysToNextDue <= 0
+                              ? " · overdue"
+                              : ""
+                        }`
+                      : "—"
+                  }
+                />
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -293,37 +429,126 @@ export default async function InvestmentDetailPage({
         </section>
       )}
 
-      {(inv.kind === "FD" || inv.kind === "RD") && (
+      {deposit && (
         <section className="rounded-lg border bg-card p-5">
           <h2 className="text-sm font-semibold">
             {inv.kind === "FD" ? "Deposit" : "Recurring deposit"}
           </h2>
           <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-            <Row label="Principal" value={formatINR(amount)} />
-            {interestRate != null && (
-              <Row label="Interest rate" value={`${interestRate}% p.a.`} />
+            <Row
+              label={inv.kind === "FD" ? "Principal" : "Deposited so far"}
+              value={formatINR(amount)}
+            />
+            {inv.kind === "RD" && premiumAmount != null && (
+              <Row label="Monthly instalment" value={formatINR(premiumAmount)} />
             )}
-            {inv.compoundingFrequency && (
+            {deposit.ratePct != null && (
+              <Row label="Interest rate" value={`${deposit.ratePct}% p.a.`} />
+            )}
+            {deposit.ratePct != null && (
               <Row
                 label="Compounding"
-                value={FREQUENCY_LABEL[inv.compoundingFrequency] ?? inv.compoundingFrequency}
-              />
-            )}
-            {inv.fdStatus && <Row label="Status" value={inv.fdStatus} />}
-            {inv.maturityAt && (
-              <Row
-                label="Matures on"
-                value={`${formatDate(inv.maturityAt)}${
-                  daysToMaturity != null && daysToMaturity > 0
-                    ? ` · in ${daysToMaturity} days`
-                    : ""
+                value={`${COMPOUNDING_LABEL[deposit.compounding]}${
+                  inv.compoundingFrequency ? "" : " (assumed)"
                 }`}
               />
             )}
+            {deposit.tenureDays != null && (
+              <Row label="Tenure" value={formatTenure(deposit.tenureDays)} />
+            )}
+            {inv.maturityAt && deposit.daysToMaturity != null && (
+              <Row
+                label={deposit.matured ? "Matured on" : "Matures on"}
+                value={`${formatDate(inv.maturityAt)} · ${formatDaysAway(deposit.daysToMaturity)}`}
+              />
+            )}
+            {deposit.totalDeposits != null && (
+              <Row label="Total deposits by maturity" value={formatINR(deposit.totalDeposits)} />
+            )}
+            {deposit.maturityAmount != null && (
+              <Row
+                label={
+                  deposit.maturityStated ? "Maturity amount (as per receipt)" : "Maturity amount (estimated)"
+                }
+                value={formatINR(deposit.maturityAmount)}
+              />
+            )}
+            {deposit.interestAtMaturity != null && (
+              <Row label="Interest at maturity" value={formatINR(deposit.interestAtMaturity)} />
+            )}
+            {deposit.accrues && (
+              <Row label="Interest earned so far" value={formatINR(deposit.interestAccrued)} />
+            )}
+            {deposit.accrues && <Row label="Value today" value={formatINR(deposit.valueToday)} />}
+            {inv.fdStatus && <Row label="Status" value={inv.fdStatus} />}
           </dl>
+          {!deposit.accrues && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">
+              {inv.kind === "FD"
+                ? "Add the interest rate, or the maturity amount from the receipt, to see what this deposit is worth today."
+                : "Add the interest rate to see what this deposit is worth today."}
+            </p>
+          )}
+          {deposit.accrues && !deposit.maturityStated && deposit.maturityAmount != null && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              The maturity amount is an estimate from the rate and compounding above. Edit the
+              deposit and enter the figure on your receipt to use that instead.
+            </p>
+          )}
           {inv.notes && (
             <p className="mt-4 whitespace-pre-wrap rounded-md bg-muted/40 p-3 text-sm">
               {inv.notes}
+            </p>
+          )}
+        </section>
+      )}
+
+      {fund && (
+        <section className="rounded-lg border bg-card p-5">
+          <h2 className="text-sm font-semibold">
+            {inv.kind === "SIP" ? "SIP holding" : "Fund holding"}
+          </h2>
+          <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+            {fund.units != null && (
+              <Row
+                label="Units"
+                value={fund.units.toLocaleString("en-IN", { maximumFractionDigits: 4 })}
+              />
+            )}
+            {fund.avgNav != null && <Row label="Average NAV" value={formatNav(fund.avgNav)} />}
+            {fund.nav != null && (
+              <Row
+                label={
+                  fund.navDate ? `Latest NAV · ${fund.navDate.replace(/-/g, " ")}` : "Latest NAV"
+                }
+                value={formatNav(fund.nav)}
+              />
+            )}
+            <Row label="Invested" value={formatINR(amount)} />
+            {fund.marketValue != null && (
+              <Row label="Current value" value={formatINR(fund.marketValue)} />
+            )}
+            {fund.marketValue != null && (
+              <Row
+                label="Gain / loss"
+                value={`${value.gain >= 0 ? "+" : "−"}${formatINR(Math.abs(value.gain))} · ${
+                  value.gain >= 0 ? "+" : "−"
+                }${Math.abs(value.gainPct).toFixed(2)}%`}
+              />
+            )}
+            {schemeCode && <Row label="AMFI scheme code" value={schemeCode} />}
+          </dl>
+          {fund.missing && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">
+              {fund.missing === "SCHEME"
+                ? "Not linked to an AMFI scheme, so it is shown at cost. Edit it and pick the fund from the search to track its NAV."
+                : fund.missing === "UNITS"
+                  ? "No units recorded, so it is shown at cost. Edit it and enter the units you hold."
+                  : fund.missing === "PARTIAL"
+                    ? "Some instalments were recorded without units, so it is shown at cost. Edit it and set the total units you hold."
+                    : fund.missing === "MISMATCH"
+                      ? `The linked scheme's NAV (${formatNav(fund.nav ?? 0)}) is nowhere near your average NAV (${formatNav(fund.avgNav ?? 0)}), so it is shown at cost. Edit it and re-pick the exact plan and option, or correct the units.`
+                      : "Couldn't get the latest NAV from AMFI — shown at cost for now."}
             </p>
           )}
         </section>

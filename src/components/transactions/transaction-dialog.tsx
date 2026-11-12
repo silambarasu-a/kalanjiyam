@@ -74,6 +74,12 @@ import {
 import { cn, formatINR } from "@/lib/utils";
 import { fundingSourceIds } from "@/lib/funding-sources";
 import { formatMoney, isBrokerageHoldingKind, isForeignWallet } from "@/lib/brokerage";
+import {
+  COMPOUNDING_FREQUENCIES,
+  COMPOUNDING_LABEL,
+  DEFAULT_COMPOUNDING,
+  depositValuation,
+} from "@/lib/investment-valuation";
 import { useFundingSources } from "@/lib/use-funding-sources";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
@@ -2741,11 +2747,12 @@ function InvestmentForm({
   const [newName, setNewName] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
   const [newExchange, setNewExchange] = useState("");
-  // MUTUAL_FUND-specific: the picked AMFI scheme, remembered as code +
-  // the name it was picked under. The link only counts while newName still
+  // MUTUAL_FUND / SIP: the picked AMFI scheme, remembered as code + the
+  // name it was picked under. The scheme code is what lets the holding be
+  // valued at the latest NAV. The link only counts while newName still
   // matches that name — any rename through any input (including a kind-chip
-  // round trip through SIP/FD's plain name field) unlinks it, and undoing
-  // the rename relinks. Derived in linkedMfSchemeCode below.
+  // round trip through FD's plain name field) unlinks it, and undoing the
+  // rename relinks. Derived in linkedMfSchemeCode below.
   const [newMfPick, setNewMfPick] = useState<{ code: string; name: string } | null>(
     null,
   );
@@ -2755,6 +2762,14 @@ function InvestmentForm({
   const [newInstitution, setNewInstitution] = useState("");
   const [newInterestRate, setNewInterestRate] = useState("");
   const [newMaturityAt, setNewMaturityAt] = useState("");
+  // FD / RD: how the bank compounds, and the maturity amount printed on the
+  // receipt. Left blank, the maturity amount is estimated from the rate —
+  // blank is stored as null, never as the estimate, so it keeps tracking
+  // later edits to the rate or dates.
+  const [newCompounding, setNewCompounding] = useState<string>(DEFAULT_COMPOUNDING);
+  const [newMaturityValue, setNewMaturityValue] = useState("");
+  // RD: the monthly instalment the maturity estimate is built from.
+  const [newRdInstalment, setNewRdInstalment] = useState("");
   // INSURANCE-specific
   const [newPolicyNumber, setNewPolicyNumber] = useState("");
   const [newPremium, setNewPremium] = useState("");
@@ -2863,6 +2878,8 @@ function InvestmentForm({
       brokerageAccountId: string | null;
       maturityAt: string | null;
       interestRate: number | null;
+      compoundingFrequency: string | null;
+      maturityValue: number | null;
       policyNumber: string | null;
       policyType: string | null;
       premiumAmount: number | null;
@@ -3101,6 +3118,27 @@ function InvestmentForm({
     if (livePrice) setPrice(livePrice.price.toFixed(2));
   }
 
+  // FD / RD: what the deposit should pay at maturity given what's typed so
+  // far — the same function the investments page values it with. Shown as
+  // the hint under "Maturity amount"; never written into that field.
+  const depositEstimate = (() => {
+    if (!creatingNew || (newKind !== "FD" && newKind !== "RD")) return null;
+    const principal = parseFloat(amount);
+    if (!(principal > 0) || !date || !newMaturityAt) return null;
+    const d = depositValuation({
+      kind: newKind,
+      amount: principal,
+      currentValue: null,
+      interestRate: parseFloat(newInterestRate) || null,
+      compoundingFrequency: newCompounding,
+      startedAt: date,
+      maturityAt: newMaturityAt,
+      maturityValue: null,
+      premiumAmount: parseFloat(newRdInstalment) || null,
+    });
+    return d.maturityAmount;
+  })();
+
   // What this trade moves in the brokerage wallet, in the wallet's own
   // currency: the rupee amount for an INR wallet, and that amount divided
   // back through the rate for a foreign one — the same derivation the API
@@ -3256,6 +3294,14 @@ function InvestmentForm({
     setBrokerageTouched(true);
     setNewInterestRate(inv.interestRate != null ? String(inv.interestRate) : "");
     setNewMaturityAt(inv.maturityAt ? inv.maturityAt.slice(0, 10) : "");
+    const isDeposit = inv.kind === "FD" || inv.kind === "RD";
+    setNewCompounding(inv.compoundingFrequency ?? DEFAULT_COMPOUNDING);
+    setNewMaturityValue(
+      isDeposit && inv.maturityValue != null ? String(inv.maturityValue) : "",
+    );
+    setNewRdInstalment(
+      inv.kind === "RD" && inv.premiumAmount != null ? String(inv.premiumAmount) : "",
+    );
     setNewPolicyNumber(inv.policyNumber ?? "");
     if (inv.policyType) setNewPolicyType(inv.policyType);
     setNewPremium(inv.premiumAmount != null ? String(inv.premiumAmount) : "");
@@ -3264,7 +3310,7 @@ function InvestmentForm({
     setNewNominee(inv.nominee ?? "");
     setNewSumAssured(inv.sumAssured != null ? String(inv.sumAssured) : "");
     setNewMfPick(
-      inv.kind === "MUTUAL_FUND" && inv.metadata?.amfiSchemeCode
+      (inv.kind === "MUTUAL_FUND" || inv.kind === "SIP") && inv.metadata?.amfiSchemeCode
         ? { code: String(inv.metadata.amfiSchemeCode), name: inv.name }
         : null,
     );
@@ -3457,7 +3503,9 @@ function InvestmentForm({
         );
         return;
       }
-    } else if (!fundingSource) {
+    } else if (!isEditing && !fundingSource) {
+      // An edit moves no money — the PATCH never reads an account — so
+      // there is nothing to pick, and the picker isn't shown.
       setError("Pick an account");
       return;
     }
@@ -3549,6 +3597,20 @@ function InvestmentForm({
               newMaturityAt
                 ? newMaturityAt
                 : undefined,
+            // Deposit-only keys are spread in, not set to undefined, so they
+            // can't shadow the insurance extras' own `maturityValue` above.
+            // A blank maturity amount is sent as null on edit, which clears
+            // a saved receipt figure and returns to the computed estimate.
+            ...(newKind === "FD" || newKind === "RD"
+              ? {
+                  compoundingFrequency: newCompounding,
+                  maturityValue: newMaturityValue
+                    ? Number(newMaturityValue)
+                    : isEditing
+                      ? null
+                      : undefined,
+                }
+              : {}),
             policyNumber:
               newKind === "INSURANCE" && newPolicyNumber.trim()
                 ? newPolicyNumber.trim()
@@ -3559,7 +3621,11 @@ function InvestmentForm({
                 ? newNominee.trim()
                 : undefined,
             premiumAmount:
-              newKind === "INSURANCE" && newPremium ? Number(newPremium) : undefined,
+              newKind === "INSURANCE" && newPremium
+                ? Number(newPremium)
+                : newKind === "RD" && newRdInstalment
+                  ? Number(newRdInstalment)
+                  : undefined,
             sumAssured:
               newKind === "INSURANCE" && newSumAssured
                 ? Number(newSumAssured)
@@ -3648,9 +3714,9 @@ function InvestmentForm({
                       roundOff: roundOff || null,
                     };
                   })()
-                : metadataKind === "MUTUAL_FUND"
-                  ? // Persist the AMFI scheme code so the holding stays
-                    // linkable to its official scheme (future NAV lookups).
+                : metadataKind === "MUTUAL_FUND" || metadataKind === "SIP"
+                  ? // Persist the AMFI scheme code — it is what the holding
+                    // is valued by (units × that scheme's latest NAV).
                     // Null (not undefined) on PATCH clears a stale code when
                     // the user renamed the fund to free text.
                     linkedMfSchemeCode
@@ -3937,6 +4003,9 @@ function InvestmentForm({
                 setNewInstitution("");
                 setNewInterestRate("");
                 setNewMaturityAt("");
+                setNewCompounding(DEFAULT_COMPOUNDING);
+                setNewMaturityValue("");
+                setNewRdInstalment("");
                 setNewPolicyNumber("");
                 setNewPremium("");
               }}
@@ -3961,7 +4030,7 @@ function InvestmentForm({
                 />
               </div>
             </label>
-          ) : newKind === "MUTUAL_FUND" ? (
+          ) : newKind === "MUTUAL_FUND" || newKind === "SIP" ? (
             <label className="block">
               <span className="text-xs font-medium">Search fund</span>
               <div className="mt-1">
@@ -4025,9 +4094,7 @@ function InvestmentForm({
                     ? "e.g. SBI 1Y FD"
                     : newKind === "RD"
                       ? "e.g. HDFC 12-mo RD"
-                      : newKind === "SIP"
-                        ? "e.g. Axis Bluechip SIP"
-                        : newKind === "GOLD"
+                      : newKind === "GOLD"
                           ? "e.g. 24K Gold coin / Sovereign Gold Bond"
                           : "Holding name"
                 }
@@ -4068,6 +4135,53 @@ function InvestmentForm({
                   onChange={(e) => setNewMaturityAt(e.target.value)}
                 />
               </label>
+              <label className="block">
+                <span className="text-xs font-medium">Compounding</span>
+                <div className="mt-1">
+                  <NativeSelect
+                    value={newCompounding}
+                    onChange={setNewCompounding}
+                    options={COMPOUNDING_FREQUENCIES.map((c) => ({
+                      value: c,
+                      label: COMPOUNDING_LABEL[c],
+                    }))}
+                  />
+                </div>
+              </label>
+              {newKind === "RD" && (
+                <label className="block">
+                  <span className="text-xs font-medium">Monthly instalment</span>
+                  <AmountInput
+                    value={newRdInstalment}
+                    onChange={setNewRdInstalment}
+                    placeholder="0"
+                  />
+                </label>
+              )}
+              <label className="block">
+                <span className="text-xs font-medium">
+                  Maturity amount{" "}
+                  <span className="font-normal text-muted-foreground">optional</span>
+                </span>
+                <AmountInput
+                  value={newMaturityValue}
+                  onChange={setNewMaturityValue}
+                  placeholder={
+                    depositEstimate != null
+                      ? String(Math.round(depositEstimate))
+                      : "As on the receipt"
+                  }
+                />
+              </label>
+              <p className="text-[11px] text-muted-foreground sm:col-span-2">
+                {newMaturityValue
+                  ? "Using the maturity amount you entered."
+                  : depositEstimate != null
+                    ? `Estimated maturity amount: ${formatINR(depositEstimate)}. Enter the figure on your receipt if it differs.`
+                    : newKind === "RD"
+                      ? "Enter the rate, maturity date and monthly instalment to estimate the maturity amount — or type it in from the passbook."
+                      : "Enter the amount, rate and maturity date to estimate the maturity amount — or type it in from the receipt."}
+              </p>
             </div>
           )}
 
@@ -5004,7 +5118,7 @@ function InvestmentForm({
               </p>
             ) : null}
           </div>
-        ) : (
+        ) : isEditing ? null : (
           <label className="block">
             <span className="text-xs font-medium">
               {action === "BUY" ? "Pay from" : "Deposit to"}

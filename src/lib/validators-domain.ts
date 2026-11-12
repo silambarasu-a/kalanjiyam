@@ -1278,6 +1278,11 @@ const investmentCreateBase = z.object({
   amount: z.number().positive(),
   currentValue: z.number().nonnegative().optional().nullable(),
   interestRate: z.number().nonnegative().optional().nullable(),
+  /** FD / RD: how often the bank compounds. Quarterly when left out. */
+  compoundingFrequency: z
+    .enum(["MONTHLY", "QUARTERLY", "HALF_YEARLY", "YEARLY"])
+    .optional()
+    .nullable(),
   startedAt: z.string(),
   maturityAt: z.string().optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
@@ -1750,6 +1755,12 @@ export const reminderConfirmSchema = z.object({
   accountId: z.string().uuid().optional().nullable(),
   cardId: z.string().uuid().optional().nullable(),
   amount: z.number().positive().optional(),
+  /**
+   * SIP_BUY only: units allotted for this instalment. Without it the money
+   * is added to the holding but the units aren't, and the holding can no
+   * longer be valued at units × NAV.
+   */
+  quantity: z.number().positive().optional().nullable(),
   date: z.string().optional(),
   notes: z.string().trim().max(200).optional().nullable(),
 });
