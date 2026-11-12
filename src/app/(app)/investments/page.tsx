@@ -5,63 +5,83 @@ import Link from "next/link";
 import useSWR from "swr";
 import {
   Plus,
-  LineChart,
   TrendingUp,
-  ArrowUpRight,
-  ArrowDownRight,
   Gem,
+  ChartPie,
+  Repeat,
+  Landmark,
+  PiggyBank,
+  ShieldCheck,
+  Briefcase,
+  type LucideIcon,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { NavigatingCard } from "@/components/ui/navigating-card";
+import { NativeSelect } from "@/components/ui/native-select";
 import { useTransactionDialog } from "@/contexts/transaction-dialog";
-import { formatINR, formatDate, cn } from "@/lib/utils";
-import { MoneyValue, ToneBadge } from "@/components/ui/money-tone";
-import { InvestmentActions } from "@/components/investments/investment-actions";
+import { formatINR, cn } from "@/lib/utils";
+import {
+  HoldingCard,
+  type HoldingListItem,
+  type InvestmentKind,
+} from "@/components/investments/holding-card";
+import {
+  amfiSchemeCode,
+  isFundKind,
+  valueHolding,
+  type HoldingValue,
+} from "@/lib/investment-valuation";
 import type { StockQuote } from "@/app/api/market/quote/route";
+import type { MfNavResponse } from "@/app/api/market/mf-nav/route";
 import { fetcher } from "@/lib/swr-fetcher";
 
-type Investment = {
-  id: string;
-  kind: "STOCK" | "FD" | "RD" | "MUTUAL_FUND" | "SIP" | "INSURANCE" | "GOLD" | "OTHER";
-  name: string;
-  institution: string | null;
-  amount: number;
-  currentValue: number | null;
-  interestRate: number | null;
-  startedAt: string;
-  maturityAt: string | null;
-  active: boolean;
-  symbol: string | null;
-  quantity: number | null;
-  purchasePrice: number | null;
-  purchaseExchangeRate: number | null;
-  currency: string | null;
-  policyNumber: string | null;
-  premiumAmount: number | null;
-  premiumFrequency: string | null;
-  nextDueDate: string | null;
-  notes: string | null;
-  /** Brokerage this holding sits in, when linked. */
-  brokerage?: { id: string; name: string; currency: string } | null;
-};
-
-
-const KIND_OPTIONS: { value: Investment["kind"]; label: string }[] = [
-  { value: "STOCK", label: "Stock" },
-  { value: "MUTUAL_FUND", label: "Mutual fund" },
-  { value: "SIP", label: "SIP" },
-  { value: "FD", label: "Fixed deposit" },
-  { value: "RD", label: "Recurring deposit" },
-  { value: "INSURANCE", label: "Insurance" },
-  { value: "GOLD", label: "Gold" },
-  { value: "OTHER", label: "Other" },
+/** The sections of the page, in the order they are shown. */
+const GROUPS: { kind: InvestmentKind; label: string; chip: string; icon: LucideIcon }[] = [
+  { kind: "STOCK", label: "Stocks", chip: "Stocks", icon: TrendingUp },
+  { kind: "MUTUAL_FUND", label: "Mutual funds", chip: "Mutual funds", icon: ChartPie },
+  { kind: "SIP", label: "SIPs", chip: "SIPs", icon: Repeat },
+  { kind: "FD", label: "Fixed deposits", chip: "Fixed deposits", icon: Landmark },
+  { kind: "RD", label: "Recurring deposits", chip: "Recurring deposits", icon: PiggyBank },
+  { kind: "INSURANCE", label: "Insurance", chip: "Insurance", icon: ShieldCheck },
+  { kind: "GOLD", label: "Gold", chip: "Gold", icon: Gem },
+  { kind: "OTHER", label: "Other", chip: "Other", icon: Briefcase },
 ];
 
+type SortKey = "NAME" | "VALUE" | "DATE";
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "NAME", label: "Name (A → Z)" },
+  { value: "VALUE", label: "Value (low → high)" },
+  { value: "DATE", label: "Maturity / next due (soonest)" },
+];
+
+type Row = {
+  holding: HoldingListItem;
+  value: HoldingValue;
+  livePrice: number;
+  dayChangePct: number;
+};
+
+/**
+ * The date a holding next needs attention on: its next instalment or
+ * premium, else its maturity. Holdings with neither sort last.
+ */
+function nextDate(h: HoldingListItem): number {
+  const d = h.nextDueDate ?? h.maturityAt;
+  return d ? new Date(d).getTime() : Number.POSITIVE_INFINITY;
+}
+
+const byName = (a: Row, b: Row) =>
+  a.holding.name.localeCompare(b.holding.name, "en", { numeric: true, sensitivity: "base" });
+
 export default function InvestmentsPage() {
-  const [kindFilter, setKindFilter] = useState<"ALL" | Investment["kind"]>("ALL");
-  const url =
-    kindFilter === "ALL" ? "/api/investments" : `/api/investments?kind=${kindFilter}`;
-  const { data, isLoading } = useSWR<{ investments: Investment[] }>(url, fetcher);
+  const [kindFilter, setKindFilter] = useState<"ALL" | InvestmentKind>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("NAME");
+  // One "now" for the whole page so every card's "in N days" agrees.
+  const [now] = useState(() => new Date());
+  const { data, isLoading } = useSWR<{ investments: HoldingListItem[] }>(
+    "/api/investments",
+    fetcher,
+  );
   const { openDialog } = useTransactionDialog();
 
   const investments = useMemo(() => data?.investments ?? [], [data]);
@@ -69,88 +89,93 @@ export default function InvestmentsPage() {
   const { data: rateData } = useSWR<{ rate: number }>("/api/market/rate", fetcher);
   const usdInrRate = rateData?.rate ?? 84;
 
+  // ── Live share prices ────────────────────────────────────────────────
   const stockSymbols = useMemo(() => {
     const s = new Set<string>();
     investments.forEach((i) => {
       if (i.kind === "STOCK" && i.symbol) s.add(i.symbol);
     });
-    return [...s];
+    return [...s].sort();
   }, [investments]);
-
-  const quotesKey =
-    stockSymbols.length > 0 ? `/api/market/quote?symbols=${stockSymbols.join(",")}` : null;
-
-  const { data: quotes } = useSWR<StockQuote[]>(quotesKey, fetcher, {
-    refreshInterval: 300_000,
-  });
-
+  const { data: quotes } = useSWR<StockQuote[]>(
+    stockSymbols.length > 0 ? `/api/market/quote?symbols=${stockSymbols.join(",")}` : null,
+    fetcher,
+    { refreshInterval: 300_000 },
+  );
   const quoteMap = useMemo(() => {
     const m = new Map<string, StockQuote>();
     if (Array.isArray(quotes)) quotes.forEach((q) => m.set(q.symbol, q));
     return m;
   }, [quotes]);
 
-  type Row = {
-    investment: Investment;
-    investedInr: number;
-    currentInr: number;
-    gain: number;
-    gainPct: number;
-    livePrice: number;
-    dayChangePct: number;
-    isLive: boolean;
-  };
-
-  const rows: Row[] = useMemo(() => {
-    return investments.map((i) => {
-      if (i.kind !== "STOCK") {
-        const investedInr = i.amount;
-        const currentInr = i.currentValue ?? i.amount;
-        const gain = currentInr - investedInr;
-        return {
-          investment: i,
-          investedInr,
-          currentInr,
-          gain,
-          gainPct: investedInr > 0 ? (gain / investedInr) * 100 : 0,
-          livePrice: 0,
-          dayChangePct: 0,
-          isLive: false,
-        };
-      }
-      const qty = i.quantity ?? 0;
-      const pp = i.purchasePrice ?? 0;
-      const isUsd = i.currency === "USD";
-      const liveRate = isUsd ? usdInrRate : 1;
-      // Cost basis = stored INR `amount` (server-side maintained as
-      // weighted-avg total cost). Fall back to qty × pp × stored rate for
-      // legacy rows without amount.
-      const investedInr =
-        i.amount > 0
-          ? i.amount
-          : qty * pp * (isUsd ? (i.purchaseExchangeRate ?? usdInrRate) : 1);
-      const quote = i.symbol ? quoteMap.get(i.symbol) : undefined;
-      const livePrice = quote?.price ?? 0;
-      const hasLive = livePrice > 0 && qty > 0;
-      const currentInr = hasLive ? qty * livePrice * liveRate : investedInr;
-      const gain = currentInr - investedInr;
-      return {
-        investment: i,
-        investedInr,
-        currentInr,
-        gain,
-        gainPct: investedInr > 0 ? (gain / investedInr) * 100 : 0,
-        livePrice,
-        dayChangePct: quote?.changePercent ?? 0,
-        isLive: hasLive,
-      };
+  // ── Latest fund NAVs ─────────────────────────────────────────────────
+  const schemeCodes = useMemo(() => {
+    const s = new Set<string>();
+    investments.forEach((i) => {
+      const code = isFundKind(i.kind) ? amfiSchemeCode(i.metadata) : null;
+      if (code) s.add(code);
     });
-  }, [investments, quoteMap, usdInrRate]);
+    return [...s].sort();
+  }, [investments]);
+  const { data: navs, error: navError } = useSWR<MfNavResponse>(
+    schemeCodes.length > 0 ? `/api/market/mf-nav?codes=${schemeCodes.join(",")}` : null,
+    fetcher,
+  );
+  const navReady = schemeCodes.length === 0 || navs != null || navError != null;
 
-  const totalInvested = rows.reduce((s, r) => s + r.investedInr, 0);
-  const totalCurrent = rows.reduce((s, r) => s + r.currentInr, 0);
+  const rows: Row[] = useMemo(
+    () =>
+      investments.map((i) => {
+        const quote = i.kind === "STOCK" && i.symbol ? quoteMap.get(i.symbol) : undefined;
+        const code = isFundKind(i.kind) ? amfiSchemeCode(i.metadata) : null;
+        return {
+          holding: i,
+          value: valueHolding(i, {
+            now,
+            usdInrRate,
+            price: quote?.price ?? null,
+            nav: code ? navs?.[code] : null,
+          }),
+          livePrice: quote?.price ?? 0,
+          dayChangePct: quote?.changePercent ?? 0,
+        };
+      }),
+    [investments, quoteMap, navs, usdInrRate, now],
+  );
+
+  const sorter = useMemo(() => {
+    const cmp =
+      sortKey === "VALUE"
+        ? (a: Row, b: Row) => a.value.current - b.value.current || byName(a, b)
+        : sortKey === "DATE"
+          ? (a: Row, b: Row) => nextDate(a.holding) - nextDate(b.holding) || byName(a, b)
+          : byName;
+    // Closed holdings always sink to the bottom of their group.
+    return (a: Row, b: Row) =>
+      Number(b.holding.active) - Number(a.holding.active) || cmp(a, b);
+  }, [sortKey]);
+
+  const groups = useMemo(
+    () =>
+      GROUPS.map((g) => {
+        const all = rows.filter((r) => r.holding.kind === g.kind).sort(sorter);
+        const open = all.filter((r) => r.holding.active);
+        const invested = open.reduce((s, r) => s + r.value.invested, 0);
+        const current = open.reduce((s, r) => s + r.value.current, 0);
+        return { ...g, rows: all, openCount: open.length, invested, current };
+      }).filter((g) => g.rows.length > 0),
+    [rows, sorter],
+  );
+  const shown = kindFilter === "ALL" ? groups : groups.filter((g) => g.kind === kindFilter);
+
+  // Totals count open holdings only — a closed one is history, not money.
+  const totalInvested = shown.reduce((s, g) => s + g.invested, 0);
+  const totalCurrent = shown.reduce((s, g) => s + g.current, 0);
+  const holdingCount = shown.reduce((s, g) => s + g.openCount, 0);
   const unrealised = totalCurrent - totalInvested;
   const unrealisedPct = totalInvested > 0 ? (unrealised / totalInvested) * 100 : 0;
+  const updating =
+    (stockSymbols.length > 0 && !quotes) || (schemeCodes.length > 0 && !navReady);
 
   return (
     <div className="space-y-6">
@@ -158,12 +183,12 @@ export default function InvestmentsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Investments</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Stocks, mutual funds, SIPs, FDs, and insurance. {investments.length} active
-            holding{investments.length === 1 ? "" : "s"}
+            Stocks, mutual funds, SIPs, deposits and insurance. {holdingCount} active
+            holding{holdingCount === 1 ? "" : "s"}
             {totalInvested > 0 ? ` · ${formatINR(totalInvested)} invested` : ""}.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Link
             href="/investments/stocks"
             className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
@@ -190,157 +215,138 @@ export default function InvestmentsPage() {
         <Stat
           label="Current value"
           value={formatINR(totalCurrent)}
-          sub={
-            stockSymbols.length > 0
-              ? quotes
-                ? "Live"
-                : "Loading quotes…"
-              : undefined
-          }
+          sub={updating ? "Updating prices…" : undefined}
         />
         <Stat
           label="Unrealised"
           value={`${unrealised >= 0 ? "+" : "−"}${formatINR(Math.abs(unrealised))}`}
-          sub={totalInvested > 0 ? `${unrealised >= 0 ? "+" : ""}${unrealisedPct.toFixed(2)}%` : undefined}
+          sub={
+            totalInvested > 0
+              ? `${unrealised >= 0 ? "+" : "−"}${Math.abs(unrealisedPct).toFixed(2)}%`
+              : undefined
+          }
           tone={unrealised >= 0 ? "primary" : "destructive"}
         />
-        <Stat label="Holdings" value={String(investments.length)} />
+        <Stat label="Holdings" value={String(holdingCount)} />
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {(["ALL", ...KIND_OPTIONS.map((k) => k.value)] as const).map((k) =>
-          // Gold has its own space now: one row per ornament, not one card
-          // per bill. The chip navigates there rather than filtering here.
-          k === "GOLD" ? (
-            <Link
-              key={k}
-              href="/investments/gold"
-              className={buttonVariants({ size: "sm", variant: "outline" })}
-            >
-              Gold
-            </Link>
-          ) : (
-            <Button
-              key={k}
-              size="sm"
-              variant={kindFilter === k ? "default" : "outline"}
-              onClick={() => setKindFilter(k as typeof kindFilter)}
-            >
-              {k === "ALL" ? "All" : KIND_OPTIONS.find((o) => o.value === k)?.label ?? k}
-            </Button>
-          ),
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          <Button
+            size="sm"
+            variant={kindFilter === "ALL" ? "default" : "outline"}
+            onClick={() => setKindFilter("ALL")}
+          >
+            All
+          </Button>
+          {GROUPS.map((g) =>
+            // Gold has its own space: one row per ornament, not one card
+            // per bill. The chip navigates there rather than filtering here.
+            g.kind === "GOLD" ? (
+              <Link
+                key={g.kind}
+                href="/investments/gold"
+                className={buttonVariants({ size: "sm", variant: "outline" })}
+              >
+                Gold
+              </Link>
+            ) : (
+              <Button
+                key={g.kind}
+                size="sm"
+                variant={kindFilter === g.kind ? "default" : "outline"}
+                onClick={() => setKindFilter(g.kind)}
+              >
+                {g.chip}
+              </Button>
+            ),
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Sort</span>
+          <NativeSelect
+            value={sortKey}
+            onChange={(v) => setSortKey(v as SortKey)}
+            options={SORT_OPTIONS}
+            className="w-60"
+          />
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {rows.map((row) => {
-          const i = row.investment;
-          const isStock = i.kind === "STOCK";
-          const isUsd = i.currency === "USD";
-          const qtyDisplay =
-            i.quantity != null
-              ? i.quantity.toLocaleString("en-IN", { maximumFractionDigits: 6 })
-              : null;
-          const showGain = row.investedInr > 0 && row.gain !== 0 && (isStock ? row.isLive : true);
-          return (
-            <NavigatingCard
-              key={i.id}
-              href={`/investments/${i.id}`}
-              className="rounded-xl border bg-card p-5 hover:bg-accent/40 transition"
-              ariaLabel={`Open ${i.name}`}
-            >
-              <div className="flex items-start gap-3">
-                <LineChart className="h-5 w-5 mt-0.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold truncate">{i.name}</span>
-                    <ToneBadge tone="invested" label={i.kind} />
-                    {isStock && isUsd && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
-                        USD
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 text-xs text-muted-foreground truncate">
-                    {(i.brokerage?.name ?? i.institution)
-                      ? `${i.brokerage?.name ?? i.institution} · `
-                      : ""}
-                    {i.symbol ? `${i.symbol} · ` : ""}
-                    {qtyDisplay
-                      ? `${qtyDisplay} ${
-                          isStock ? "shares" : i.kind === "GOLD" ? "g" : "units"
-                        }`
-                      : ""}
-                    {i.premiumFrequency ? ` · ${i.premiumFrequency} premium` : ""}
-                  </div>
-                  {isStock && row.isLive && (
-                    <div className="mt-1 flex items-center gap-2 text-[11px] tabular-nums">
-                      <span className="text-muted-foreground">
-                        {isUsd ? "$" : "₹"}
-                        {row.livePrice.toLocaleString(isUsd ? "en-US" : "en-IN", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-0.5 font-semibold",
-                          row.dayChangePct >= 0
-                            ? "text-emerald-700 dark:text-emerald-400"
-                            : "text-red-700 dark:text-red-400",
-                        )}
-                      >
-                        {row.dayChangePct >= 0 ? (
-                          <ArrowUpRight className="h-3 w-3" />
-                        ) : (
-                          <ArrowDownRight className="h-3 w-3" />
-                        )}
-                        {row.dayChangePct >= 0 ? "+" : ""}
-                        {row.dayChangePct.toFixed(2)}%
-                      </span>
-                    </div>
+      {shown.map((g) => {
+        const gain = g.current - g.invested;
+        const Icon = g.icon;
+        return (
+          <section key={g.kind} className="space-y-3" aria-label={g.label}>
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1 border-b pb-2">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <Icon className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                {g.label}
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {g.rows.length}
+                </span>
+              </h2>
+              {g.openCount > 0 && (
+                <div className="text-xs tabular-nums text-muted-foreground">
+                  {g.kind === "INSURANCE" ? "Premiums paid" : "Invested"}{" "}
+                  <span className="font-medium text-foreground">{formatINR(g.invested)}</span>
+                  {g.kind !== "INSURANCE" && (
+                    <>
+                      {" · "}Now{" "}
+                      <span className="font-medium text-foreground">{formatINR(g.current)}</span>
+                      {Math.abs(gain) >= 0.5 && (
+                        <span
+                          className={cn(
+                            "ml-1.5 font-medium",
+                            gain >= 0
+                              ? "text-emerald-700 dark:text-emerald-400"
+                              : "text-red-700 dark:text-red-400",
+                          )}
+                        >
+                          {gain >= 0 ? "+" : "−"}
+                          {formatINR(Math.abs(gain))}
+                          {g.invested > 0
+                            ? ` (${gain >= 0 ? "+" : "−"}${Math.abs((gain / g.invested) * 100).toFixed(2)}%)`
+                            : ""}
+                        </span>
+                      )}
+                    </>
                   )}
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="font-semibold tabular-nums">
-                    {formatINR(row.currentInr)}
-                  </div>
-                  {showGain && (
-                    <MoneyValue
-                      tone={row.gain >= 0 ? "gain" : "loss"}
-                      value={`${row.gain >= 0 ? "+" : "−"}${formatINR(Math.abs(row.gain))} · ${row.gain >= 0 ? "+" : ""}${row.gainPct.toFixed(2)}%`}
-                      className="text-[11px] mt-0.5"
-                      iconClassName="h-3 w-3"
-                    />
-                  )}
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    invested {formatINR(row.investedInr)}
-                  </div>
-                </div>
-                <InvestmentActions
-                  investment={{ id: i.id, name: i.name }}
-                  stopPropagation
-                  className="shrink-0 flex flex-col items-center gap-0.5"
-                />
-              </div>
-              {i.nextDueDate && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Next due {formatDate(i.nextDueDate)}
-                  {i.premiumAmount ? ` · ${formatINR(i.premiumAmount)}` : ""}
                 </div>
               )}
-            </NavigatingCard>
-          );
-        })}
-        {rows.length === 0 && !isLoading && (
-          <div className="col-span-full rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
-            No investments yet. Add stocks, SIPs, FDs, or insurance to start tracking.
-          </div>
-        )}
-      </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {g.rows.map((row) => {
+                const code = isFundKind(row.holding.kind)
+                  ? amfiSchemeCode(row.holding.metadata)
+                  : null;
+                return (
+                  <HoldingCard
+                    key={row.holding.id}
+                    holding={row.holding}
+                    value={row.value}
+                    now={now}
+                    nav={code ? navs?.[code] : null}
+                    navReady={navReady}
+                    livePrice={row.livePrice}
+                    dayChangePct={row.dayChangePct}
+                  />
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
 
+      {shown.length === 0 && !isLoading && (
+        <div className="rounded-xl border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
+          {kindFilter === "ALL"
+            ? "No investments yet. Add stocks, SIPs, FDs, or insurance to start tracking."
+            : `No ${GROUPS.find((g) => g.kind === kindFilter)?.label.toLowerCase()} yet.`}
+        </div>
+      )}
     </div>
   );
 }

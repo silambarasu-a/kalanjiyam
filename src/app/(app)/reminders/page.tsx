@@ -415,6 +415,8 @@ function ConfirmDialog({
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
+  // SIP only: units allotted for this instalment (optional).
+  const [units, setUnits] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A SIP held in a brokerage is paid from that brokerage's wallet — no
@@ -435,6 +437,7 @@ function ConfirmDialog({
     );
     setDate(today);
     setNotes("");
+    setUnits("");
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [reminder, today]);
@@ -456,6 +459,8 @@ function ConfirmDialog({
           amount: amount ? Number(amount) : undefined,
           date,
           notes: notes.trim() || undefined,
+          quantity:
+            reminder.kind === "SIP_BUY" && Number(units) > 0 ? Number(units) : undefined,
         }),
       });
       const body = await res.json();
@@ -524,6 +529,27 @@ function ConfirmDialog({
                 )}
               </div>
             </label>
+            {reminder.kind === "SIP_BUY" && (
+              <label className="block">
+                <span className="text-xs font-medium">
+                  Units allotted{" "}
+                  <span className="font-normal text-muted-foreground">optional</span>
+                </span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  value={units}
+                  onChange={(e) => setUnits(e.target.value)}
+                  placeholder="From the allotment message"
+                />
+                <span className="mt-1 block text-[11px] text-muted-foreground">
+                  Needed to value this SIP at the latest NAV. You can also set the total
+                  units later by editing the holding.
+                </span>
+              </label>
+            )}
             <label className="block">
               <span className="text-xs font-medium">Notes</span>
               <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={200} />

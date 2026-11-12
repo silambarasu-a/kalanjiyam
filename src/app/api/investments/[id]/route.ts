@@ -371,6 +371,8 @@ export async function PATCH(
           amount: derivedAmount ?? data.amount ?? inv.amount,
           currentValue: data.currentValue ?? inv.currentValue,
           interestRate: data.interestRate ?? inv.interestRate,
+          compoundingFrequency:
+            data.compoundingFrequency ?? inv.compoundingFrequency,
           startedAt: data.startedAt ? new Date(data.startedAt) : inv.startedAt,
           maturityAt: data.maturityAt ? new Date(data.maturityAt) : inv.maturityAt,
           notes: data.notes ?? inv.notes,
@@ -396,7 +398,13 @@ export async function PATCH(
           policyTermYears: data.policyTermYears ?? inv.policyTermYears,
           premiumPayingTermYears:
             data.premiumPayingTermYears ?? inv.premiumPayingTermYears,
-          maturityValue: data.maturityValue ?? inv.maturityValue,
+          // On a deposit an explicit null clears the receipt figure, which
+          // hands the maturity amount back to the computed estimate. Other
+          // kinds keep the old "null means leave it" behaviour.
+          maturityValue:
+            data.maturityValue === null && (inv.kind === "FD" || inv.kind === "RD")
+              ? null
+              : (data.maturityValue ?? inv.maturityValue),
           bonusAccrued: data.bonusAccrued ?? inv.bonusAccrued,
           bonusLastRevisedAt: data.bonusLastRevisedAt
             ? new Date(data.bonusLastRevisedAt)

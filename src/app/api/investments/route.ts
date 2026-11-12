@@ -58,8 +58,12 @@ export async function GET(request: Request) {
         amount: Number(i.amount),
         currentValue: i.currentValue == null ? null : Number(i.currentValue),
         interestRate: i.interestRate == null ? null : Number(i.interestRate),
+        compoundingFrequency: i.compoundingFrequency,
         startedAt: i.startedAt.toISOString(),
         maturityAt: i.maturityAt?.toISOString() ?? null,
+        // FD / RD: the maturity amount on the receipt. Insurance: the
+        // policy's maturity benefit.
+        maturityValue: i.maturityValue == null ? null : Number(i.maturityValue),
         active: i.active,
         notes: i.notes,
         symbol: i.symbol,
@@ -77,6 +81,7 @@ export async function GET(request: Request) {
         sumAssured: i.sumAssured == null ? null : Number(i.sumAssured),
         nextDueDate: i.nextDueDate?.toISOString() ?? null,
         nominee: i.nominee,
+        insuranceStatus: i.insuranceStatus,
         metadata: i.metadata ?? null,
         ownerUser: i.ownerUser,
         // The brokerage this holding sits in, if linked. When set, buys
@@ -200,6 +205,7 @@ export async function POST(request: Request) {
           amount: data.amount,
           currentValue: data.currentValue ?? null,
           interestRate: data.interestRate ?? null,
+          compoundingFrequency: data.compoundingFrequency ?? null,
           startedAt: new Date(data.startedAt),
           maturityAt: data.maturityAt ? new Date(data.maturityAt) : null,
           notes: data.notes,
