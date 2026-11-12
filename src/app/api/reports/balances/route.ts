@@ -47,15 +47,27 @@ export async function GET(request: Request) {
       });
     }
 
+    const brokerageIds = accounts
+      .filter((a) => a.kind === "BROKERAGE")
+      .map((a) => a.id);
+
     const [incomeAgg, expenseAgg, transferInAgg, transferOutAgg] =
       await Promise.all([
         prisma.transaction.groupBy({
           by: ["accountId"],
           where: {
-            accountId: { in: ids },
-            type: "INCOME",
             transferId: null,
             date: { lte: asOf },
+            // Same inflow rule as computeAccountBalance: INCOME everywhere,
+            // plus sale proceeds on a brokerage wallet.
+            OR: [
+              { accountId: { in: ids }, type: "INCOME" },
+              {
+                accountId: { in: brokerageIds },
+                type: "INVESTMENT",
+                investmentAction: "SELL",
+              },
+            ],
           },
           _sum: { amount: true },
         }),

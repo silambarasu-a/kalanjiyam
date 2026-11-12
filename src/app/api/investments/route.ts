@@ -6,6 +6,13 @@ import { canAccessRecord, visibilityFilter } from "@/lib/permissions";
 import { investmentCreateSchema } from "@/lib/validators-domain";
 import { computeReminderSchedule, policyReminderCount } from "@/lib/reminder-schedule";
 import {
+  BrokerageError,
+  assertWalletCanPay,
+  loadBrokerageForHolding,
+  walletFxAmount,
+  type BrokerageAccount,
+} from "@/lib/brokerage-wallet";
+import {
   InvestmentKind,
   InsurancePolicyType,
   PremiumFrequency,
@@ -17,7 +24,7 @@ import {
 } from "@/generated/prisma/client";
 
 function err(e: unknown) {
-  if (e instanceof WorkspaceAccessError) {
+  if (e instanceof WorkspaceAccessError || e instanceof BrokerageError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
   console.error("[investments]", e);
@@ -37,7 +44,10 @@ export async function GET(request: Request) {
         ...visibilityFilter(session, ctx.ownOnly),
       },
       orderBy: [{ active: "desc" }, { startedAt: "desc" }],
-      include: { ownerUser: { select: { id: true, name: true } } },
+      include: {
+        ownerUser: { select: { id: true, name: true } },
+        brokerageAccount: { select: { id: true, name: true, currency: true } },
+      },
     });
     return NextResponse.json({
       investments: investments.map((i) => ({
@@ -69,6 +79,10 @@ export async function GET(request: Request) {
         nominee: i.nominee,
         metadata: i.metadata ?? null,
         ownerUser: i.ownerUser,
+        // The brokerage this holding sits in, if linked. When set, buys
+        // and sells go through that brokerage's wallet and nowhere else.
+        brokerageAccountId: i.brokerageAccountId,
+        brokerage: i.brokerageAccount,
       })),
     });
   } catch (e) {
@@ -96,6 +110,43 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
     }
+
+    // ── Brokerage link ─────────────────────────────────────────────────
+    // A holding created inside a brokerage is bought with that brokerage's
+    // wallet — that is the whole point of linking it. So the seed BUY
+    // ignores the generic payment paths: no split tender, no other
+    // account, and the wallet has to actually hold the money.
+    let brokerage: BrokerageAccount | null = null;
+    let walletFx: number | null = null;
+    if (data.brokerageAccountId) {
+      brokerage = await loadBrokerageForHolding({
+        brokerageAccountId: data.brokerageAccountId,
+        workspaceId: ctx.workspaceId,
+        session,
+        holdingKind: data.kind,
+        holdingCurrency: data.currency,
+      });
+      if (!data.isExisting) {
+        if (data.splits && data.splits.length > 0) {
+          throw new BrokerageError(
+            `${brokerage.name} holdings are paid from its wallet — remove the split payment`,
+          );
+        }
+        if (data.accountId && data.accountId !== brokerage.id) {
+          throw new BrokerageError(
+            `This holding is in ${brokerage.name} — it can only be bought from that brokerage's wallet`,
+          );
+        }
+        walletFx = walletFxAmount(brokerage, data.amount, data.purchaseExchangeRate);
+        await assertWalletCanPay(brokerage, {
+          amountInr: data.amount,
+          fxAmount: walletFx,
+        });
+      }
+    }
+    // Where the seed BUY is paid from: the brokerage's wallet when linked,
+    // otherwise whatever account the caller picked.
+    const payAccountId = brokerage ? brokerage.id : (data.accountId ?? null);
 
     // Validate every funding source referenced by splits belongs to this
     // workspace and the caller can spend from it. Done up-front so we don't
@@ -142,7 +193,10 @@ export async function POST(request: Request) {
           ownerUserId: ctx.userId,
           kind: data.kind as InvestmentKind,
           name: data.name,
-          institution: data.institution,
+          // Default the free-text broker label to the linked brokerage so
+          // the screens that only show `institution` still name it.
+          institution: data.institution || brokerage?.name || undefined,
+          brokerageAccountId: brokerage?.id ?? null,
           amount: data.amount,
           currentValue: data.currentValue ?? null,
           interestRate: data.interestRate ?? null,
@@ -211,7 +265,7 @@ export async function POST(request: Request) {
               };
             }),
           });
-        } else if (data.accountId) {
+        } else if (payAccountId) {
           await tx.transaction.create({
             data: {
               // Use the client-minted UUID so receipts the user
@@ -225,11 +279,19 @@ export async function POST(request: Request) {
               amount: data.amount,
               description: `${data.kind} · ${data.name}`,
               date: new Date(data.startedAt),
-              accountId: data.accountId,
+              accountId: payAccountId,
               investmentId: inv.id,
               investmentAction: InvestmentAction.BUY,
               investmentQty: data.quantity ?? null,
               investmentPrice: data.purchasePrice ?? null,
+              // Foreign-currency wallet: what this buy took out of it, in
+              // its own currency, and the rate that ties it to `amount`.
+              ...(walletFx != null
+                ? {
+                    fxAmount: walletFx,
+                    exchangeRate: data.purchaseExchangeRate ?? null,
+                  }
+                : {}),
               goldForm: data.kind === "GOLD" && data.goldForm ? data.goldForm : null,
               userId: ctx.userId,
               createdByUserId: ctx.userId,

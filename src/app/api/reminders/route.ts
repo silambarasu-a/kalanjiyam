@@ -47,7 +47,15 @@ export async function GET(request: Request) {
       orderBy: { dueDate: "asc" },
       take: 100,
       include: {
-        investment: { select: { id: true, name: true, kind: true, premiumAmount: true } },
+        investment: {
+          select: {
+            id: true,
+            name: true,
+            kind: true,
+            premiumAmount: true,
+            brokerageAccount: { select: { id: true, name: true, currency: true } },
+          },
+        },
         vehicleDocument: {
           select: {
             id: true,
@@ -86,6 +94,9 @@ export async function GET(request: Request) {
               kind: r.investment.kind,
               premiumAmount:
                 r.investment.premiumAmount == null ? null : Number(r.investment.premiumAmount),
+              // A SIP held in a brokerage is paid from that brokerage's
+              // wallet — the confirm dialog locks the source to it.
+              brokerage: r.investment.brokerageAccount,
             }
           : null,
         vehicleDocument: r.vehicleDocument

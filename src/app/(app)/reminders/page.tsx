@@ -41,7 +41,14 @@ type Reminder = {
   dueDate: string;
   amount: number | null;
   status: "UPCOMING" | "CONFIRMED" | "SKIPPED" | "MISSED";
-  investment: { id: string; name: string; kind: string; premiumAmount: number | null } | null;
+  investment: {
+    id: string;
+    name: string;
+    kind: string;
+    premiumAmount: number | null;
+    /** Set when the holding sits in a brokerage — it pays from that wallet. */
+    brokerage?: { id: string; name: string; currency: string } | null;
+  } | null;
   vehicleDocument: {
     id: string;
     kind: "RC" | "FC" | "PUC" | "ROAD_TAX" | "INSURANCE_COPY" | "OTHER";
@@ -410,6 +417,10 @@ function ConfirmDialog({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A SIP held in a brokerage is paid from that brokerage's wallet — no
+  // picker; the API rejects any other source.
+  const walletBrokerage =
+    reminder?.kind === "SIP_BUY" ? (reminder.investment?.brokerage ?? null) : null;
 
   useEffect(() => {
     if (!reminder) return;
@@ -431,7 +442,9 @@ function ConfirmDialog({
   async function submit() {
     if (!reminder) return;
     setError(null);
-    const accountId = fundingSourceIds(source).accountId;
+    const accountId = walletBrokerage
+      ? walletBrokerage.id
+      : fundingSourceIds(source).accountId;
     if (!accountId) return setError("Pick an account");
     setSubmitting(true);
     try {
@@ -492,13 +505,23 @@ function ConfirmDialog({
                 {reminder.kind === "FD_INTEREST" ? "Credit into" : "Pay from"}
               </span>
               <div className="mt-1">
-                <FundingSourcePicker
-                  value={source}
-                  onChange={setSource}
-                  direction={reminder.kind === "FD_INTEREST" ? "in" : "out"}
-                  kinds={["BANK", "WALLET", "CASH"]}
-                  amount={reminder.kind === "FD_INTEREST" ? 0 : Number(amount) || 0}
-                />
+                {walletBrokerage ? (
+                  <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                    {walletBrokerage.name} wallet
+                    <span className="block text-xs text-muted-foreground">
+                      This SIP is held in {walletBrokerage.name}, so the installment is paid
+                      from its wallet.
+                    </span>
+                  </div>
+                ) : (
+                  <FundingSourcePicker
+                    value={source}
+                    onChange={setSource}
+                    direction={reminder.kind === "FD_INTEREST" ? "in" : "out"}
+                    kinds={["BANK", "WALLET", "CASH"]}
+                    amount={reminder.kind === "FD_INTEREST" ? 0 : Number(amount) || 0}
+                  />
+                )}
               </div>
             </label>
             <label className="block">

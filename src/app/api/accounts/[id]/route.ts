@@ -11,6 +11,7 @@ import { auth } from "@/lib/auth";
 import { accountUpdateSchema } from "@/lib/validators-domain";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { materializeStatementsFor } from "@/lib/card-statement-service";
+import { isForeignCurrency } from "@/lib/brokerage";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -45,6 +46,8 @@ export async function GET(
       account: {
         ...account,
         openingBalance: Number(account.openingBalance),
+        openingFxBalance:
+          account.openingFxBalance == null ? null : Number(account.openingFxBalance),
         creditLimit: account.creditLimit == null ? null : Number(account.creditLimit),
       },
       balance,
@@ -79,12 +82,77 @@ export async function PATCH(
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
     await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
+
+    // A brokerage stays a brokerage (and nothing else becomes one): its
+    // rows carry wallet-currency figures and its SELLs count as inflows,
+    // neither of which survives a change of kind.
+    const nextKind = parsed.data.kind ?? existing.kind;
+    const isBrokerage = existing.kind === "BROKERAGE";
+    if (nextKind !== existing.kind && (isBrokerage || nextKind === "BROKERAGE")) {
+      return NextResponse.json(
+        {
+          error: isBrokerage
+            ? "A brokerage can't be turned into another kind of account"
+            : "Create a new brokerage instead of converting this account",
+        },
+        { status: 400 },
+      );
+    }
+    // The wallet's currency is what every `fxAmount` on its rows is
+    // denominated in, so it can only change while there are none.
+    const nextCurrency = isBrokerage
+      ? (parsed.data.currency ?? existing.currency)
+      : existing.currency;
+    if (nextCurrency !== existing.currency) {
+      const [txns, holdings] = await Promise.all([
+        prisma.transaction.count({ where: { accountId: id } }),
+        prisma.investment.count({ where: { brokerageAccountId: id } }),
+      ]);
+      if (txns > 0 || holdings > 0) {
+        return NextResponse.json(
+          {
+            error:
+              "This wallet already has activity or holdings in its current currency — create a separate brokerage for the other currency",
+          },
+          { status: 400 },
+        );
+      }
+    }
+    const foreign = isBrokerage && isForeignCurrency(nextCurrency);
+    const nextOpeningFx = foreign
+      ? parsed.data.openingFxBalance === undefined
+        ? Number(existing.openingFxBalance ?? 0)
+        : (parsed.data.openingFxBalance ?? 0)
+      : null;
+    const nextOpening =
+      parsed.data.openingBalance ?? Number(existing.openingBalance);
+    if (foreign && nextOpeningFx! > 0 && !(nextOpening > 0)) {
+      return NextResponse.json(
+        {
+          error: `Enter what the opening ${nextCurrency} balance is worth in rupees — it sets the wallet's starting rate`,
+        },
+        { status: 400 },
+      );
+    }
+
     const account = await prisma.account.update({
       where: { id },
       data: {
         name: parsed.data.name ?? existing.name,
-        kind: parsed.data.kind ?? existing.kind,
-        openingBalance: parsed.data.openingBalance ?? existing.openingBalance,
+        kind: nextKind,
+        openingBalance: foreign && !(nextOpeningFx! > 0) ? 0 : nextOpening,
+        currency: nextCurrency,
+        openingFxBalance: nextOpeningFx,
+        dematNumber: isBrokerage
+          ? parsed.data.dematNumber === undefined
+            ? existing.dematNumber
+            : parsed.data.dematNumber || null
+          : existing.dematNumber,
+        brokerClientId: isBrokerage
+          ? parsed.data.brokerClientId === undefined
+            ? existing.brokerClientId
+            : parsed.data.brokerClientId || null
+          : existing.brokerClientId,
         creditLimit: parsed.data.creditLimit === undefined ? existing.creditLimit : parsed.data.creditLimit,
         statementDate:
           parsed.data.statementDate === undefined ? existing.statementDate : parsed.data.statementDate,

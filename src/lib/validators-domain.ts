@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BROKERAGE_CURRENCIES } from "@/lib/brokerage";
 
 export const familyCreateSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -29,12 +30,20 @@ export const categoryCreateSchema = z.object({
 
 export const categoryUpdateSchema = categoryCreateSchema.partial();
 
-const accountKindEnum = z.enum(["BANK", "CASH", "CARD", "WALLET"]);
+const accountKindEnum = z.enum(["BANK", "CASH", "CARD", "WALLET", "BROKERAGE"]);
 
 export const accountCreateSchema = z.object({
   kind: accountKindEnum,
   name: z.string().trim().min(1).max(80),
+  // Always INR — for a foreign-currency brokerage wallet this is the rupee
+  // value of `openingFxBalance`.
   openingBalance: z.number().finite().default(0),
+  // Brokerage-only fields; the routes ignore them for every other kind.
+  currency: z.enum(BROKERAGE_CURRENCIES).optional(),
+  /** Opening balance in the wallet's own currency (foreign wallets only). */
+  openingFxBalance: z.number().finite().nonnegative().optional().nullable(),
+  dematNumber: z.string().trim().max(40).optional().nullable(),
+  brokerClientId: z.string().trim().max(60).optional().nullable(),
   creditLimit: z.number().finite().optional().nullable(),
   statementDate: z.number().int().min(1).max(31).optional().nullable(),
   gracePeriod: z.number().int().min(0).max(60).optional().nullable(),
@@ -303,6 +312,24 @@ export const transferCreateSchema = z
      *  need to pay back later. Creates a MemberCharge with direction =
      *  USER_OWES so the contact's "I owe them" balance reflects it. */
     oweBack: z.boolean().optional().default(false),
+    /**
+     * Currency conversion — required when (and only when) one side is a
+     * foreign-currency brokerage wallet. `amount` above stays the INR that
+     * moved on the rupee side; `fx.amount` is what the wallet gained or
+     * gave up in its own currency. The rate isn't sent: the route stores
+     * amount / fx.amount, so the three can't disagree.
+     *
+     * `cgst` + `sgst` are the GST the bank charged on the conversion. They
+     * are booked as one EXPENSE on the rupee account, on top of `amount`.
+     */
+    fx: z
+      .object({
+        amount: z.number().positive(),
+        cgst: z.number().nonnegative().optional().default(0),
+        sgst: z.number().nonnegative().optional().default(0),
+      })
+      .optional()
+      .nullable(),
   })
   .refine(
     (d) => !d.expectBack || (!!d.fromAccountId && !!d.toContactId),
@@ -1311,6 +1338,13 @@ const investmentCreateBase = z.object({
     .optional()
     .nullable(),
   accountId: z.string().uuid().optional().nullable(),
+  /**
+   * The brokerage (an Account of kind BROKERAGE) this holding sits in —
+   * STOCK / MUTUAL_FUND / SIP only. When set on create, the seed BUY is
+   * paid from that brokerage's wallet regardless of `accountId`. On PATCH,
+   * `null` unlinks; omit to leave the link alone.
+   */
+  brokerageAccountId: z.string().uuid().optional().nullable(),
   /**
    * Optional split-payment list. When present, replaces `accountId` — a BUY
    * transaction is created per split (e.g. ₹5L gold paid via 2 cards + 1

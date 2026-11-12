@@ -84,7 +84,15 @@ export type DashboardStats = {
    *  with transfer legs excluded. Independent of the period filter. */
   today: { credit: number; debit: number; net: number };
   netWorth: number;
+  /** Spendable cash: bank + cash + wallet. Excludes brokerage wallets. */
   liquid: number;
+  /**
+   * Cash parked in brokerage wallets, in INR (a foreign wallet at what it
+   * cost to fund). Counted in `netWorth` — moving money into a wallet
+   * doesn't make you poorer — but kept out of `liquid`, which the
+   * dashboard reads as "what can pay this month's dues".
+   */
+  brokerageCash: number;
   /**
    * Market Investments tile — limited to STOCK / MUTUAL_FUND / SIP. These
    * have a measurable mark-to-market and are commonly referred to as
@@ -263,8 +271,11 @@ export async function getDashboardStats(args: {
   const accountKindById = new Map(accounts.map((a) => [a.id, a.kind]));
   let liquid = 0;
   let cardOutstanding = 0;
+  let brokerageCash = 0;
   for (const b of balances) {
-    if (accountKindById.get(b.accountId) === "CARD") cardOutstanding += b.balance;
+    const kind = accountKindById.get(b.accountId);
+    if (kind === "CARD") cardOutstanding += b.balance;
+    else if (kind === "BROKERAGE") brokerageCash += b.balance;
     else liquid += b.balance;
   }
 
@@ -313,6 +324,7 @@ export async function getDashboardStats(args: {
   const advancePaid = Number(advanceAgg._sum.advancePaid ?? 0);
   const netWorth =
     liquid +
+    brokerageCash +
     investedCurrent +
     otherHoldingsCurrent +
     owedToUserRemaining +
@@ -342,6 +354,7 @@ export async function getDashboardStats(args: {
     },
     netWorth,
     liquid,
+    brokerageCash,
     investedAmount,
     investedCurrent,
     otherHoldingsAmount,

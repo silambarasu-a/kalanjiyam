@@ -17,9 +17,15 @@ import {
   computeReminderSchedule,
   type PremiumFrequency,
 } from "@/lib/reminder-schedule";
+import { isForeignWallet } from "@/lib/brokerage";
+import {
+  BrokerageError,
+  assertWalletCanPay,
+  walletFxAmount,
+} from "@/lib/brokerage-wallet";
 
 function err(e: unknown) {
-  if (e instanceof WorkspaceAccessError) {
+  if (e instanceof WorkspaceAccessError || e instanceof BrokerageError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
   console.error("[transactions]", e);
@@ -377,10 +383,26 @@ export async function POST(request: Request) {
         }
       }
     }
+    // Kept past the access check: the brokerage rules below need to know
+    // what kind of account this is and what currency it holds.
+    let resolvedAccount: {
+      id: string;
+      name: string;
+      kind: string;
+      currency: string;
+    } | null = null;
     if (resolvedAccountId) {
       const account = await prisma.account.findUnique({
         where: { id: resolvedAccountId },
-        select: { id: true, workspaceId: true, ownerUserId: true, sharedWithUserIds: true },
+        select: {
+          id: true,
+          name: true,
+          kind: true,
+          currency: true,
+          workspaceId: true,
+          ownerUserId: true,
+          sharedWithUserIds: true,
+        },
       });
       if (!account || account.workspaceId !== ctx.workspaceId) {
         return NextResponse.json({ error: "Account not found" }, { status: 404 });
@@ -388,6 +410,7 @@ export async function POST(request: Request) {
       if (!canAccessRecord(session, account)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
+      resolvedAccount = account;
     }
 
     if (data.beneficiaryContactId) {
@@ -491,6 +514,8 @@ export async function POST(request: Request) {
       currentValue: number | null;
       premiumFrequency: string | null;
       nextDueDate: Date | null;
+      name: string;
+      brokerageAccountId: string | null;
     } | null = null;
     if (data.investmentId) {
       const inv = await prisma.investment.findUnique({
@@ -514,7 +539,45 @@ export async function POST(request: Request) {
         currentValue: inv.currentValue == null ? null : Number(inv.currentValue),
         premiumFrequency: inv.premiumFrequency,
         nextDueDate: inv.nextDueDate,
+        name: inv.name,
+        brokerageAccountId: inv.brokerageAccountId,
       };
+    }
+
+    // ── Brokerage wallet rules ─────────────────────────────────────────
+    // A holding linked to a brokerage trades through that brokerage's
+    // wallet and nowhere else: a BUY is paid from it (and it must hold the
+    // money), a SELL lands back in it.
+    let walletFx: number | null = null;
+    const isWalletTrade =
+      !!investmentForUpdate?.brokerageAccountId && !!data.investmentAction;
+    if (isWalletTrade) {
+      if (
+        resolvedCardId ||
+        !resolvedAccount ||
+        resolvedAccount.id !== investmentForUpdate!.brokerageAccountId
+      ) {
+        throw new BrokerageError(
+          `${investmentForUpdate!.name} is held in a brokerage — ${
+            data.investmentAction === "BUY" ? "buy it from" : "sell it into"
+          } that brokerage's wallet`,
+        );
+      }
+      walletFx = walletFxAmount(resolvedAccount, data.amount, data.exchangeRate);
+      if (data.investmentAction === "BUY") {
+        await assertWalletCanPay(resolvedAccount, {
+          amountInr: data.amount,
+          fxAmount: walletFx,
+        });
+      }
+    } else if (isForeignWallet(resolvedAccount)) {
+      // Every row on a foreign-currency wallet needs a wallet-currency
+      // amount, and only a trade in one of its own holdings (above) or a
+      // conversion (/api/transfers) knows how to produce one. Anything else
+      // would move the rupee books but not the wallet.
+      throw new BrokerageError(
+        `${resolvedAccount!.name}'s wallet is in ${resolvedAccount!.currency} — it only takes conversions and trades in the holdings linked to it`,
+      );
     }
 
     // Idempotency for the reminder-driven premium flow: when a specific
@@ -608,6 +671,7 @@ export async function POST(request: Request) {
           investmentQty: data.investmentQty ?? null,
           investmentPrice: data.investmentPrice ?? null,
           exchangeRate: data.exchangeRate ?? null,
+          fxAmount: walletFx,
           refundForTransactionId: data.refundForTransactionId ?? null,
           beneficiaryContactId: primaryContactId,
           memberChargeType: derivedChargeType,

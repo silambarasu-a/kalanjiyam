@@ -11,9 +11,15 @@ import {
   materializeStatementsFor,
   recomputeStatementPaidAt,
 } from "@/lib/card-statement-service";
+import { formatMoney, isForeignWallet, round2 } from "@/lib/brokerage";
+import {
+  BrokerageError,
+  assertWalletCanPay,
+  resolveBankChargesCategoryId,
+} from "@/lib/brokerage-wallet";
 
 function err(e: unknown) {
-  if (e instanceof WorkspaceAccessError) {
+  if (e instanceof WorkspaceAccessError || e instanceof BrokerageError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
   console.error("[transfers]", e);
@@ -107,6 +113,19 @@ export async function GET(request: Request) {
         fromContact: t.fromContact,
         toAccount: t.toAccount,
         toContact: t.toContact,
+        // Currency conversion, when one side is a foreign-currency
+        // brokerage wallet. `amount` above is the INR side; `fx.amount`
+        // is what the wallet saw.
+        fx:
+          t.fxAmount == null
+            ? null
+            : {
+                currency: t.fxCurrency,
+                amount: Number(t.fxAmount),
+                rate: t.fxRate == null ? null : Number(t.fxRate),
+                cgst: Number(t.cgst ?? 0),
+                sgst: Number(t.sgst ?? 0),
+              },
       })),
       pagination: { total: totalCount, offset, limit },
     });
@@ -134,6 +153,7 @@ export async function POST(request: Request) {
       notes,
       expectBack,
       oweBack,
+      fx,
     } = parsed.data;
 
     // Resolve each side. The validator guarantees exactly one of (account,
@@ -176,6 +196,94 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Member not found" }, { status: 404 });
       }
     }
+
+    // ── Currency conversion ─────────────────────────────────────────────
+    // A foreign-currency brokerage wallet on one side turns this into a
+    // conversion: `amount` is the INR that moved on the rupee side and
+    // `fx.amount` what the wallet gained (deposit) or gave up (withdrawal).
+    // The rate is derived, never taken from the client, so the three
+    // figures on the row always agree.
+    const fromForeign = isForeignWallet(fromAccount);
+    const toForeign = isForeignWallet(toAccount);
+    let conversion: {
+      wallet: NonNullable<typeof fromAccount>;
+      rupeeAccount: NonNullable<typeof fromAccount>;
+      fxAmount: number;
+      fxRate: number;
+      cgst: number;
+      sgst: number;
+    } | null = null;
+    if (fromForeign || toForeign) {
+      if (!fromAccount || !toAccount) {
+        return NextResponse.json(
+          {
+            error:
+              "A foreign-currency wallet can only be funded from, or withdrawn to, one of your own accounts",
+          },
+          { status: 400 },
+        );
+      }
+      if (fromForeign && toForeign) {
+        return NextResponse.json(
+          {
+            error:
+              "Moving money directly between two foreign-currency wallets isn't supported — withdraw to a rupee account first",
+          },
+          { status: 400 },
+        );
+      }
+      const wallet = fromForeign ? fromAccount : toAccount;
+      const rupeeAccount = fromForeign ? toAccount : fromAccount;
+      if (rupeeAccount.kind === "CARD") {
+        return NextResponse.json(
+          { error: "Pick a bank, cash or wallet account for the rupee side of a conversion" },
+          { status: 400 },
+        );
+      }
+      if (!fx) {
+        return NextResponse.json(
+          {
+            error: `Enter the ${wallet.currency} amount — ${wallet.name}'s wallet is in ${wallet.currency}`,
+          },
+          { status: 400 },
+        );
+      }
+      conversion = {
+        wallet,
+        rupeeAccount,
+        fxAmount: round2(fx.amount),
+        fxRate: amount / fx.amount,
+        cgst: round2(fx.cgst ?? 0),
+        sgst: round2(fx.sgst ?? 0),
+      };
+    } else if (fx) {
+      return NextResponse.json(
+        {
+          error:
+            "A currency conversion needs a foreign-currency brokerage wallet on one side",
+        },
+        { status: 400 },
+      );
+    }
+
+    // A brokerage wallet can't pay out more than it holds — in its own
+    // currency, which for a foreign wallet is `fx.amount`, not `amount`.
+    if (fromAccount?.kind === "BROKERAGE") {
+      await assertWalletCanPay(fromAccount, {
+        amountInr: amount,
+        fxAmount: conversion?.fxAmount ?? null,
+      });
+    }
+
+    const conversionGst = conversion ? round2(conversion.cgst + conversion.sgst) : 0;
+    const feeCategoryId =
+      conversionGst > 0 ? await resolveBankChargesCategoryId(ctx.workspaceId) : null;
+    // "₹88,500.00 → $1,000.00" for a deposit, the reverse for a withdrawal.
+    const conversionLabel = conversion
+      ? fromForeign
+        ? `${formatMoney(conversion.fxAmount, conversion.wallet.currency)} → ${formatMoney(amount, "INR")}`
+        : `${formatMoney(amount, "INR")} → ${formatMoney(conversion.fxAmount, conversion.wallet.currency)}`
+      : null;
 
     const date = new Date(dateStr);
     // When the destination is a credit-card companion account, this
@@ -226,34 +334,77 @@ export async function POST(request: Request) {
           notes,
           statementId: statementIdToTag,
           createsObligation: false,
+          ...(conversion
+            ? {
+                fxCurrency: conversion.wallet.currency,
+                fxAmount: conversion.fxAmount,
+                fxRate: conversion.fxRate,
+                cgst: conversion.cgst,
+                sgst: conversion.sgst,
+              }
+            : {}),
         },
       });
+      // The wallet-side leg carries the wallet-currency figure so the
+      // wallet's statement can show what it actually gained or lost.
+      const walletLeg = conversion
+        ? { fxAmount: conversion.fxAmount, exchangeRate: conversion.fxRate }
+        : null;
       await tx.transaction.createMany({
         data: [
           {
             workspaceId: ctx.workspaceId,
             type: TransactionType.TRANSFER,
             amount,
-            description: notes ?? "Transfer out",
+            description:
+              notes ?? (conversionLabel ? `Converted ${conversionLabel}` : "Transfer out"),
             date,
             accountId: fromAccount.id,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,
+            ...(walletLeg && fromForeign ? walletLeg : {}),
           },
           {
             workspaceId: ctx.workspaceId,
             type: TransactionType.TRANSFER,
             amount,
-            description: notes ?? "Transfer in",
+            description:
+              notes ?? (conversionLabel ? `Converted ${conversionLabel}` : "Transfer in"),
             date,
             accountId: toAccount.id,
             userId: ctx.userId,
             createdByUserId: ctx.userId,
             transferId: t.id,
+            ...(walletLeg && toForeign ? walletLeg : {}),
           },
         ],
       });
+      // GST on the conversion: a real cost, so it's an EXPENSE on the rupee
+      // account in its own right (cashflow / P&L see it) rather than being
+      // buried in the transfer. `transferId` stays null on purpose — rows
+      // with one are treated as legs and skipped by every balance sum. The
+      // transfer points at it instead, and owns it: deleting the transfer
+      // deletes this row.
+      if (conversion && conversionGst > 0) {
+        const fee = await tx.transaction.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            type: TransactionType.EXPENSE,
+            amount: conversionGst,
+            description: `GST on currency conversion · ${conversionLabel} (CGST ${formatMoney(conversion.cgst, "INR")} + SGST ${formatMoney(conversion.sgst, "INR")})`,
+            date,
+            categoryId: feeCategoryId,
+            accountId: conversion.rupeeAccount.id,
+            userId: ctx.userId,
+            createdByUserId: ctx.userId,
+          },
+        });
+        await tx.transfer.update({
+          where: { id: t.id },
+          data: { feeTransactionId: fee.id },
+        });
+      }
       return t;
     });
     if (statementIdToTag) {

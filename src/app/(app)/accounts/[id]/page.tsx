@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessRecord } from "@/lib/permissions";
-import { computeAccountBalance } from "@/lib/account-balance";
+import { computeAccountBalance, isAccountInflow } from "@/lib/account-balance";
 import { formatINR, formatDate } from "@/lib/utils";
 import {
   calendarMonthPeriods,
@@ -19,6 +19,8 @@ import {
   CategoryBreakdown,
   type CategorySlice,
 } from "@/components/cards/category-breakdown";
+import { BrokerageWalletActions } from "@/components/investments/brokerage-wallet-actions";
+import { formatMoney, isForeignWallet } from "@/lib/brokerage";
 
 export default async function AccountDetailPage({
   params,
@@ -40,6 +42,31 @@ export default async function AccountDetailPage({
   if (!account || account.workspaceId !== session?.user.activeWorkspaceId) notFound();
   if (!canAccessRecord(session, account)) notFound();
   const balance = await computeAccountBalance(account.id);
+
+  // A brokerage wallet reads differently from a bank account: its money
+  // moves by transfers and trades, not income and expenses, and a foreign
+  // one is denominated in its own currency. `walletAmount` / `money` below
+  // pick the wallet-currency figure for a foreign wallet (each row's
+  // `fxAmount`) and fall through to plain rupees for everything else.
+  const isWallet = account.kind === "BROKERAGE";
+  const foreign = isForeignWallet(account);
+  const money = (n: number) =>
+    foreign ? formatMoney(n, account.currency) : formatINR(n);
+  const holdings = isWallet
+    ? await prisma.investment.findMany({
+        where: { brokerageAccountId: account.id, workspaceId: account.workspaceId },
+        orderBy: [{ active: "desc" }, { name: "asc" }],
+        select: {
+          id: true,
+          kind: true,
+          name: true,
+          symbol: true,
+          amount: true,
+          quantity: true,
+          active: true,
+        },
+      })
+    : [];
 
   const periods = calendarMonthPeriods();
   let activeId = sp.period ?? periods[0]?.id ?? "";
@@ -73,6 +100,7 @@ export default async function AccountDetailPage({
           id: true,
           type: true,
           amount: true,
+          fxAmount: true,
           description: true,
           date: true,
           investmentAction: true,
@@ -104,7 +132,10 @@ export default async function AccountDetailPage({
         // computeAccountBalance counts only BUY against the balance and
         // ignores SELL, so a SELL row must stay unsigned here — a green
         // "+" would contradict the Balance figure in the hero above.
-        return t.investmentAction === "BUY" ? "out" : null;
+        // The exception is a brokerage wallet, where sale proceeds do
+        // land (isAccountInflow) and so do show as money in.
+        if (t.investmentAction === "BUY") return "out";
+        return isAccountInflow(account.kind, t) ? "in" : null;
       case "TRANSFER":
         if (t.transfer?.toAccountId === account.id) return "in";
         if (t.transfer?.fromAccountId === account.id) return "out";
@@ -122,18 +153,24 @@ export default async function AccountDetailPage({
     (s, t) => s + (t.type === "EXPENSE" ? Number(t.amount) : 0),
     0,
   );
-  const periodNet = periodIncome - periodExpense;
   // All money in/out for the table header, transfers included — must
   // agree with the +/− signs on the rows below it (abs, because a
   // contra-entry's stored amount is negative but renders as "+").
+  const walletAmount = (t: (typeof transactions)[number]) =>
+    Math.abs(Number(foreign ? (t.fxAmount ?? 0) : t.amount));
   const periodIn = transactions.reduce(
-    (s, t) => s + (flowOf(t) === "in" ? Math.abs(Number(t.amount)) : 0),
+    (s, t) => s + (flowOf(t) === "in" ? walletAmount(t) : 0),
     0,
   );
   const periodOut = transactions.reduce(
-    (s, t) => s + (flowOf(t) === "out" ? Math.abs(Number(t.amount)) : 0),
+    (s, t) => s + (flowOf(t) === "out" ? walletAmount(t) : 0),
     0,
   );
+  // Hero figures: income vs expense for a bank account, money in vs money
+  // out for a wallet (which has neither, only transfers and trades).
+  const statIn = isWallet ? periodIn : periodIncome;
+  const statOut = isWallet ? periodOut : periodExpense;
+  const statNet = statIn - statOut;
 
   // ── Cash-flow trend over the last 6 months ────────────────────────────
   const trendPeriods = periods.slice(0, 6);
@@ -183,24 +220,50 @@ export default async function AccountDetailPage({
     .map(([name, amount]) => ({ name, amount }))
     .sort((a, b) => b.amount - a.amount);
 
+  const shownBalance = foreign ? balance.nativeBalance : balance.balance;
   const balanceTone =
-    balance.balance > 0
+    shownBalance > 0
       ? "text-primary"
-      : balance.balance < 0
+      : shownBalance < 0
         ? "text-destructive"
         : "text-foreground";
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link href="/accounts" className="text-xs text-muted-foreground">
-          ← Accounts
-        </Link>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">{account.name}</h1>
-        <p className="text-xs uppercase tracking-widest text-muted-foreground">
-          {account.kind}
-          {account.ownerContact ? ` · ${account.ownerContact.name}` : ""}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <Link href="/accounts" className="text-xs text-muted-foreground">
+            ← Accounts
+          </Link>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">{account.name}</h1>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">
+            {account.kind}
+            {isWallet ? ` · ${account.currency}` : ""}
+            {account.ownerContact ? ` · ${account.ownerContact.name}` : ""}
+          </p>
+          {isWallet && (account.dematNumber || account.brokerClientId) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {[
+                account.dematNumber ? `Demat ${account.dematNumber}` : null,
+                account.brokerClientId ? `ID ${account.brokerClientId}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
+        </div>
+        {isWallet && (
+          <BrokerageWalletActions
+            brokerage={{
+              id: account.id,
+              name: account.name,
+              currency: account.currency,
+              balance: balance.balance,
+              nativeBalance: balance.nativeBalance,
+              avgRate: balance.avgRate,
+            }}
+          />
+        )}
       </div>
 
       {/* Hero */}
@@ -209,22 +272,30 @@ export default async function AccountDetailPage({
           <div className="flex flex-col justify-between gap-4">
             <div>
               <div className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Balance
+                {isWallet ? "Wallet balance" : "Balance"}
               </div>
               <div className={`mt-1 text-4xl font-bold tabular-nums ${balanceTone}`}>
-                {formatINR(balance.balance)}
+                {money(shownBalance)}
               </div>
+              {foreign && (
+                <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                  {balance.avgRate
+                    ? `${formatINR(balance.balance)} at your average ₹${balance.avgRate.toFixed(2)} per ${account.currency}`
+                    : `Held in ${account.currency}`}
+                </div>
+              )}
               <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                Opening {formatINR(balance.openingBalance)}
+                Opening{" "}
+                {money(foreign ? Number(account.openingFxBalance ?? 0) : balance.openingBalance)}
               </div>
             </div>
-            {(periodIncome > 0 || periodExpense > 0) && (
+            {(statIn > 0 || statOut > 0) && (
               <div>
                 <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
                   {(() => {
-                    const total = periodIncome + periodExpense;
-                    const incomePct = total > 0 ? (periodIncome / total) * 100 : 0;
-                    const expensePct = total > 0 ? (periodExpense / total) * 100 : 0;
+                    const total = statIn + statOut;
+                    const incomePct = total > 0 ? (statIn / total) * 100 : 0;
+                    const expensePct = total > 0 ? (statOut / total) * 100 : 0;
                     return (
                       <>
                         <div className="h-full bg-primary" style={{ width: `${incomePct}%` }} />
@@ -238,9 +309,9 @@ export default async function AccountDetailPage({
                 </div>
                 <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
                   <span className="text-emerald-700 dark:text-emerald-400">
-                    + {formatINR(periodIncome)}
+                    + {money(statIn)}
                   </span>
-                  <span className="text-destructive">− {formatINR(periodExpense)}</span>
+                  <span className="text-destructive">− {money(statOut)}</span>
                 </div>
               </div>
             )}
@@ -248,24 +319,81 @@ export default async function AccountDetailPage({
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-1 md:grid-rows-3">
             <SubStat
-              label="Period income"
-              value={formatINR(periodIncome)}
-              tone={periodIncome > 0 ? "gain" : "muted"}
+              label={isWallet ? "Added / sold" : "Period income"}
+              value={money(statIn)}
+              tone={statIn > 0 ? "gain" : "muted"}
             />
             <SubStat
-              label="Period expense"
-              value={formatINR(periodExpense)}
-              tone={periodExpense > 0 ? "loss" : "muted"}
+              label={isWallet ? "Invested / withdrawn" : "Period expense"}
+              value={money(statOut)}
+              tone={statOut > 0 ? "loss" : "muted"}
             />
             <SubStat
               label="Net"
-              value={`${periodNet >= 0 ? "+" : "−"}${formatINR(Math.abs(periodNet))}`}
-              tone={periodNet >= 0 ? "gain" : "loss"}
+              value={`${statNet >= 0 ? "+" : "−"}${money(Math.abs(statNet))}`}
+              tone={statNet >= 0 ? "gain" : "loss"}
             />
           </div>
         </div>
       </section>
 
+      {isWallet ? (
+        // Income-vs-expense charts say nothing about a wallet. What it
+        // holds does.
+        <section className="rounded-lg border bg-card">
+          <header className="px-5 py-3 border-b">
+            <h2 className="text-sm font-semibold">Holdings in this brokerage</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Bought from, and sold back into, this wallet.
+            </p>
+          </header>
+          {holdings.length === 0 ? (
+            <p className="px-5 py-6 text-center text-sm text-muted-foreground">
+              Nothing linked yet. Pick this brokerage when you add or edit a stock, mutual fund
+              or SIP.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {holdings.map((h) => (
+                <li key={h.id}>
+                  <Link
+                    href={
+                      h.kind === "STOCK" ? `/investments/stocks/${h.id}` : `/investments/${h.id}`
+                    }
+                    className={`flex items-center justify-between gap-3 px-5 py-2.5 text-sm hover:bg-muted/20 ${
+                      h.active ? "" : "opacity-50"
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="font-medium">{h.symbol ?? h.name}</span>
+                      <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {h.kind.replace("_", " ")}
+                        {h.active ? "" : " · closed"}
+                      </span>
+                      {h.symbol && (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {h.name}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-right tabular-nums">
+                      <span className="font-semibold">{formatINR(Number(h.amount))}</span>
+                      {h.quantity != null && Number(h.quantity) > 0 && (
+                        <span className="block text-xs text-muted-foreground">
+                          {Number(h.quantity).toLocaleString("en-IN", {
+                            maximumFractionDigits: 6,
+                          })}{" "}
+                          units
+                        </span>
+                      )}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : (
       <div className="grid gap-4 md:grid-cols-2">
         <section className="rounded-lg border bg-card p-4 min-w-0">
           <div>
@@ -288,6 +416,7 @@ export default async function AccountDetailPage({
           </div>
         </section>
       </div>
+      )}
 
       <section className="rounded-lg border bg-card">
         <header className="px-5 py-3 border-b flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -296,7 +425,7 @@ export default async function AccountDetailPage({
             {activeRange && (
               <p className="text-xs text-muted-foreground mt-0.5">
                 {transactions.length} txn{transactions.length === 1 ? "" : "s"} · in{" "}
-                {formatINR(periodIn)} · out {formatINR(periodOut)}
+                {money(periodIn)} · out {money(periodOut)}
               </p>
             )}
           </div>
@@ -365,7 +494,14 @@ export default async function AccountDetailPage({
                       }`}
                     >
                       {flow === "in" ? "+" : flow === "out" ? "−" : ""}
-                      {formatINR(Math.abs(Number(t.amount)))}
+                      {money(walletAmount(t))}
+                      {foreign && (
+                        // The rupee side of the same row — what it cost, or
+                        // fetched, at the rate it was booked at.
+                        <span className="block text-[11px] font-normal text-muted-foreground">
+                          {formatINR(Math.abs(Number(t.amount)))}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );

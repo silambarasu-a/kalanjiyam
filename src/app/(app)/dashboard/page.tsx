@@ -66,6 +66,7 @@ type Stats = {
   today: { credit: number; debit: number; net: number };
   netWorth: number;
   liquid: number;
+  brokerageCash: number;
   investedAmount: number;
   investedCurrent: number;
   otherHoldingsAmount: number;
@@ -1408,6 +1409,9 @@ function LiquidTile({
         )}
         <div className="mt-0.5 text-xs text-muted-foreground">
           Bank + cash + wallet
+          {stats && stats.brokerageCash > 0
+            ? ` · plus ${formatINR(stats.brokerageCash)} in brokerage wallets`
+            : ""}
         </div>
         <ChevronDown
           className={`absolute bottom-3 right-3 h-4 w-4 text-muted-foreground transition-transform ${

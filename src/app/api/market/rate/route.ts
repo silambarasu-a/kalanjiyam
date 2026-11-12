@@ -10,10 +10,19 @@ export async function GET(request: Request) {
     const to = searchParams.get("to") || "INR";
     const date = searchParams.get("date");
 
+    // `fresh=1` skips the fetch cache. The cached path is
+    // stale-while-revalidate: after a quiet spell the first caller gets
+    // whatever rate was last stored — days old, potentially — while the
+    // refresh happens behind it. Fine for valuing a portfolio; not for the
+    // default on a currency conversion, where the number is about to be
+    // multiplied into real money.
+    const fresh = searchParams.get("fresh") === "1";
+
     const endpoint = date || "latest";
-    const res = await fetch(`https://api.frankfurter.app/${endpoint}?from=${from}&to=${to}`, {
-      next: { revalidate: date ? 86400 : 3600 },
-    });
+    const res = await fetch(
+      `https://api.frankfurter.app/${endpoint}?from=${from}&to=${to}`,
+      fresh ? { cache: "no-store" } : { next: { revalidate: date ? 86400 : 3600 } },
+    );
 
     if (!res.ok) {
       return NextResponse.json({ error: "Failed to fetch exchange rate" }, { status: 502 });

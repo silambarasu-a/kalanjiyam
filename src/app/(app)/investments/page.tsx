@@ -41,6 +41,8 @@ type Investment = {
   premiumFrequency: string | null;
   nextDueDate: string | null;
   notes: string | null;
+  /** Brokerage this holding sits in, when linked. */
+  brokerage?: { id: string; name: string; currency: string } | null;
 };
 
 
@@ -262,7 +264,9 @@ export default function InvestmentsPage() {
                     )}
                   </div>
                   <div className="mt-0.5 text-xs text-muted-foreground truncate">
-                    {i.institution ? `${i.institution} · ` : ""}
+                    {(i.brokerage?.name ?? i.institution)
+                      ? `${i.brokerage?.name ?? i.institution} · `
+                      : ""}
                     {i.symbol ? `${i.symbol} · ` : ""}
                     {qtyDisplay
                       ? `${qtyDisplay} ${

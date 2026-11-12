@@ -11,7 +11,7 @@ import { fetcher } from "@/lib/swr-fetcher";
 type Row = {
   id: string;
   name: string;
-  kind: "BANK" | "CASH" | "CARD" | "WALLET";
+  kind: "BANK" | "CASH" | "CARD" | "WALLET" | "BROKERAGE";
   openingBalance: number;
   income: number;
   expense: number;

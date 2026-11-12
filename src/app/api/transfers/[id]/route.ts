@@ -5,6 +5,7 @@ import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
 import { canModifyRecord } from "@/lib/permissions";
 import { recomputeStatementPaidAt } from "@/lib/card-statement-service";
 import { reconcileChargesForDeletedTransfer } from "@/lib/cascades";
+import { archiveAttachmentsForOwner } from "@/lib/attachment-archive";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -59,6 +60,21 @@ export async function DELETE(
       await reconcileChargesForDeletedTransfer(tx, id);
       // Cascade: legs reference transferId with onDelete: Cascade.
       await tx.transfer.delete({ where: { id } });
+      // The GST expense of a currency conversion is NOT a leg (it has no
+      // transferId, so it counts as a real expense) and so isn't covered
+      // by that cascade. It belongs to this transfer and has no meaning
+      // without it — remove it here, receipts first, same as any other
+      // transaction delete.
+      if (transfer.feeTransactionId) {
+        await archiveAttachmentsForOwner({
+          workspaceId: ctx.workspaceId,
+          ownerKind: "TRANSACTION_RECEIPT",
+          ownerId: transfer.feeTransactionId,
+          userId: ctx.userId,
+          tx,
+        });
+        await tx.transaction.delete({ where: { id: transfer.feeTransactionId } });
+      }
     });
     if (tagged) {
       await recomputeStatementPaidAt(tagged);
