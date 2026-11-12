@@ -14,9 +14,11 @@ import {
   TransactionKind,
 } from "@/generated/prisma/client";
 import { advanceDate } from "@/lib/reminder-schedule";
+import { isForeignWallet } from "@/lib/brokerage";
+import { BrokerageError, assertWalletCanPay } from "@/lib/brokerage-wallet";
 
 function err(e: unknown) {
-  if (e instanceof WorkspaceAccessError) {
+  if (e instanceof WorkspaceAccessError || e instanceof BrokerageError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
   console.error("[reminders/confirm]", e);
@@ -152,6 +154,32 @@ export async function POST(
       return NextResponse.json({ error: "Amount required" }, { status: 400 });
     }
     const date = parsed.data.date ? new Date(parsed.data.date) : new Date();
+
+    // A SIP held in a brokerage is bought from that brokerage's wallet,
+    // same as any other buy of a linked holding (see /api/transactions).
+    // Without this the reminder flow would be the one door left open to
+    // paying it from somewhere else.
+    if (reminder.kind === ReminderKind.SIP_BUY && inv?.brokerageAccountId) {
+      const wallet = await prisma.account.findUnique({
+        where: { id: inv.brokerageAccountId },
+        select: { id: true, name: true, kind: true, currency: true },
+      });
+      if (wallet) {
+        if (parsed.data.cardId || resolvedAccountId !== wallet.id) {
+          throw new BrokerageError(
+            `${inv.name} is held in ${wallet.name} — pay this installment from that brokerage's wallet`,
+          );
+        }
+        if (isForeignWallet(wallet)) {
+          // No rate travels with a reminder confirm, so there's nothing to
+          // turn the rupee amount into a wallet-currency one with.
+          throw new BrokerageError(
+            `${wallet.name}'s wallet is in ${wallet.currency} — record this buy from the holding instead`,
+          );
+        }
+        await assertWalletCanPay(wallet, { amountInr: amount, fxAmount: null });
+      }
+    }
 
     await prisma.$transaction(async (tx) => {
       let createdTxnId: string | null = null;

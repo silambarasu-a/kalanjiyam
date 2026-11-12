@@ -51,6 +51,35 @@ function err(e: unknown) {
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
 }
 
+/** True when this row is the GST expense owned by a currency conversion. */
+async function isConversionFee(transactionId: string): Promise<boolean> {
+  const owner = await prisma.transfer.findUnique({
+    where: { feeTransactionId: transactionId },
+    select: { id: true },
+  });
+  return !!owner;
+}
+
+/**
+ * New wallet-currency amount for a row whose rupee amount was edited.
+ * Divides by the row's own rate when it has one, and otherwise scales the
+ * old figure by the same proportion.
+ */
+function rescaleFxAmount(
+  t: { fxAmount: unknown; exchangeRate: unknown },
+  newAmount: number,
+  oldAmount: number,
+): number {
+  const rate = t.exchangeRate == null ? 0 : Number(t.exchangeRate);
+  const raw =
+    rate > 0
+      ? newAmount / rate
+      : oldAmount !== 0
+        ? (Number(t.fxAmount) * newAmount) / oldAmount
+        : Number(t.fxAmount);
+  return Math.round((raw + Number.EPSILON) * 100) / 100;
+}
+
 async function loadOwnership(transactionId: string) {
   const t = await prisma.transaction.findUnique({
     where: { id: transactionId },
@@ -376,6 +405,18 @@ const body = await request.json();
     if (t.transferId) {
       return NextResponse.json(
         { error: "Edit the transfer instead, not its leg." },
+        { status: 400 },
+      );
+    }
+    // Same for the GST expense of a currency conversion: the transfer
+    // stores its CGST / SGST split, so changing this row alone would leave
+    // the two disagreeing.
+    if (await isConversionFee(t.id)) {
+      return NextResponse.json(
+        {
+          error:
+            "This is the GST on a currency conversion — delete the conversion and record it again to change it.",
+        },
         { status: 400 },
       );
     }
@@ -911,6 +952,12 @@ const body = await request.json();
         where: { id },
         data: {
           amount: newAmount,
+          // A row on a foreign-currency brokerage wallet: keep its
+          // wallet-currency figure in step with the edited rupee amount,
+          // at the rate it was booked at.
+          ...(amountChanged && t.fxAmount != null
+            ? { fxAmount: rescaleFxAmount(t, newAmount, oldAmount) }
+            : {}),
           description: parsed.data.description ?? t.description,
           date: parsed.data.date ? new Date(parsed.data.date) : t.date,
           categoryId:
@@ -1011,6 +1058,17 @@ export async function DELETE(
       return NextResponse.json(
         { error: "Delete the transfer instead, not its leg." },
         { status: 400 }
+      );
+    }
+    // The GST expense of a currency conversion goes when its conversion
+    // goes — on its own it would leave a transfer claiming GST nobody paid.
+    if (await isConversionFee(loaded.transaction.id)) {
+      return NextResponse.json(
+        {
+          error:
+            "This is the GST on a currency conversion — delete the conversion instead.",
+        },
+        { status: 400 },
       );
     }
     // A loan disbursement is created together with its Loan record. Removing

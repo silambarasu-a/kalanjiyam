@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireWorkspace, WorkspaceAccessError } from "@/lib/workspace";
+import { isAccountInflow, isAccountOutflow } from "@/lib/account-balance";
 
 function err(e: unknown) {
   if (e instanceof WorkspaceAccessError) {
@@ -58,10 +59,12 @@ export async function GET(request: Request) {
               accountId: { in: ids },
               transferId: null,
               date: { lte: endOfThisMonth },
+              // SELL rows are fetched for every account but only move a
+              // brokerage wallet's balance — see isAccountInflow.
               OR: [
                 { type: "INCOME" },
                 { type: "EXPENSE" },
-                { type: "INVESTMENT", investmentAction: "BUY" },
+                { type: "INVESTMENT", investmentAction: { in: ["BUY", "SELL"] } },
               ],
             },
             select: { accountId: true, type: true, investmentAction: true, amount: true, date: true },
@@ -98,9 +101,9 @@ export async function GET(request: Request) {
         const kind = accountKind.get(t.accountId);
         if (!kind) continue;
         const amt = Number(t.amount);
-        const isOutflow =
-          t.type === "EXPENSE" ||
-          (t.type === "INVESTMENT" && t.investmentAction === "BUY");
+        const isOutflow = isAccountOutflow(t);
+        // A sale on a bank / cash account has never moved its balance.
+        if (!isOutflow && !isAccountInflow(kind, t)) continue;
         const delta =
           kind === "CARD"
             ? (isOutflow ? amt : -amt) // CARD: expense increases debt, income reduces

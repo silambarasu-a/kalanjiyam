@@ -42,6 +42,7 @@ import {
 } from "@/contexts/lock-override";
 import type { StockQuote } from "@/app/api/market/quote/route";
 import { SymbolSearch } from "@/components/investments/symbol-search";
+import { formatMoney } from "@/lib/brokerage";
 
 interface StockHolding {
   id: string;
@@ -57,6 +58,24 @@ interface StockHolding {
   exchange: string | null;
   currency: string | null;
   active: boolean;
+  /** Brokerage this holding sits in — its trades go through that wallet. */
+  brokerageAccountId?: string | null;
+  brokerage?: { id: string; name: string; currency: string } | null;
+}
+
+/** A brokerage wallet, as GET /api/accounts returns it. */
+interface BrokerageOption {
+  id: string;
+  kind: string;
+  name: string;
+  active: boolean;
+  currency: string;
+  /** INR book value. */
+  balance: number;
+  /** Balance in the wallet's own currency. */
+  nativeBalance: number;
+  /** INR per unit still held — foreign wallets only. */
+  avgRate: number | null;
 }
 
 interface WishlistItem {
@@ -78,6 +97,8 @@ interface HoldingForm {
   purchaseExchangeRate: string;
   dividends: string;
   institution: string;
+  /** "" = not held in a brokerage. */
+  brokerageAccountId: string;
   startedAt: string;
 }
 
@@ -122,6 +143,7 @@ const emptyHoldingForm: HoldingForm = {
   purchaseExchangeRate: "",
   dividends: "",
   institution: "",
+  brokerageAccountId: "",
   startedAt: isoDate(new Date()),
 };
 
@@ -179,6 +201,10 @@ function SummaryCard({
   );
 }
 
+/** Brokerage select value for "this holding isn't in a brokerage". */
+const NO_BROKERAGE = "__none__";
+/** Payment-mode value for "pay from the selected brokerage's wallet". */
+const WALLET_SOURCE = "__wallet__";
 /** Picker value for "Already owned" — no buy transaction is recorded. */
 const EXISTING_SOURCE = "__existing__";
 const EXISTING_GROUP: NativeSelectGroup[] = [
@@ -213,6 +239,17 @@ export function StockPortfolio() {
     updatedAt: string;
   }>("/api/market/rate", fetcher);
   const usdInrRate = rateData?.rate ?? 84;
+
+  // Brokerage wallets a holding can be linked to (and bought from).
+  const { data: accountsData } = useSWR<{ accounts: BrokerageOption[] }>(
+    "/api/accounts",
+    fetcher,
+  );
+  const brokerages = useMemo(
+    () =>
+      (accountsData?.accounts ?? []).filter((a) => a.kind === "BROKERAGE" && a.active),
+    [accountsData?.accounts],
+  );
 
   const allSymbols = useMemo(() => {
     const syms = new Set<string>();
@@ -264,6 +301,17 @@ export function StockPortfolio() {
     setWishlistForm((f) => ({ ...f, [k]: v }));
   }
 
+  // Brokerages that can hold this holding — same currency only (a USD
+  // wallet can't pay for an NSE stock). The form's pick is re-checked
+  // against that list so switching exchange drops a pick that no longer fits.
+  const currencyBrokerages = brokerages.filter(
+    (b) => b.currency === holdingForm.currency,
+  );
+  const formBrokerage =
+    currencyBrokerages.find((b) => b.id === holdingForm.brokerageAccountId) ?? null;
+  const walletBalanceOf = (b: BrokerageOption) =>
+    b.currency === "INR" ? b.balance : b.nativeBalance;
+
   async function fetchHistoricalRate(date: string): Promise<number | null> {
     try {
       const res = await fetch(`/api/market/rate?from=USD&to=INR&date=${date}`);
@@ -311,6 +359,7 @@ export function StockPortfolio() {
         h.purchaseExchangeRate != null ? String(h.purchaseExchangeRate) : "",
       dividends: h.dividends != null ? String(h.dividends) : "",
       institution: h.institution ?? "",
+      brokerageAccountId: h.brokerageAccountId ?? "",
       startedAt: h.startedAt.slice(0, 10),
     });
     setEditingHoldingId(h.id);
@@ -332,11 +381,16 @@ export function StockPortfolio() {
 
     const qty = parseFloat(holdingForm.quantity) || 0;
     const pp = parseFloat(holdingForm.purchasePrice) || 0;
+    // Paying from a brokerage wallet (a new holding that isn't "already
+    // owned") — the money has already been converted, at the wallet's rate.
+    const payingFromWallet = !!formBrokerage && !editingHoldingId && !isExisting;
     let resolvedRate = 1;
     if (holdingForm.currency === "USD") {
       const entered = parseFloat(holdingForm.purchaseExchangeRate);
       if (entered > 0) {
         resolvedRate = entered;
+      } else if (payingFromWallet && formBrokerage?.avgRate) {
+        resolvedRate = formBrokerage.avgRate;
       } else {
         const historical = await fetchHistoricalRate(holdingForm.startedAt);
         resolvedRate = historical ?? usdInrRate;
@@ -347,7 +401,8 @@ export function StockPortfolio() {
     const payload: Record<string, unknown> = {
       kind: "STOCK",
       name: holdingForm.name || holdingForm.symbol,
-      institution: holdingForm.institution || undefined,
+      // A linked brokerage names the broker; otherwise the free-text label.
+      institution: formBrokerage ? formBrokerage.name : holdingForm.institution || undefined,
       amount: invested > 0 ? invested : 1,
       startedAt: holdingForm.startedAt,
       symbol: holdingForm.symbol || undefined,
@@ -359,9 +414,21 @@ export function StockPortfolio() {
       exchange: holdingForm.exchange || undefined,
       currency: holdingForm.currency,
     };
+    // The brokerage link. On edit it's sent only when the user actually
+    // changed the select (null = unlink): a holding linked to a brokerage
+    // this form can't offer — archived, or not visible to this member —
+    // shows as "Not in a brokerage", and re-saving it must not unlink it.
+    const savedBrokerageId = editingHoldingId
+      ? (holdings.find((h) => h.id === editingHoldingId)?.brokerageAccountId ?? "")
+      : "";
+    if (!editingHoldingId || holdingForm.brokerageAccountId !== savedBrokerageId) {
+      payload.brokerageAccountId = formBrokerage?.id ?? null;
+    }
     if (!editingHoldingId) {
       payload.isExisting = isExisting;
-      const accountId = fundingSourceIds(source).accountId;
+      const accountId = payingFromWallet
+        ? formBrokerage!.id
+        : fundingSourceIds(source).accountId;
       if (accountId) payload.accountId = accountId;
     }
 
@@ -719,8 +786,10 @@ export function StockPortfolio() {
                         }
                       />
                       <p className="text-[10px] text-muted-foreground">
-                        Locks the INR cost basis. Leave blank to fetch the rate
-                        for the purchase date.
+                        Locks the INR cost basis. Leave blank to use{" "}
+                        {formBrokerage?.avgRate && !editingHoldingId && !isExisting
+                          ? `the rate ${formBrokerage.name}'s balance was converted at (₹${formBrokerage.avgRate.toFixed(2)}).`
+                          : "the rate for the purchase date."}
                       </p>
                     </div>
                   )}
@@ -740,13 +809,41 @@ export function StockPortfolio() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>Broker / institution</Label>
-                    <Input
-                      placeholder="Zerodha, Groww…"
-                      value={holdingForm.institution}
-                      onChange={(e) => setHoldingField("institution", e.target.value)}
+                    <Label>Brokerage</Label>
+                    <NativeSelect
+                      value={formBrokerage?.id ?? NO_BROKERAGE}
+                      onChange={(v) => {
+                        setHoldingField("brokerageAccountId", v === NO_BROKERAGE ? "" : v);
+                        // The picker's last choice belongs to the other mode.
+                        setSource("");
+                      }}
+                      options={[
+                        { value: NO_BROKERAGE, label: "Not in a brokerage" },
+                        ...currencyBrokerages.map((b) => ({
+                          value: b.id,
+                          label: b.name,
+                          hint: `${formatMoney(walletBalanceOf(b), b.currency)} in wallet`,
+                        })),
+                      ]}
                     />
+                    {currencyBrokerages.length === 0 && (
+                      <p className="text-[10px] text-muted-foreground">
+                        No {holdingForm.currency} brokerage yet — add one under Accounts
+                        to buy from its wallet.
+                      </p>
+                    )}
                   </div>
+
+                  {!formBrokerage && (
+                    <div className="space-y-1.5">
+                      <Label>Broker / institution</Label>
+                      <Input
+                        placeholder="Zerodha, Groww…"
+                        value={holdingForm.institution}
+                        onChange={(e) => setHoldingField("institution", e.target.value)}
+                      />
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <Label>Purchase date *</Label>
@@ -768,6 +865,50 @@ export function StockPortfolio() {
                           : usdInrRate
                         : 1;
                     const investedNow = qty * pp * conv;
+                    if (formBrokerage) {
+                      // Held in a brokerage: the wallet pays, or nothing
+                      // does. What it costs the wallet is in the wallet's
+                      // currency — qty × price, no conversion.
+                      const walletCost =
+                        formBrokerage.currency === "INR" ? investedNow : qty * pp;
+                      const have = walletBalanceOf(formBrokerage);
+                      const short = !isExisting && walletCost > have + 0.005;
+                      return (
+                        <div className="space-y-1.5">
+                          <Label>Payment mode</Label>
+                          <NativeSelect
+                            value={isExisting ? EXISTING_SOURCE : WALLET_SOURCE}
+                            onChange={(v) => setIsExisting(v === EXISTING_SOURCE)}
+                            options={[
+                              {
+                                value: WALLET_SOURCE,
+                                label: `${formBrokerage.name} wallet`,
+                                hint: formatMoney(have, formBrokerage.currency),
+                              },
+                              {
+                                value: EXISTING_SOURCE,
+                                label: "Already owned (no transaction)",
+                              },
+                            ]}
+                          />
+                          {isExisting ? (
+                            <p className="text-[10px] text-amber-600">
+                              No buy transaction will be recorded.
+                            </p>
+                          ) : short ? (
+                            <p className="text-[10px] text-destructive">
+                              Needs {formatMoney(walletCost, formBrokerage.currency)} — add
+                              funds to the wallet first (Accounts → {formBrokerage.name}).
+                            </p>
+                          ) : walletCost > 0 ? (
+                            <p className="text-[10px] text-muted-foreground">
+                              Uses {formatMoney(walletCost, formBrokerage.currency)} of the
+                              wallet.
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    }
                     return (
                     <div className="space-y-1.5">
                       <Label>Payment mode</Label>
@@ -884,9 +1025,9 @@ export function StockPortfolio() {
                                   {row.quoteName}
                                 </div>
                               )}
-                              {h.institution && (
+                              {(h.brokerage?.name ?? h.institution) && (
                                 <div className="text-[10px] text-muted-foreground">
-                                  {h.institution}
+                                  {h.brokerage?.name ?? h.institution}
                                 </div>
                               )}
                             </td>

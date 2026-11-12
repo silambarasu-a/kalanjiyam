@@ -12,6 +12,7 @@ import { accountCreateSchema } from "@/lib/validators-domain";
 import { computeAccountBalance } from "@/lib/account-balance";
 import { computeAccountAvailableLimit } from "@/lib/card-available-limit";
 import { untaggedPaymentsToCard } from "@/lib/card-statement-service";
+import { HOME_CURRENCY, isForeignCurrency } from "@/lib/brokerage";
 
 function error(err: unknown) {
   if (err instanceof WorkspaceAccessError) {
@@ -35,6 +36,7 @@ export async function GET() {
         ownerUser: { select: { id: true, name: true, email: true } },
         ownerContact: { select: { id: true, name: true } },
         linkedCard: { select: { id: true } },
+        _count: { select: { holdings: true } },
       },
     });
 
@@ -94,7 +96,19 @@ export async function GET() {
         ownerUser: a.ownerUser,
         ownerContact: a.ownerContact,
         sharedWithUserIds: a.sharedWithUserIds,
+        // INR for every account. Brokerage wallets also report
+        // `nativeBalance` in their own `currency` (equal to `balance` for
+        // an INR wallet) and, for a foreign one, the average INR cost of
+        // each unit still sitting in it.
         balance: balances[i].balance,
+        currency: a.currency,
+        nativeBalance: balances[i].nativeBalance,
+        avgRate: balances[i].avgRate,
+        openingFxBalance:
+          a.openingFxBalance == null ? null : Number(a.openingFxBalance),
+        dematNumber: a.dematNumber,
+        brokerClientId: a.brokerClientId,
+        holdingsCount: a._count.holdings,
         availableLimit: availableLimits[i],
         upcomingBillAmount: upcomingBills[i]?.amount ?? null,
         nextBillDue: upcomingBills[i]?.dueDate?.toISOString() ?? null,
@@ -119,12 +133,31 @@ export async function POST(request: Request) {
       ...(parsed.data.sharedWithUserIds ?? []),
     ]);
     await assertWorkspaceContact(ctx.workspaceId, parsed.data.ownerContactId);
+    // Brokerage-only fields are dropped for every other kind, so a stray
+    // `currency: "USD"` can never turn a bank account into a foreign one.
+    const isBrokerage = parsed.data.kind === "BROKERAGE";
+    const currency = isBrokerage ? (parsed.data.currency ?? HOME_CURRENCY) : HOME_CURRENCY;
+    const foreign = isForeignCurrency(currency);
+    const openingFx = foreign ? (parsed.data.openingFxBalance ?? 0) : null;
+    if (foreign && openingFx! > 0 && !(parsed.data.openingBalance > 0)) {
+      return NextResponse.json(
+        {
+          error: `Enter what the opening ${currency} balance is worth in rupees — it sets the wallet's starting rate`,
+        },
+        { status: 400 },
+      );
+    }
     const account = await prisma.account.create({
       data: {
         workspaceId: ctx.workspaceId,
         kind: parsed.data.kind,
         name: parsed.data.name,
-        openingBalance: parsed.data.openingBalance,
+        // An empty foreign wallet has no rupee value either.
+        openingBalance: foreign && !(openingFx! > 0) ? 0 : parsed.data.openingBalance,
+        currency,
+        openingFxBalance: openingFx,
+        dematNumber: isBrokerage ? parsed.data.dematNumber || null : null,
+        brokerClientId: isBrokerage ? parsed.data.brokerClientId || null : null,
         creditLimit: parsed.data.creditLimit ?? null,
         statementDate: parsed.data.statementDate ?? null,
         gracePeriod: parsed.data.gracePeriod ?? null,

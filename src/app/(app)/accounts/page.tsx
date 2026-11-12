@@ -5,7 +5,19 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR, { mutate as globalMutate } from "swr";
-import { Plus, Pencil, Trash2, Wallet, Banknote, CreditCard, Smartphone, Loader2 } from "lucide-react";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Wallet,
+  Banknote,
+  CreditCard,
+  Smartphone,
+  Loader2,
+  LineChart,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AmountInput } from "@/components/ui/amount-input";
@@ -22,13 +34,36 @@ import { CardForm } from "@/components/cards/card-form";
 import { cn, formatINR } from "@/lib/utils";
 import { memberColorsFor, rowOwner, type MemberColor } from "@/lib/member-colors";
 import { fetcher } from "@/lib/swr-fetcher";
+import {
+  BrokerageFundDialog,
+  type FundDirection,
+} from "@/components/investments/brokerage-fund-dialog";
+import {
+  BROKERAGE_CURRENCIES,
+  BROKERAGE_CURRENCY_LABEL,
+  currencySymbol,
+  formatMoney,
+  isForeignCurrency,
+  round2,
+  type BrokerageCurrency,
+} from "@/lib/brokerage";
 
 type Account = {
   id: string;
-  kind: "BANK" | "CASH" | "CARD" | "WALLET";
+  kind: "BANK" | "CASH" | "CARD" | "WALLET" | "BROKERAGE";
   name: string;
   openingBalance: number;
+  /** Always INR — a foreign brokerage wallet's rupee book value. */
   balance: number;
+  // Brokerage wallets. `nativeBalance` is in `currency`; equal to
+  // `balance` for anything held in INR.
+  currency: string;
+  nativeBalance: number;
+  avgRate: number | null;
+  openingFxBalance: number | null;
+  dematNumber: string | null;
+  brokerClientId: string | null;
+  holdingsCount: number;
   creditLimit: number | null;
   statementDate: number | null;
   gracePeriod: number | null;
@@ -50,7 +85,7 @@ type FamilyMember = {
   favorite?: boolean;
 };
 
-const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "CARD"];
+const KIND_ORDER: Account["kind"][] = ["BANK", "CASH", "WALLET", "BROKERAGE", "CARD"];
 
 type DialogMode = null | { kind: "new" } | { kind: "newCard" } | { kind: "edit"; account: Account };
 
@@ -60,11 +95,17 @@ const KIND_META = {
   CASH: { label: "Cash", Icon: Wallet },
   CARD: { label: "Card", Icon: CreditCard },
   WALLET: { label: "Wallet", Icon: Smartphone },
+  BROKERAGE: { label: "Brokerage", Icon: LineChart },
 };
 
 export default function AccountsPage() {
   const { data, isLoading } = useSWR<{ accounts: Account[] }>("/api/accounts", fetcher);
   const [dialog, setDialog] = useState<DialogMode>(null);
+  // Add funds / withdraw on a brokerage wallet.
+  const [funding, setFunding] = useState<{
+    account: Account;
+    direction: FundDirection;
+  } | null>(null);
 
   return (
     <div className="space-y-6">
@@ -72,8 +113,8 @@ export default function AccountsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Accounts</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Bank accounts, cash wallets, and card-linked accounts. Balances update as you record
-            transactions.
+            Bank accounts, cash wallets, brokerage wallets, and card-linked accounts. Balances
+            update as you record transactions.
           </p>
         </div>
         <Button onClick={() => setDialog({ kind: "new" })} className="gap-2">
@@ -87,7 +128,12 @@ export default function AccountsPage() {
         const accounts = (data?.accounts ?? []).filter((a) => a.active);
         if (accounts.length === 0) return null;
 
-        const cashAccounts = accounts.filter((a) => a.kind !== "CARD");
+        // "Available" means spendable. Money parked in a brokerage wallet
+        // is earmarked for investing, so it's shown on its own card below
+        // rather than counted here.
+        const cashAccounts = accounts.filter(
+          (a) => a.kind !== "CARD" && a.kind !== "BROKERAGE",
+        );
         const cardAccounts = accounts.filter((a) => a.kind === "CARD");
 
         const availableBalance = cashAccounts.reduce((s, a) => s + a.balance, 0);
@@ -206,6 +252,7 @@ export default function AccountsPage() {
                           return o ? ownerColors?.get(o.id) : undefined;
                         })()}
                         onEdit={() => setDialog({ kind: "edit", account: a })}
+                        onFund={(direction) => setFunding({ account: a, direction })}
                       />
                     ))}
                   </div>
@@ -220,6 +267,12 @@ export default function AccountsPage() {
         mode={dialog}
         onClose={() => setDialog(null)}
         onSwitchToCard={() => setDialog({ kind: "newCard" })}
+      />
+      <BrokerageFundDialog
+        open={funding !== null}
+        onClose={() => setFunding(null)}
+        brokerage={funding?.account ?? null}
+        direction={funding?.direction}
       />
     </div>
   );
@@ -240,8 +293,24 @@ function AccountDialog({
   const [name, setName] = useState(""); // free-form (CASH/WALLET) or read-only assembled (BANK)
   const [bankName, setBankName] = useState(""); // BankPicker value
   const [bankTag, setBankTag] = useState(""); // optional suffix, e.g. "Savings"
-  const [kind, setKind] = useState<"BANK" | "CASH" | "WALLET">("BANK");
+  const [kind, setKind] = useState<"BANK" | "CASH" | "WALLET" | "BROKERAGE">("BANK");
   const [opening, setOpening] = useState("0");
+  // Brokerage-only fields.
+  const [currency, setCurrency] = useState<BrokerageCurrency>("INR");
+  const [dematNumber, setDematNumber] = useState("");
+  const [brokerClientId, setBrokerClientId] = useState("");
+  // A foreign wallet's opening balance is entered in its own currency plus
+  // the rate it was acquired at; the rupee value the ledger needs is the
+  // product of the two.
+  const [openingFx, setOpeningFx] = useState("");
+  const [openingRate, setOpeningRate] = useState("");
+  const isBrokerage = kind === "BROKERAGE";
+  const foreign = isBrokerage && isForeignCurrency(currency);
+  // Editing fixes the family: a brokerage stays one, nothing becomes one.
+  const editingBrokerage = account?.kind === "BROKERAGE";
+  // The currency is locked once the wallet has holdings — the server also
+  // refuses once it has any movement.
+  const currencyLocked = !!account && (account.holdingsCount > 0 || account.balance !== 0);
   const [ownerContactId, setOwnerContactId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -291,9 +360,41 @@ function AccountDialog({
     }
     setOpening(String(account?.openingBalance ?? 0));
     setOwnerContactId(account?.ownerContact?.id ?? "");
+    setCurrency(
+      account?.kind === "BROKERAGE" &&
+        (BROKERAGE_CURRENCIES as readonly string[]).includes(account.currency)
+        ? (account.currency as BrokerageCurrency)
+        : "INR",
+    );
+    setDematNumber(account?.dematNumber ?? "");
+    setBrokerClientId(account?.brokerClientId ?? "");
+    const fx0 = account?.openingFxBalance ?? 0;
+    setOpeningFx(fx0 > 0 ? String(fx0) : "");
+    setOpeningRate(
+      fx0 > 0 && account ? (account.openingBalance / fx0).toFixed(4) : "",
+    );
     setError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [mode, account]);
+
+  // Default the opening-balance rate to today's market rate. Runs once per
+  // dialog open / currency pick, and only fills an empty field — it never
+  // overwrites a saved rate, or one the user cleared to retype.
+  useEffect(() => {
+    if (!mode || !foreign) return;
+    let cancelled = false;
+    fetch(`/api/market/rate?from=${currency}&to=INR`)
+      .then((r) => r.json())
+      .then((d: { rate?: number }) => {
+        if (cancelled || !d.rate || !(d.rate > 0)) return;
+        const market = d.rate.toFixed(4);
+        setOpeningRate((prev) => prev || market);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, foreign, currency]);
 
   // For BANK kind, the assembled name is "BankName" or "BankName · Tag".
   const assembledName =
@@ -307,13 +408,29 @@ function AccountDialog({
     setError(null);
     setSubmitting(true);
     try {
+      const fxOpening = Number(openingFx) || 0;
+      const fxRate = Number(openingRate) || 0;
+      if (foreign && fxOpening > 0 && !(fxRate > 0)) {
+        setError(`Enter the ${currency} → INR rate for the opening balance`);
+        return;
+      }
       const payload = {
         name: assembledName,
         kind,
-        openingBalance: Number(opening) || 0,
+        // Always rupees. For a foreign wallet that's the opening balance
+        // valued at the rate entered beside it.
+        openingBalance: foreign ? round2(fxOpening * fxRate) : Number(opening) || 0,
         // Explicit null, not undefined — the PATCH route only clears the
         // owner when the key is present.
         ownerContactId: ownerContactId || null,
+        ...(isBrokerage
+          ? {
+              currency,
+              openingFxBalance: foreign ? fxOpening : null,
+              dematNumber: dematNumber.trim() || null,
+              brokerClientId: brokerClientId.trim() || null,
+            }
+          : {}),
       };
       const res = await fetch(account ? `/api/accounts/${account.id}` : "/api/accounts", {
         method: account ? "PATCH" : "POST",
@@ -379,7 +496,11 @@ function AccountDialog({
                     autoFocus
                     maxLength={80}
                     placeholder={
-                      kind === "WALLET" ? "e.g. PhonePe wallet" : "e.g. Cash on hand"
+                      kind === "BROKERAGE"
+                        ? "e.g. Zerodha, Groww, Vested"
+                        : kind === "WALLET"
+                          ? "e.g. PhonePe wallet"
+                          : "e.g. Cash on hand"
                     }
                   />
                 </label>
@@ -387,7 +508,12 @@ function AccountDialog({
               <div>
                 <span className="text-xs font-medium block mb-2">Kind</span>
                 <div className="flex flex-wrap gap-2">
-                  {(["BANK", "CASH", "WALLET"] as const).map((k) => (
+                  {(editingBrokerage
+                    ? (["BROKERAGE"] as const)
+                    : account
+                      ? (["BANK", "CASH", "WALLET"] as const)
+                      : (["BANK", "CASH", "WALLET", "BROKERAGE"] as const)
+                  ).map((k) => (
                     <Button
                       key={k}
                       type="button"
@@ -409,11 +535,103 @@ function AccountDialog({
                   </p>
                 )}
               </div>
-              <label className="block">
-                <span className="text-xs font-medium">Opening balance (₹)</span>
-                <AmountInput value={opening} onChange={setOpening}
-                />
-              </label>
+              {isBrokerage && (
+                <>
+                  <label className="block">
+                    <span className="text-xs font-medium">Wallet currency</span>
+                    <div className="mt-1">
+                      <NativeSelect
+                        value={currency}
+                        onChange={(v) => {
+                          setCurrency(v as BrokerageCurrency);
+                          setOpeningRate("");
+                        }}
+                        options={BROKERAGE_CURRENCIES.map((c) => ({
+                          value: c,
+                          label: BROKERAGE_CURRENCY_LABEL[c],
+                        }))}
+                        disabled={currencyLocked}
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {currencyLocked
+                        ? "Fixed — this wallet already has money or holdings in it."
+                        : foreign
+                          ? `Adding funds converts rupees to ${currency} at a rate you confirm, with GST on the conversion.`
+                          : "Adding funds is a straight transfer from one of your accounts."}
+                    </p>
+                  </label>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {!foreign && (
+                      <label className="block">
+                        <span className="text-xs font-medium">
+                          Demat account no.{" "}
+                          <span className="font-normal text-muted-foreground">(optional)</span>
+                        </span>
+                        <Input
+                          value={dematNumber}
+                          onChange={(e) => setDematNumber(e.target.value)}
+                          maxLength={40}
+                          placeholder="16-digit BO ID"
+                        />
+                      </label>
+                    )}
+                    <label className="block">
+                      <span className="text-xs font-medium">
+                        {foreign ? "Brokerage account no." : "Client / trading ID"}{" "}
+                        <span className="font-normal text-muted-foreground">(optional)</span>
+                      </span>
+                      <Input
+                        value={brokerClientId}
+                        onChange={(e) => setBrokerClientId(e.target.value)}
+                        maxLength={60}
+                        placeholder={foreign ? "As shown by the broker" : "e.g. AB1234"}
+                      />
+                    </label>
+                  </div>
+                </>
+              )}
+              {foreign ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs font-medium">
+                      Opening balance ({currencySymbol(currency).trim()})
+                    </span>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      value={openingFx}
+                      onChange={(e) => setOpeningFx(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium">Its rate (₹ per {currency})</span>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.0001"
+                      value={openingRate}
+                      onChange={(e) => setOpeningRate(e.target.value)}
+                      placeholder="0.0000"
+                    />
+                  </label>
+                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                    Cash already sitting with the broker.{" "}
+                    {Number(openingFx) > 0 && Number(openingRate) > 0
+                      ? `Counted as ${formatMoney(round2(Number(openingFx) * Number(openingRate)), "INR")} in rupee reports.`
+                      : "Leave at 0 if the wallet starts empty."}
+                  </p>
+                </div>
+              ) : (
+                <label className="block">
+                  <span className="text-xs font-medium">Opening balance (₹)</span>
+                  <AmountInput value={opening} onChange={setOpening} />
+                </label>
+              )}
               <label className="block">
                 <span className="text-xs font-medium">
                   Belongs to{" "}
@@ -485,16 +703,20 @@ function AccountCard({
   account: a,
   ownerColor,
   onEdit,
+  onFund,
 }: {
   account: Account;
   ownerColor?: MemberColor;
   onEdit: () => void;
+  onFund: (direction: FundDirection) => void;
 }) {
   const router = useRouter();
   const [navigating, setNavigating] = useState(false);
   const { Icon, label } = KIND_META[a.kind];
   const owner = rowOwner(a);
   const isCard = a.kind === "CARD";
+  const isBrokerage = a.kind === "BROKERAGE";
+  const foreignWallet = isBrokerage && isForeignCurrency(a.currency);
   const showLimit = isCard && a.creditLimit != null;
   const avail = a.availableLimit ?? a.creditLimit ?? 0;
   const limitPct =
@@ -632,6 +854,64 @@ function AccountCard({
             ) : (
               <span className="text-muted-foreground">No dues</span>
             )}
+          </div>
+        </div>
+      ) : isBrokerage ? (
+        <div className="space-y-2">
+          <div>
+            <div className="text-xs text-muted-foreground">Wallet balance</div>
+            <div
+              className={
+                "text-2xl font-semibold tabular-nums " +
+                (a.nativeBalance > 0
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : a.nativeBalance < 0
+                    ? "text-destructive"
+                    : "")
+              }
+            >
+              {formatMoney(a.nativeBalance, a.currency)}
+            </div>
+            {foreignWallet && (
+              <div className="text-xs text-muted-foreground tabular-nums">
+                {a.avgRate
+                  ? `${formatINR(a.balance)} at your avg. ₹${a.avgRate.toFixed(2)} per ${a.currency}`
+                  : `${a.currency} wallet`}
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {[
+              a.dematNumber ? `Demat ${a.dematNumber}` : null,
+              a.brokerClientId ? `ID ${a.brokerClientId}` : null,
+              `${a.holdingsCount} holding${a.holdingsCount === 1 ? "" : "s"}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={(e) => {
+                e.stopPropagation();
+                onFund("deposit");
+              }}
+            >
+              <ArrowDownToLine className="h-3.5 w-3.5" /> Add funds
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              disabled={!(a.nativeBalance > 0)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onFund("withdraw");
+              }}
+            >
+              <ArrowUpFromLine className="h-3.5 w-3.5" /> Withdraw
+            </Button>
           </div>
         </div>
       ) : (

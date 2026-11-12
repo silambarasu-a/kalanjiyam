@@ -37,6 +37,8 @@ interface HoldingData {
   purchaseExchangeRate: number | null;
   dividends: number | null;
   institution: string | null;
+  /** Brokerage this holding sits in, when linked. */
+  brokerage?: { id: string; name: string; currency: string } | null;
   startedAt: string;
   active: boolean;
   amount: number;
@@ -233,7 +235,20 @@ export function StockHoldingDetail({ holdingId }: { holdingId: string }) {
               </span>
             </div>
             <p className="text-sm text-muted-foreground mt-2">
-              {holding.institution && `${holding.institution} · `}
+              {holding.brokerage ? (
+                <>
+                  Held in{" "}
+                  <Link
+                    href={`/accounts/${holding.brokerage.id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {holding.brokerage.name}
+                  </Link>
+                  {" · "}
+                </>
+              ) : (
+                holding.institution && `${holding.institution} · `
+              )}
               Since {formatDate(holding.startedAt)}
             </p>
           </div>

@@ -52,6 +52,7 @@ export default async function InvestmentDetailPage({
     where: { id },
     include: {
       ownerUser: { select: { name: true } },
+      brokerageAccount: { select: { id: true, name: true } },
     },
   });
   if (!inv || inv.workspaceId !== session?.user.activeWorkspaceId) notFound();
@@ -170,7 +171,20 @@ export default async function InvestmentDetailPage({
         </div>
         <p className="text-xs uppercase tracking-widest text-muted-foreground">
           {KIND_LABEL[inv.kind] ?? inv.kind}
-          {inv.institution ? ` · ${inv.institution}` : ""}
+          {inv.institution && inv.institution !== inv.brokerageAccount?.name
+            ? ` · ${inv.institution}`
+            : ""}
+          {inv.brokerageAccount && (
+            <>
+              {" · held in "}
+              <Link
+                href={`/accounts/${inv.brokerageAccount.id}`}
+                className="text-primary hover:underline"
+              >
+                {inv.brokerageAccount.name}
+              </Link>
+            </>
+          )}
         </p>
       </div>
 

@@ -18,9 +18,10 @@ import {
   policyReminderCount,
   type PremiumFrequency,
 } from "@/lib/reminder-schedule";
+import { BrokerageError, loadBrokerageForHolding } from "@/lib/brokerage-wallet";
 
 function err(e: unknown) {
-  if (e instanceof WorkspaceAccessError) {
+  if (e instanceof WorkspaceAccessError || e instanceof BrokerageError) {
     return NextResponse.json({ error: e.message }, { status: e.status });
   }
   return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
@@ -37,6 +38,7 @@ export async function GET(
     const inv = await prisma.investment.findUnique({
       where: { id },
       include: {
+        brokerageAccount: { select: { id: true, name: true, currency: true } },
         renewedFrom: {
           select: {
             id: true,
@@ -105,6 +107,8 @@ export async function GET(
         dividends: inv.dividends == null ? null : Number(inv.dividends),
         exchange: inv.exchange,
         currency: inv.currency,
+        brokerageAccountId: inv.brokerageAccountId,
+        brokerage: inv.brokerageAccount,
         policyNumber: inv.policyNumber,
         policyType: inv.policyType,
         premiumAmount: inv.premiumAmount == null ? null : Number(inv.premiumAmount),
@@ -236,6 +240,38 @@ export async function PATCH(
       }
     }
 
+    // ── Brokerage link ─────────────────────────────────────────────────
+    // `brokerageAccountId` present = (re)link or, when null, unlink. This
+    // only changes where FUTURE buys and sells post; trades already
+    // recorded stay on the accounts they were made from. The check also
+    // re-runs when just the currency changes, so a linked holding can't be
+    // edited into a currency its wallet doesn't hold.
+    const nextBrokerageId =
+      data.brokerageAccountId === undefined
+        ? inv.brokerageAccountId
+        : data.brokerageAccountId;
+    const currencyChanging =
+      data.currency != null && data.currency !== (inv.currency ?? "INR");
+    if (
+      nextBrokerageId &&
+      (nextBrokerageId !== inv.brokerageAccountId || currencyChanging)
+    ) {
+      await loadBrokerageForHolding({
+        brokerageAccountId: nextBrokerageId,
+        workspaceId: ctx.workspaceId,
+        session,
+        holdingKind: inv.kind,
+        holdingCurrency: data.currency ?? inv.currency,
+      });
+    }
+    // The splits path below rebuilds every BUY from arbitrary accounts and
+    // cards — exactly what a brokerage-held holding must never have.
+    if (nextBrokerageId && data.splits && data.splits.length > 0) {
+      throw new BrokerageError(
+        "This holding is paid from its brokerage's wallet — it can't be re-split across other accounts",
+      );
+    }
+
     // When `splits` is supplied, the caller is editing the full holding —
     // wipe the existing BUY transactions and recreate from the new splits.
     // SELL/other-action txns are preserved so a holding's history isn't
@@ -331,6 +367,7 @@ export async function PATCH(
         data: {
           name: data.name ?? inv.name,
           institution: data.institution ?? inv.institution,
+          brokerageAccountId: nextBrokerageId,
           amount: derivedAmount ?? data.amount ?? inv.amount,
           currentValue: data.currentValue ?? inv.currentValue,
           interestRate: data.interestRate ?? inv.interestRate,

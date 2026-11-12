@@ -73,6 +73,7 @@ import {
 } from "@/components/transactions/split-rows";
 import { cn, formatINR } from "@/lib/utils";
 import { fundingSourceIds } from "@/lib/funding-sources";
+import { formatMoney, isBrokerageHoldingKind, isForeignWallet } from "@/lib/brokerage";
 import { useFundingSources } from "@/lib/use-funding-sources";
 import { inVehicleCategoryTree } from "@/lib/vehicle-category";
 import { mutateBalances } from "@/lib/mutate-balances";
@@ -92,8 +93,15 @@ import {
 type Account = {
   id: string;
   name: string;
-  kind: "BANK" | "CASH" | "CARD" | "WALLET";
+  kind: "BANK" | "CASH" | "CARD" | "WALLET" | "BROKERAGE";
+  /** Always INR. */
   balance: number;
+  active?: boolean;
+  // Brokerage wallets: their own currency, the balance in it, and (foreign
+  // wallets) the average INR cost of each unit still held.
+  currency?: string;
+  nativeBalance?: number;
+  avgRate?: number | null;
   availableLimit: number | null;
   ownerContact: { id: string; name: string } | null;
   ownerUser: { id: string; name: string | null } | null;
@@ -1949,6 +1957,8 @@ const ACCOUNT_KINDS = ["BANK", "WALLET", "CASH"] as const;
 const EMI_PAY_KINDS = [...ACCOUNT_KINDS, "CONTACT"] as const;
 /** Investment buys, premiums and gold splits: accounts or a credit card. */
 const INVESTMENT_PAY_KINDS = ["BANK", "WALLET", "CASH", "CREDIT"] as const;
+/** Brokerage select value for "this holding isn't in a brokerage". */
+const NO_BROKERAGE = "__none__";
 
 function TransferForm({ cards, onClose }: { cards: Card[]; onClose: () => void }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -2643,6 +2653,8 @@ type InvestmentHolding = {
   quantity: number | null;
   amount: number;
   active: boolean;
+  /** Brokerage this holding sits in — its trades go through that wallet. */
+  brokerageAccountId?: string | null;
   // Optional fields used by InsurancePremiumBreakdown.
   institution?: string | null;
   premiumAmount?: number | null;
@@ -2848,6 +2860,7 @@ function InvestmentForm({
       symbol: string | null;
       exchange: string | null;
       currency: string | null;
+      brokerageAccountId: string | null;
       maturityAt: string | null;
       interestRate: number | null;
       policyNumber: string | null;
@@ -2912,6 +2925,67 @@ function InvestmentForm({
   // Quantity × price only makes sense for unitised investments.
   const isQtyBased = activeKind === "STOCK" || activeKind === "MUTUAL_FUND" || activeKind === "SIP";
 
+  // ── Brokerage ───────────────────────────────────────────────────────
+  // Stocks, mutual funds and SIPs can sit in a brokerage. Once a holding is
+  // linked, its buys are paid from that brokerage's wallet and its sells
+  // land back in it — the "Pay from" picker is replaced by the wallet and
+  // the API rejects anything else.
+  //
+  // A new holding picks its brokerage here (only ones in the holding's
+  // currency are offered); an existing holding carries its own link. With
+  // exactly one matching brokerage it's preselected, until the user picks
+  // for themselves.
+  const isBrokerKind = isBrokerageHoldingKind(activeKind);
+  const [brokerageId, setBrokerageId] = useState("");
+  const [brokerageTouched, setBrokerageTouched] = useState(false);
+  // True once the user changes the select by hand (as opposed to it being
+  // hydrated from the saved holding) — see the PATCH payload.
+  const [brokerageEdited, setBrokerageEdited] = useState(false);
+  const matchingBrokerages = useMemo(
+    () =>
+      accounts.filter(
+        (a) =>
+          a.kind === "BROKERAGE" &&
+          a.active !== false &&
+          (a.currency ?? "INR") === investmentCurrency,
+      ),
+    [accounts, investmentCurrency],
+  );
+  const pickedBrokerageId = brokerageTouched
+    ? brokerageId
+    : matchingBrokerages.length === 1
+      ? matchingBrokerages[0].id
+      : "";
+  // Guarded against a pick that no longer fits (kind chip or currency
+  // changed underneath it).
+  const formBrokerageId =
+    isBrokerKind && matchingBrokerages.some((b) => b.id === pickedBrokerageId)
+      ? pickedBrokerageId
+      : "";
+  const linkedBrokerageId = creatingNew
+    ? formBrokerageId
+    : (selected?.brokerageAccountId ?? "");
+  const brokerage = linkedBrokerageId
+    ? (accounts.find((a) => a.id === linkedBrokerageId && a.kind === "BROKERAGE") ?? null)
+    : null;
+  const brokerageIsForeign = isForeignWallet(
+    brokerage ? { kind: brokerage.kind, currency: brokerage.currency } : null,
+  );
+  const walletCurrency = brokerage?.currency ?? "INR";
+  const walletBalance = brokerage
+    ? brokerageIsForeign
+      ? (brokerage.nativeBalance ?? 0)
+      : brokerage.balance
+    : 0;
+  // Buying out of a foreign wallet spends money that was already converted,
+  // so the rupee cost of the purchase is the wallet's own average
+  // conversion rate, not today's market rate. Sales still use the market
+  // rate for the day — that's what the proceeds are worth.
+  const walletRate =
+    brokerageIsForeign && action === "BUY" && !isEditing && brokerage?.avgRate
+      ? brokerage.avgRate
+      : null;
+
   // Holdings filtered to the active kind — drives the picker contents and
   // the auto-flip into create-new mode when nothing exists for that kind.
   const filteredHoldings = useMemo(
@@ -2970,6 +3044,10 @@ function InvestmentForm({
       setExchangeRate("");
       return;
     }
+    if (walletRate) {
+      setExchangeRate(walletRate.toFixed(4));
+      return;
+    }
     let cancelled = false;
     setFetchingRate(true);
     fetch(`/api/market/rate?from=${investmentCurrency}&to=INR&date=${date}`)
@@ -2985,7 +3063,7 @@ function InvestmentForm({
     return () => {
       cancelled = true;
     };
-  }, [isForeignCurrency, investmentCurrency, date]);
+  }, [isForeignCurrency, investmentCurrency, date, walletRate]);
 
   // When the user picks an existing holding, sync currency from it.
   useEffect(() => {
@@ -3022,6 +3100,21 @@ function InvestmentForm({
   function applyLivePrice() {
     if (livePrice) setPrice(livePrice.price.toFixed(2));
   }
+
+  // What this trade moves in the brokerage wallet, in the wallet's own
+  // currency: the rupee amount for an INR wallet, and that amount divided
+  // back through the rate for a foreign one — the same derivation the API
+  // uses, so the preview matches what gets booked.
+  const walletDebit = (() => {
+    if (!brokerage) return 0;
+    const amt = Number(amount) || 0;
+    if (!brokerageIsForeign) return amt;
+    const r = parseFloat(exchangeRate);
+    return r > 0 ? Math.round((amt / r) * 100) / 100 : 0;
+  })();
+  // Only a new purchase can fall short; editing moves no money.
+  const walletShort =
+    !!brokerage && action === "BUY" && !isEditing && walletDebit > walletBalance + 0.005;
 
   // Gold purchases routinely use multiple tenders (2 cards + bank, etc.),
   // so the create-new flow shows a splits repeater instead of a single
@@ -3157,6 +3250,10 @@ function InvestmentForm({
     setNewSymbol(inv.symbol ?? "");
     setNewExchange(inv.exchange ?? "");
     setInvestmentCurrency(inv.currency === "USD" ? "USD" : "INR");
+    // The saved link (or lack of one) is the user's choice — don't let the
+    // "only one brokerage, preselect it" default override it on edit.
+    setBrokerageId(inv.brokerageAccountId ?? "");
+    setBrokerageTouched(true);
     setNewInterestRate(inv.interestRate != null ? String(inv.interestRate) : "");
     setNewMaturityAt(inv.maturityAt ? inv.maturityAt.slice(0, 10) : "");
     setNewPolicyNumber(inv.policyNumber ?? "");
@@ -3351,19 +3448,30 @@ function InvestmentForm({
         setError("Pick an account or card to pay the premium from");
         return;
       }
+    } else if (brokerage) {
+      // Paid from the brokerage's wallet — no picker to fill in, but the
+      // wallet has to hold the money. (The API enforces the same rule.)
+      if (walletShort) {
+        setError(
+          `${brokerage.name} has only ${formatMoney(Math.max(0, walletBalance), walletCurrency)} — add funds to the wallet first`,
+        );
+        return;
+      }
     } else if (!fundingSource) {
       setError("Pick an account");
       return;
     }
     // /api/investments only speaks in accounts, so a credit-card pick on a
     // new holding posts through the card's companion ledger — the same
-    // account the old picker's CARD rows pointed at.
+    // account the old picker's CARD rows pointed at. A brokerage-held
+    // holding always posts through its wallet.
     const fundingIds = fundingSourceIds(fundingSource);
-    const fundingAccountId =
-      fundingIds.accountId ??
-      (fundingIds.cardId
-        ? (cards.find((c) => c.id === fundingIds.cardId)?.accountId ?? null)
-        : null);
+    const fundingAccountId = brokerage
+      ? brokerage.id
+      : (fundingIds.accountId ??
+        (fundingIds.cardId
+          ? (cards.find((c) => c.id === fundingIds.cardId)?.accountId ?? null)
+          : null));
     if (creatingNew) {
       if (!newName.trim()) {
         setError("Enter a name for the new holding");
@@ -3550,6 +3658,16 @@ function InvestmentForm({
                     : null
                   : undefined,
             currency: investmentCurrency,
+            // Link (or, on edit, re-link / unlink) the brokerage. Keyed to
+            // the record's real kind on edit for the same reason metadata
+            // is — the active chip may not be it. On edit it's only sent
+            // when the user changed the select: a holding linked to a
+            // brokerage this form can't offer (archived, or not visible to
+            // this member) shows as unlinked, and re-saving it must not
+            // unlink it for real.
+            ...(isBrokerageHoldingKind(metadataKind) && (!isEditing || brokerageEdited)
+              ? { brokerageAccountId: formBrokerageId || null }
+              : {}),
             amount: amt,
             quantity: quantity ? Number(quantity) : undefined,
             purchasePrice: price ? Number(price) : undefined,
@@ -3642,8 +3760,10 @@ function InvestmentForm({
       const payIds = fundingSourceIds(
         isInsurancePremium ? premiumSource : fundingSource,
       );
-      const payAccountId = payIds.accountId ?? undefined;
-      const payCardId = payIds.cardId ?? undefined;
+      // A brokerage-held holding trades through its wallet, whatever the
+      // (hidden) picker last held.
+      const payAccountId = brokerage ? brokerage.id : (payIds.accountId ?? undefined);
+      const payCardId = brokerage ? undefined : (payIds.cardId ?? undefined);
       const payload: Record<string, unknown> = {
         clientId: investClientId,
         type: "INVESTMENT",
@@ -4762,6 +4882,12 @@ function InvestmentForm({
                   className="pl-20"
                 />
               </div>
+              {walletRate && (
+                <p className="text-[11px] text-muted-foreground">
+                  Pre-filled with the average rate you converted {brokerage?.name}&apos;s
+                  balance at, so the rupee cost is what this money actually cost you.
+                </p>
+              )}
               {(() => {
                 const q = parseFloat(quantity);
                 const p = parseFloat(price);
@@ -4784,6 +4910,45 @@ function InvestmentForm({
         </>
       )}
 
+      {creatingNew && isBrokerKind && (
+        <label className="block">
+          <span className="text-xs font-medium">Brokerage</span>
+          <div className="mt-1">
+            <NativeSelect
+              value={formBrokerageId || NO_BROKERAGE}
+              onChange={(v) => {
+                setBrokerageTouched(true);
+                setBrokerageEdited(true);
+                setBrokerageId(v === NO_BROKERAGE ? "" : v);
+              }}
+              options={[
+                {
+                  value: NO_BROKERAGE,
+                  label: "Not in a brokerage — pay directly from an account",
+                },
+                ...matchingBrokerages.map((b) => ({
+                  value: b.id,
+                  label: b.name,
+                  hint: `${formatMoney(
+                    (b.currency ?? "INR") === "INR" ? b.balance : (b.nativeBalance ?? 0),
+                    b.currency,
+                  )} in wallet`,
+                })),
+              ]}
+            />
+          </div>
+          {matchingBrokerages.length === 0 && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              No {investmentCurrency} brokerage yet.{" "}
+              <Link href="/accounts" className="font-medium text-primary hover:underline">
+                Add one under Accounts
+              </Link>{" "}
+              to buy from its wallet and group holdings by broker.
+            </p>
+          )}
+        </label>
+      )}
+
       {!isGoldCreate &&
         (isInsurancePremium ? (
           <label className="block">
@@ -4802,6 +4967,43 @@ function InvestmentForm({
               Premiums can be paid from a bank account or a credit card.
             </p>
           </label>
+        ) : brokerage ? (
+          // Held in a brokerage: the wallet is the only source / destination,
+          // so there is nothing to pick — just show what it holds.
+          <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium">
+                {isEditing ? "Brokerage wallet" : action === "BUY" ? "Pay from" : "Deposit to"} ·{" "}
+                {brokerage.name}
+              </span>
+              <span className="tabular-nums font-semibold">
+                {formatMoney(walletBalance, walletCurrency)}
+              </span>
+            </div>
+            {isEditing ? (
+              <p className="text-muted-foreground">
+                Future buys and sells of this holding will go through this wallet. Trades
+                already recorded stay on the accounts they were made from.
+              </p>
+            ) : action === "SELL" ? (
+              <p className="text-muted-foreground">
+                Sale proceeds go back into the wallet.
+              </p>
+            ) : walletShort ? (
+              <p className="text-destructive">
+                This buy needs {formatMoney(walletDebit, walletCurrency)}.{" "}
+                <Link href={`/accounts/${brokerage.id}`} className="font-medium underline">
+                  Add funds to the wallet
+                </Link>{" "}
+                first.
+              </p>
+            ) : walletDebit > 0 ? (
+              <p className="text-muted-foreground tabular-nums">
+                Uses {formatMoney(walletDebit, walletCurrency)} · leaves{" "}
+                {formatMoney(walletBalance - walletDebit, walletCurrency)}
+              </p>
+            ) : null}
+          </div>
         ) : (
           <label className="block">
             <span className="text-xs font-medium">

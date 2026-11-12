@@ -162,7 +162,7 @@ export function fundingSourceFromIds(ids: {
 export type FundingAccount = OwnedRow & {
   id: string;
   name: string;
-  kind: "BANK" | "CASH" | "CARD" | "WALLET";
+  kind: "BANK" | "CASH" | "CARD" | "WALLET" | "BROKERAGE";
   balance: number;
   availableLimit?: number | null;
   active?: boolean;
@@ -266,6 +266,11 @@ export function buildFundingSourceGroups(
   for (const a of accounts) {
     // Companion card-accounts are surfaced via the card rows instead.
     if (a.kind === "CARD") continue;
+    // A brokerage wallet is never a general funding source: it can't pay a
+    // bill or take a salary. It's funded and drained only through the
+    // brokerage dialog and trades in its own holdings, so it has no group
+    // here by design — not an omission to "fix" by adding a kind.
+    if (a.kind === "BROKERAGE") continue;
     if (!want.has(a.kind) || skipAccount.has(a.id)) continue;
     const insufficient = checkFunds && amount > a.balance;
     buckets[a.kind].push({

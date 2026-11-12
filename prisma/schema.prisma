@@ -80,6 +80,9 @@ enum AccountKind {
   CASH
   CARD
   WALLET
+  // Cash parked with a stock broker / MF platform — the "wallet" you top
+  // up before you can buy. See the brokerage fields on Account.
+  BROKERAGE
 }
 
 enum CardKind {
@@ -783,11 +786,28 @@ model Account {
   // over. Cleared/updated by the user manually after the bill is paid.
   nextBillDue       DateTime?
   nextBillAmount    Decimal?    @db.Decimal(14, 2)
+  // ── BROKERAGE accounts only ──────────────────────────────────────────
+  // `currency` is the wallet's own currency: "INR" for a domestic broker,
+  // anything else makes it a foreign-currency wallet. Every money column
+  // in the ledger (Account.openingBalance, Transaction.amount,
+  // Transfer.amount) stays in INR no matter what, so reports never mix
+  // currencies; a foreign wallet's own-currency figures ride alongside in
+  // the matching `fx*` columns. Fixed once the wallet has any movement.
+  currency          String      @default("INR")
+  // Opening balance in the wallet's currency (foreign wallets only);
+  // `openingBalance` holds its INR value.
+  openingFxBalance  Decimal?    @db.Decimal(14, 2)
+  // Demat / BO account number — domestic brokers.
+  dematNumber       String?
+  // Trading / client code, or the account number at a foreign broker.
+  brokerClientId    String?
   active            Boolean     @default(true)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   transactions     Transaction[]
+  // Holdings (stocks / mutual funds / SIPs) held through this brokerage.
+  holdings         Investment[]      @relation("InvestmentBrokerage")
   loans            Loan[]
   transfersFrom    Transfer[]        @relation("TransferFrom")
   transfersTo      Transfer[]        @relation("TransferTo")
@@ -910,6 +930,25 @@ model Transfer {
   // so the leftover's MemberCharge gets reconciled rather than orphaned.
   settlementTxnId   String?        @unique
   settlementTxn     Transaction?   @relation("SettlementLeftoverTransfer", fields: [settlementTxnId], references: [id], onDelete: SetNull)
+  // ── Currency conversion ──────────────────────────────────────────────
+  // Set when one side is a foreign-currency brokerage wallet. `amount`
+  // above is still the INR that moved on the rupee side; `fxAmount` is
+  // what the wallet gained (deposit) or gave up (withdrawal), in
+  // `fxCurrency`. `fxRate` = amount / fxAmount, i.e. INR per one unit —
+  // derived on write, never trusted from the client.
+  fxCurrency        String?
+  fxAmount          Decimal?       @db.Decimal(14, 2)
+  fxRate            Decimal?       @db.Decimal(14, 6)
+  // GST the bank charged on the conversion, kept as the two halves the
+  // advice shows. Their sum is booked as its own EXPENSE on the rupee
+  // account (`feeTransaction`) so it lands in cashflow / P&L; the split
+  // lives here because that row only has room for one amount.
+  cgst              Decimal?       @db.Decimal(12, 2)
+  sgst              Decimal?       @db.Decimal(12, 2)
+  // SetNull, not Cascade: the transfer DELETE removes the expense itself,
+  // inside the same $transaction.
+  feeTransactionId  String?        @unique
+  feeTransaction    Transaction?   @relation("TransferConversionFee", fields: [feeTransactionId], references: [id], onDelete: SetNull)
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
@@ -991,6 +1030,11 @@ model Transaction {
   investmentQty    Decimal?          @db.Decimal(14, 4)
   investmentPrice  Decimal?          @db.Decimal(14, 4)
   exchangeRate     Decimal?          @db.Decimal(10, 4)
+  // This row's amount in its account's own currency. Set only when the
+  // account is a foreign-currency brokerage wallet; `amount` stays INR.
+  // The wallet's balance is summed from this column, never from
+  // `amount / exchangeRate`.
+  fxAmount         Decimal?          @db.Decimal(14, 2)
 
   transferId String?
   transfer   Transfer? @relation("TransferLegs", fields: [transferId], references: [id], onDelete: Cascade)
@@ -1086,6 +1130,9 @@ model Transaction {
   // The leftover transfer created alongside this bulk-settlement, if the
   // contact paid more than the charges it cleared.
   leftoverTransfer        Transfer?                @relation("SettlementLeftoverTransfer")
+  // Set when this EXPENSE is the GST charged on a currency conversion.
+  // It is owned by that transfer: edit / delete it there, not here.
+  conversionFeeFor        Transfer?                @relation("TransferConversionFee")
   // The gold ornament this INCOME row is the sale proceeds of.
   goldOrnamentDisposal    GoldOrnament?            @relation("GoldOrnamentDisposal")
 
@@ -2055,6 +2102,14 @@ model Investment {
   vehicleId String?
   vehicle   Vehicle? @relation("VehicleInsurance", fields: [vehicleId], references: [id], onDelete: SetNull)
 
+  // The brokerage (Account.kind = BROKERAGE) this holding sits in —
+  // STOCK / MUTUAL_FUND / SIP only. Once linked, every BUY is paid from
+  // that brokerage's wallet and every SELL lands back in it; the routes
+  // reject any other account. The holding's currency must match the
+  // wallet's.
+  brokerageAccountId String?
+  brokerageAccount   Account? @relation("InvestmentBrokerage", fields: [brokerageAccountId], references: [id], onDelete: SetNull)
+
   // Renewal chain for INSURANCE policies — when a renewal issues a new
   // policy number, we create a fresh Investment row and link back to
   // the predecessor here. Deleting the predecessor sets this null so
@@ -2074,6 +2129,7 @@ model Investment {
   @@index([workspaceId, ownerUserId])
   @@index([vehicleId])
   @@index([renewedFromInvestmentId])
+  @@index([brokerageAccountId])
 }
 
 // One acquisition event: a jeweller bill, a gift received, or an
